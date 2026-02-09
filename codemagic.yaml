@@ -43,18 +43,19 @@ workflows:
     max_build_duration: 120
     instance_type: mac_mini_m1
     integrations:
-      app_store_connect: "popcorn" # Must match name in Codemagic Integrations
+      app_store_connect: "popcorn"
     environment:
       flutter: 3.38.9
       xcode: latest
       cocoapods: default
+      groups:
+        - ios_signing
       vars:
         BUNDLE_ID: "com.popcorn.flutterClient"
     scripts:
       - name: Set up Keychain & Fetch Signing Files
         script: |
           keychain initialize
-          # We are explicitly telling it to use the variable you just saved
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create \

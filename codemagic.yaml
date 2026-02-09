@@ -40,29 +40,34 @@ workflows:
       - apps/flutter_client/build/windows/runner/Release/*.exe
 
   ios-workflow:
-    name: iOS Release
-    max_build_duration: 120
+    name: iOS TestFlight Release
     instance_type: mac_mini_m1
+    integrations:
+      app_store_connect: "popcorn"
     environment:
-      flutter: 3.38.9
+      flutter: stable
       xcode: latest
-      cocoapods: default
+      vars:
+        BUNDLE_ID: "com.popcorn.flutterClient"
     scripts:
+      - name: Set up Keychain & Fetch Signing Files
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+          keychain add-certificates
+          xcode-project use-profiles
       - name: Get dependencies
+        script: flutter pub get
+      - name: Build IPA for TestFlight
         script: |
-          cd apps/flutter_client
-          flutter pub get
-      - name: Build iOS
-        script: |
-          cd apps/flutter_client
-          # This builds the archive without needing a paid account
-          flutter build ios --release --no-codesign
-          # This command packages it into an .ipa format
-          mkdir -p build/ios/iphoneos/Payload
-          cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload
-          cd build/ios/iphoneos && zip -r Runner.ipa Payload
+          # The --export-options-plist is generated automatically by the 'use-profiles' script above
+          flutter build ipa --release --export-options-plist=$HOME/export_options.plist
     artifacts:
-      - apps/flutter_client/build/ios/iphoneos/Runner.ipa
+      - build/ios/ipa/*.ipa
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
 
   macos-workflow:
     name: macOS Release

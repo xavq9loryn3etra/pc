@@ -54,7 +54,7 @@ workflows:
       - name: Set up Keychain & Fetch Signing Files
         script: |
           keychain initialize
-          # We added the --certificate-key flag below
+          # We are explicitly telling it to use the variable you just saved
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create \
@@ -72,6 +72,7 @@ workflows:
       - name: Build IPA for TestFlight
         script: |
           cd apps/flutter_client
+          # This command now has the certificates it needs in the keychain
           flutter build ipa --release --export-options-plist=$HOME/export_options.plist
     artifacts:
       - apps/flutter_client/build/ios/ipa/*.ipa

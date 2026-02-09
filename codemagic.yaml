@@ -6,7 +6,7 @@ workflows:
     environment:
       flutter: 3.38.9
       groups:
-        - google_play # keystore credentials
+        - google_play # Ensure these credentials are in Codemagic UI
     scripts:
       - name: Get dependencies
         script: |
@@ -17,9 +17,8 @@ workflows:
           cd apps/flutter_client
           flutter build apk --release
     artifacts:
-      - apps/flutter_client/build/**/outputs/**/*.apk
-      - apps/flutter_client/build/**/outputs/**/mapping.txt
-      - apps/flutter_client/flutter_drive.log
+      - apps/flutter_client/build/app/outputs/flutter-apk/*.apk
+      - apps/flutter_client/build/app/outputs/bundle/release/*.aab
 
   windows-workflow:
     name: Windows Release
@@ -41,12 +40,14 @@ workflows:
 
   ios-workflow:
     name: iOS TestFlight Release
+    max_build_duration: 120
     instance_type: mac_mini_m1
     integrations:
-      app_store_connect: "popcorn"
+      app_store_connect: "popcorn" # Must match name in Codemagic Integrations
     environment:
-      flutter: stable
+      flutter: 3.38.9
       xcode: latest
+      cocoapods: default
       vars:
         BUNDLE_ID: "com.popcorn.flutterClient"
     scripts:
@@ -60,12 +61,16 @@ workflows:
         script: |
           cd apps/flutter_client
           flutter pub get
+      - name: Install Pods
+        script: |
+          cd apps/flutter_client/ios
+          pod install
       - name: Build IPA for TestFlight
         script: |
           cd apps/flutter_client
           flutter build ipa --release --export-options-plist=$HOME/export_options.plist
     artifacts:
-      - build/ios/ipa/*.ipa
+      - apps/flutter_client/build/ios/ipa/*.ipa
     publishing:
       app_store_connect:
         auth: integration
@@ -85,11 +90,11 @@ workflows:
           flutter pub get
       - name: Install Pods
         script: |
-          find . -name "Podfile" -execdir pod install \;
+          cd apps/flutter_client/macos
+          pod install
       - name: Build macOS Release
         script: |
           cd apps/flutter_client
           flutter build macos --release
     artifacts:
       - apps/flutter_client/build/macos/Build/Products/Release/*.app
-      - apps/flutter_client/flutter_drive.log

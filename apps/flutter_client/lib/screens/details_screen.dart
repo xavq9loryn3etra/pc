@@ -14,7 +14,16 @@ import 'dart:ui'; // For BackdropFilter
 class DetailsScreen extends StatefulWidget {
   final Movie movie;
   final String? heroTag;
-  const DetailsScreen({super.key, required this.movie, this.heroTag});
+  final VoidCallback? onClose;
+  final bool isSidePanel;
+
+  const DetailsScreen({
+    super.key,
+    required this.movie,
+    this.heroTag,
+    this.onClose,
+    this.isSidePanel = false,
+  });
 
   @override
   State<DetailsScreen> createState() => _DetailsScreenState();
@@ -268,8 +277,15 @@ class _DetailsScreenState extends State<DetailsScreen> {
         leading: Padding(
           padding: const EdgeInsets.all(8.0),
           child: CircleAvatar(
-            backgroundColor: Colors.black26, // Lighter when blurred
-            child: const BackButton(color: Colors.white),
+            backgroundColor: Colors.black26,
+            child: widget.isSidePanel
+                ? IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    onPressed: widget.onClose,
+                    iconSize: 20,
+                    padding: EdgeInsets.zero,
+                  )
+                : const BackButton(color: Colors.white),
           ),
         ),
         title: AnimatedOpacity(
@@ -514,31 +530,42 @@ class _DetailsScreenState extends State<DetailsScreen> {
                               if (m.trailerUrl != null)
                                 Expanded(
                                   flex: 2,
-                                  child: ElevatedButton.icon(
-                                    onPressed: () async {
-                                      final uri = Uri.parse(m.trailerUrl!);
-                                      if (await canLaunchUrl(uri)) {
-                                        await launchUrl(
-                                          uri,
-                                          mode: LaunchMode.externalApplication,
-                                        );
-                                      }
-                                    },
-                                    icon: const Icon(
-                                      Icons.movie_creation_outlined,
-                                      color: Colors.white,
+                                  child: Container(
+                                    height: 50,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white10,
+                                      borderRadius: BorderRadius.circular(30),
                                     ),
-                                    label: const Text('Trailer'),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.white10,
-                                      foregroundColor: Colors.white,
-                                      alignment: Alignment
-                                          .center, // Ensure center alignment
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 16,
-                                      ),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(30),
+                                    child: InkWell(
+                                      onTap: () async {
+                                        final uri = Uri.parse(m.trailerUrl!);
+                                        if (await canLaunchUrl(uri)) {
+                                          await launchUrl(
+                                            uri,
+                                            mode:
+                                                LaunchMode.externalApplication,
+                                          );
+                                        }
+                                      },
+                                      borderRadius: BorderRadius.circular(30),
+                                      child: const Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.movie_creation_outlined,
+                                            color: Colors.white,
+                                          ),
+                                          SizedBox(width: 8),
+                                          Text(
+                                            'Trailer',
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 16,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),

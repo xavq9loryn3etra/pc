@@ -5,7 +5,7 @@ import 'package:shimmer/shimmer.dart';
 import '../models/movie.dart';
 import '../theme/app_theme.dart';
 
-class MoviePoster extends StatelessWidget {
+class MoviePoster extends StatefulWidget {
   final Movie movie;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
@@ -26,12 +26,21 @@ class MoviePoster extends StatelessWidget {
   });
 
   @override
+  State<MoviePoster> createState() => _MoviePosterState();
+}
+
+class _MoviePosterState extends State<MoviePoster> {
+  bool _isHovered = false;
+
+  @override
   Widget build(BuildContext context) {
     Widget imageContent = Hero(
-      tag: heroTag ?? 'movie_${movie.id}',
+      tag: widget.heroTag ?? 'movie_${widget.movie.id}',
       child: Container(
-        width: width == double.infinity ? double.infinity : width,
-        height: height == double.infinity ? double.infinity : height,
+        width: widget.width == double.infinity ? double.infinity : widget.width,
+        height: widget.height == double.infinity
+            ? double.infinity
+            : widget.height,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(8),
           boxShadow: const [
@@ -46,10 +55,11 @@ class MoviePoster extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            (movie.posterUrl != null && movie.posterUrl!.isNotEmpty)
-                ? (movie.posterUrl!.toLowerCase().endsWith('.svg')
+            (widget.movie.posterUrl != null &&
+                    widget.movie.posterUrl!.isNotEmpty)
+                ? (widget.movie.posterUrl!.toLowerCase().endsWith('.svg')
                       ? SvgPicture.network(
-                          movie.posterUrl!,
+                          widget.movie.posterUrl!,
                           fit: BoxFit.cover,
                           alignment: Alignment.center,
                           placeholderBuilder: (context) => Shimmer.fromColors(
@@ -59,12 +69,14 @@ class MoviePoster extends StatelessWidget {
                           ),
                         )
                       : CachedNetworkImage(
-                          imageUrl: movie.posterUrl!,
+                          imageUrl: widget.movie.posterUrl!,
                           fit: BoxFit.cover,
                           alignment: Alignment.center,
                           // Multiply by 1.5 to ensure sharpness (supersample slightly)
                           memCacheHeight:
-                              ((height == double.infinity ? 400 : height) *
+                              ((widget.height == double.infinity
+                                          ? 400
+                                          : widget.height) *
                                       MediaQuery.of(context).devicePixelRatio *
                                       1.5)
                                   .toInt(),
@@ -90,7 +102,8 @@ class MoviePoster extends StatelessWidget {
                     ),
                   ),
             // History Badge (S1 E1)
-            if (movie.currentSeason != null && movie.currentEpisode != null)
+            if (widget.movie.currentSeason != null &&
+                widget.movie.currentEpisode != null)
               Positioned(
                 bottom: 8,
                 right: 8,
@@ -105,7 +118,7 @@ class MoviePoster extends StatelessWidget {
                     border: Border.all(color: Colors.white24, width: 0.5),
                   ),
                   child: Text(
-                    'S${movie.currentSeason} E${movie.currentEpisode}',
+                    'S${widget.movie.currentSeason} E${widget.movie.currentEpisode}',
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 10,
@@ -116,13 +129,13 @@ class MoviePoster extends StatelessWidget {
               ),
 
             // Progress Bar
-            if (movie.progress != null && movie.progress! > 0)
+            if (widget.movie.progress != null && widget.movie.progress! > 0)
               Positioned(
                 bottom: 0,
                 left: 0,
                 right: 0,
                 child: LinearProgressIndicator(
-                  value: movie.progress,
+                  value: widget.movie.progress,
                   backgroundColor: Colors.white10,
                   valueColor: const AlwaysStoppedAnimation<Color>(
                     AppTheme.primaryColor,
@@ -137,41 +150,62 @@ class MoviePoster extends StatelessWidget {
 
     // If height is infinite (e.g. in GridView), we want the image to take available space
     // minus the text height.
-    if (height == double.infinity) {
+    if (widget.height == double.infinity) {
       imageContent = Expanded(child: imageContent);
     }
 
-    if (!showTitle)
-      return GestureDetector(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        child: imageContent,
+    if (!widget.showTitle) {
+      return MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _isHovered = true),
+        onExit: (_) => setState(() => _isHovered = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          onLongPress: widget.onLongPress,
+          child: AnimatedScale(
+            scale: _isHovered ? 1.05 : 1.0,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+            child: imageContent,
+          ),
+        ),
       );
+    }
 
-    return GestureDetector(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          imageContent,
-          if (showTitle) ...[
-            const SizedBox(height: 8),
-            SizedBox(
-              width: width == double.infinity ? null : width,
-              child: Text(
-                movie.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.white70,
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        onLongPress: widget.onLongPress,
+        child: AnimatedScale(
+          scale: _isHovered ? 1.05 : 1.0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              imageContent,
+              if (widget.showTitle) ...[
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: widget.width == double.infinity ? null : widget.width,
+                  child: Text(
+                    widget.movie.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.white70,
+                    ),
+                  ),
                 ),
-              ),
-            ),
-          ],
-        ],
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }

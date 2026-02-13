@@ -11,7 +11,9 @@ import '../widgets/movie_poster.dart';
 import '../services/saved_movies_service.dart';
 import '../widgets/skeletons.dart';
 import 'search_screen.dart';
+import 'desktop_home_screen.dart';
 import 'favorites_screen.dart';
+import '../widgets/desktop_skeletons.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -89,111 +91,149 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(body: SkeletonHome());
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth > 800) {
+            return const Scaffold(body: DesktopSkeletonHome());
+          }
+          return const Scaffold(body: SkeletonHome());
+        },
+      );
     }
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        title: SvgPicture.asset(
-          'assets/logo.svg',
-          height: 32,
-          colorFilter: const ColorFilter.mode(
-            AppTheme.primaryColor,
-            BlendMode.srcIn,
-          ), // Ensure it matches theme
-        ),
-        backgroundColor: Colors.transparent,
-        flexibleSpace: ClipRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(
-              sigmaX: 20 * _opacity, // Increased blur
-              sigmaY: 20 * _opacity,
-            ),
-            child: Container(
-              color: Colors.black.withOpacity(_opacity * 0.8), // Darker overlay
-            ),
-          ),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.search, size: 28),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const SearchScreen()),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth > 800 && _featuredMovie != null) {
+          return DesktopHomeScreen(
+            featuredMovie: _featuredMovie!,
+            trendingMovies: _trendingMovies,
+            historyMovies: SavedMoviesService().history,
+            topRatedMovies: _topRatedMovies,
+            onPlayHero: () {
+              SavedMoviesService().addToHistory(_featuredMovie!);
+              _navigateToDetails(
+                _featuredMovie!,
+                heroTag: 'hero_${_featuredMovie!.id}',
               );
             },
-          ),
-          IconButton(
-            icon: const Icon(Icons.favorite_border, size: 28),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const FavoritesScreen()),
-              );
-            },
-          ),
-          const SizedBox(width: 16),
-        ],
-      ),
-      body: SingleChildScrollView(
-        controller: _scrollController,
-        child: Column(
-          children: [
-            // Hero Banner
-            if (_featuredMovie != null)
-              MovieHeroBanner(
-                scrollController: _scrollController,
-                movie: _featuredMovie!,
-                onPlay: () {
-                  SavedMoviesService().addToHistory(_featuredMovie!);
-                  _navigateToDetails(
-                    _featuredMovie!,
-                    heroTag: 'hero_${_featuredMovie!.id}',
-                  );
-                },
-                onInfo: () => _navigateToDetails(
-                  _featuredMovie!,
-                  heroTag: 'hero_${_featuredMovie!.id}',
+            onInfoHero: () => _navigateToDetails(
+              _featuredMovie!,
+              heroTag: 'hero_${_featuredMovie!.id}',
+            ),
+            onMovieTap: (movie) => _navigateToDetails(
+              movie,
+              heroTag: 'desktop_trending_${movie.id}',
+            ),
+            onRemoveHistory: (movie) => _confirmRemoveHistory(movie),
+          );
+        }
+
+        return Scaffold(
+          extendBodyBehindAppBar: true,
+          appBar: AppBar(
+            elevation: 0,
+            scrolledUnderElevation: 0,
+            title: SvgPicture.asset(
+              'assets/logo.svg',
+              height: 32,
+              colorFilter: const ColorFilter.mode(
+                AppTheme.primaryColor,
+                BlendMode.srcIn,
+              ), // Ensure it matches theme
+            ),
+            backgroundColor: Colors.transparent,
+            flexibleSpace: ClipRect(
+              child: BackdropFilter(
+                filter: ImageFilter.blur(
+                  sigmaX: 20 * _opacity, // Increased blur
+                  sigmaY: 20 * _opacity,
+                ),
+                child: Container(
+                  color: Colors.black.withOpacity(
+                    _opacity * 0.8,
+                  ), // Darker overlay
                 ),
               ),
-
-            const SizedBox(height: 20),
-
-            // Trending Section
-            _buildSection(
-              title: "Trending This Week",
-              movies: _trendingMovies,
-              heroPrefix: "trending",
             ),
-
-            const SizedBox(height: 24),
-
-            // Continue Watching (History)
-            if (SavedMoviesService().history.isNotEmpty)
-              _buildSection(
-                title: "Continue Watching",
-                movies: SavedMoviesService().history,
-                heroPrefix: "history",
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.search, size: 28),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SearchScreen()),
+                  );
+                },
               ),
+              IconButton(
+                icon: const Icon(Icons.favorite_border, size: 28),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const FavoritesScreen()),
+                  );
+                },
+              ),
+              const SizedBox(width: 16),
+            ],
+          ),
+          body: SingleChildScrollView(
+            controller: _scrollController,
+            child: Column(
+              children: [
+                // Hero Banner
+                if (_featuredMovie != null)
+                  MovieHeroBanner(
+                    scrollController: _scrollController,
+                    movie: _featuredMovie!,
+                    onPlay: () {
+                      SavedMoviesService().addToHistory(_featuredMovie!);
+                      _navigateToDetails(
+                        _featuredMovie!,
+                        heroTag: 'hero_${_featuredMovie!.id}',
+                      );
+                    },
+                    onInfo: () => _navigateToDetails(
+                      _featuredMovie!,
+                      heroTag: 'hero_${_featuredMovie!.id}',
+                    ),
+                  ),
 
-            if (SavedMoviesService().history.isNotEmpty)
-              const SizedBox(height: 24),
+                const SizedBox(height: 20),
 
-            // Top Rated Section
-            _buildSection(
-              title: "Top Rated",
-              movies: _topRatedMovies,
-              heroPrefix: "top",
+                // Trending Section
+                _buildSection(
+                  title: "Trending This Week",
+                  movies: _trendingMovies,
+                  heroPrefix: "trending",
+                ),
+
+                const SizedBox(height: 24),
+
+                // Continue Watching (History)
+                if (SavedMoviesService().history.isNotEmpty)
+                  _buildSection(
+                    title: "Continue Watching",
+                    movies: SavedMoviesService().history,
+                    heroPrefix: "history",
+                  ),
+
+                if (SavedMoviesService().history.isNotEmpty)
+                  const SizedBox(height: 24),
+
+                // Top Rated Section
+                _buildSection(
+                  title: "Top Rated",
+                  movies: _topRatedMovies,
+                  heroPrefix: "top",
+                ),
+
+                SizedBox(height: 24 + MediaQuery.of(context).padding.bottom),
+              ],
             ),
-
-            SizedBox(height: 24 + MediaQuery.of(context).padding.bottom),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 

@@ -29,6 +29,10 @@ class Movie {
 
   String? get posterUrl => image;
   String? get backdropUrl => backdrop;
+  // Mappings for UI compatibility
+  DateTime? get releaseDate => DateTime(year);
+  double get voteAverage => double.tryParse(rating) ?? 0.0;
+  String? get overview => description;
 
   Movie({
     required this.id,

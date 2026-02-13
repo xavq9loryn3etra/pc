@@ -1,9 +1,8 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
+import 'dart:convert'; // For jsonDecode
 import 'web_player_platform_interface.dart';
-import '../../services/saved_movies_service.dart';
+import 'hidden_web_extractor.dart';
+import 'projector.dart';
 
 class WebPlayerMobile extends WebPlayerPlatform {
   const WebPlayerMobile({
@@ -20,158 +19,221 @@ class WebPlayerMobile extends WebPlayerPlatform {
 }
 
 class _WebPlayerMobileState extends State<WebPlayerMobile> {
-  late final WebViewController _controller;
-  int _lastUpdate = 0;
-  bool _canSave = false;
+  // Extraction State
+  bool _isLoading = true;
+  String? _error;
+
+  final HiddenWebExtractorController _extractorController =
+      HiddenWebExtractorController();
 
   @override
   void initState() {
     super.initState();
-
-    // Prevent overwriting history for the first 15 seconds
-    // This gives the user time to scrub to their previous position
-    // if the player fails to resume automatically.
-    Future.delayed(const Duration(seconds: 15), () {
-      if (mounted) _canSave = true;
-    });
-
-    late final PlatformWebViewControllerCreationParams params;
-    if (WebViewPlatform.instance is WebKitWebViewPlatform) {
-      params = WebKitWebViewControllerCreationParams(
-        allowsInlineMediaPlayback: true,
-        mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
-      );
-    } else {
-      params = const PlatformWebViewControllerCreationParams();
-    }
-
-    _controller = WebViewController.fromPlatformCreationParams(params)
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0xFF000000))
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (int progress) {
-            // Update loading bar.
-          },
-          onPageStarted: (String url) {},
-          onPageFinished: (String url) {},
-          onWebResourceError: (WebResourceError error) {},
-        ),
-      )
-      ..addJavaScriptChannel(
-        'PlayerBridge',
-        onMessageReceived: (JavaScriptMessage message) {
-          _handleMessage(message.message);
-        },
-      );
-
-    _loadContent();
   }
 
-  void _loadContent() {
-    // HTML Wrapper to force iframe behavior and consistent messaging
-    final String htmlContent =
-        '''
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-        <style>
-          body, html { margin: 0; padding: 0; width: 100%; height: 100%; background-color: black; overflow: hidden; }
-          iframe { width: 100%; height: 100%; border: none; }
-        </style>
-      </head>
-      <body>
-        <iframe 
-          src="${widget.initialUrl}" 
-          allow="autoplay; encrypted-media; picture-in-picture; fullscreen" 
-          sandbox="allow-scripts allow-same-origin allow-presentation allow-forms"
-          allowfullscreen
-        ></iframe>
-        <script>
-          window.addEventListener('message', function(e) {
-            try {
-              // Forward to Flutter via JavaScriptChannel
-              if(window.PlayerBridge) {
-                 var payload = e.data;
-                 if (typeof payload === 'object') {
-                    payload = JSON.stringify(payload);
-                 }
-                 window.PlayerBridge.postMessage(payload);
-              }
-            } catch(err) {}
-          });
-        </script>
-      </body>
-      </html>
-    ''';
-
-    _controller.loadHtmlString(htmlContent, baseUrl: 'https://vidking.net/');
-  }
-
-  void _handleMessage(String msg) {
-    print("MobilePlayer: Msg: $msg"); // Debug Log
+  Future<void> _onStreamFound(String jsonPayload) async {
     try {
-      final dynamic outerPayload = jsonDecode(msg);
+      final data = jsonDecode(jsonPayload);
+      if (mounted) {
+        // 1. Clear the WebView immediately
+        _extractorController.clear();
 
-      if (outerPayload is Map) {
-        if (outerPayload['type'] == 'PLAYER_EVENT' &&
-            outerPayload['data'] != null) {
-          final data = outerPayload['data'];
-          final event = data['event'];
+        // Give time for WebView to stop playback and release codecs
+        // This prevents "OMX.Exynos.avc.dec" resource contention crashes on Android
+        await Future.delayed(const Duration(milliseconds: 2000));
 
-          if (event == 'timeupdate' || event == 'pause') {
-            final double currentTime = (data['currentTime'] as num).toDouble();
-            final double duration = (data['duration'] as num).toDouble();
+        if (!mounted) return;
 
-            if (duration > 0) {
-              final double progress = currentTime / duration;
-              final now = DateTime.now().millisecondsSinceEpoch;
+        // 2. Navigate to Projector (Destroying this route and the WebView)
+        final streamUrl = data['url'];
+        final headers = data['headers'] != null
+            ? Map<String, String>.from(data['headers'])
+            : null;
+        final subtitles = data['subtitles'] != null
+            ? (data['subtitles'] as List)
+                  .map((e) => Map<String, String>.from(e))
+                  .toList()
+            : null;
 
-              if (event == 'pause' || (now - _lastUpdate > 5000)) {
-                _saveProgress(progress);
-                _lastUpdate = now;
-              }
-            }
-          }
-        }
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => Projector(
+              streamUrl: streamUrl,
+              headers: headers,
+              subtitles: subtitles,
+              movie: widget.movie,
+              season: widget.season,
+              episode: widget.episode,
+              onClose: () => Navigator.of(context).pop(),
+              onError: (err) {
+                // On Playback Error, reload the WebPlayerMobile to retry extraction
+                Navigator.of(context).pushReplacement(
+                  MaterialPageRoute(
+                    builder: (context) => WebPlayerMobile(
+                      initialUrl: widget.initialUrl,
+                      onClose: widget.onClose,
+                      movie: widget.movie,
+                      season: widget.season,
+                      episode: widget.episode,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
       }
     } catch (e) {
-      // Ignore parsing errors
+      if (mounted) {
+        _extractorController.clear();
+        // Fallback for legacy raw strings
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => Projector(
+              streamUrl: jsonPayload,
+              movie: widget.movie,
+              season: widget.season,
+              episode: widget.episode,
+              onClose: () => Navigator.of(context).pop(),
+              onError: (err) {
+                Navigator.of(context).pushReplacement(
+                  MaterialPageRoute(
+                    builder: (context) => WebPlayerMobile(
+                      initialUrl: widget.initialUrl,
+                      onClose: widget.onClose,
+                      movie: widget.movie,
+                      season: widget.season,
+                      episode: widget.episode,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      }
     }
   }
 
-  void _saveProgress(double progress) {
-    if (!_canSave) return;
-    SavedMoviesService().addToHistory(
-      widget.movie,
-      season: widget.season,
-      episode: widget.episode,
-      progress: progress,
-    );
+  void _onExtractionTimeout() {
+    if (mounted) {
+      setState(() {
+        _error = "Could not extract video stream. Please try another server.";
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _resetState() {
+    if (mounted) {
+      setState(() {
+        _error = null;
+        _isLoading = true;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    // If not error, show loading/extractor. If error, show error.
+
+    if (_error != null) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, color: Colors.amber, size: 48),
+              const SizedBox(height: 16),
+              Text(
+                _error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton(
+                    onPressed: _resetState,
+                    child: const Text("Retry"),
+                  ),
+                  const SizedBox(width: 16),
+                  TextButton(
+                    onPressed: widget.onClose,
+                    child: const Text("Back"),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Loading + Extractor
     return Scaffold(
       backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Stack(
-          children: [
-            WebViewWidget(controller: _controller),
-            Positioned(
-              top: 10,
-              left: 10,
-              child: FloatingActionButton(
-                heroTag: 'close_player_btn', // Unique tag
-                mini: true,
-                backgroundColor: Colors.black54,
-                child: const Icon(Icons.close, color: Colors.white),
-                onPressed: widget.onClose,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Hidden Extractor (Opacity 0 to be safe, contained in SizedBox)
+          Opacity(
+            opacity: 0.0,
+            child: Align(
+              alignment: Alignment.center,
+              child: SizedBox(
+                width: 1,
+                height: 1,
+                child: HiddenWebExtractor(
+                  key: ValueKey(_isLoading ? DateTime.now() : 'static_key'),
+                  controller: _extractorController,
+                  url: widget.initialUrl,
+                  onFound: _onStreamFound,
+                  onTimeout: _onExtractionTimeout,
+                ),
               ),
             ),
-          ],
-        ),
+          ),
+
+          // UI Overlay
+          Positioned.fill(
+            child: Container(
+              color: Colors.black,
+              child: Center(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const CircularProgressIndicator(color: Colors.amber),
+                      const SizedBox(height: 20),
+                      const Text(
+                        "Analyzing Stream...",
+                        style: TextStyle(color: Colors.white70),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 10),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Text(
+                          "Please wait while we bypass protections.",
+                          style: TextStyle(color: Colors.white30, fontSize: 12),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                      const SizedBox(height: 40),
+                      TextButton(
+                        onPressed: widget.onClose,
+                        child: const Text("Cancel"),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

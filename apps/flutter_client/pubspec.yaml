@@ -50,6 +50,7 @@ dependencies:
   flutter_svg: ^2.2.3
   url_launcher: ^6.3.2
   webview_flutter_wkwebview: ^3.23.6
+  file_picker: ^10.3.10
 
 dev_dependencies:
   flutter_test:

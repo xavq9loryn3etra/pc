@@ -50,5 +50,7 @@
 		<string>https</string>
 		<string>http</string>
 	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>We need access to your photo library to allow you to select subtitle files.</string>
 </dict>
 </plist>

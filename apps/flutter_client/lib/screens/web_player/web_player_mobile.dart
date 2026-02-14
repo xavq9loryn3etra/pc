@@ -289,9 +289,6 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
       )
       ..loadRequest(
         Uri.parse(widget.initialUrl),
-        headers: {
-          'Referer': 'https://vidlink.pro/',
-        },
       );
   }
 

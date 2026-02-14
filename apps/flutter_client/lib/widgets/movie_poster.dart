@@ -60,7 +60,7 @@ class _MoviePosterState extends State<MoviePoster> {
                     ? SvgPicture.network(
                         widget.movie.posterUrl!,
                         fit: BoxFit.cover,
-                        alignment: Alignment.center,
+                        alignment: Alignment.topCenter,
                         placeholderBuilder: (context) => Shimmer.fromColors(
                           baseColor: Colors.grey[900]!,
                           highlightColor: Colors.grey[800]!,
@@ -70,7 +70,7 @@ class _MoviePosterState extends State<MoviePoster> {
                     : CachedNetworkImage(
                         imageUrl: widget.movie.posterUrl!,
                         fit: BoxFit.cover,
-                        alignment: Alignment.center,
+                        alignment: Alignment.topCenter,
                         // Multiply by 1.5 to ensure sharpness (supersample slightly)
                         memCacheHeight: ((widget.height == double.infinity
                                     ? 400

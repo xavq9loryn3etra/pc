@@ -164,19 +164,18 @@ class _SearchScreenState extends State<SearchScreen> {
                       top: 0,
                       bottom: 0,
                       right: 0,
-                      child:
-                          DesktopDetailsPanel(
-                                movie: _selectedMovie!,
-                                onClose: _closeSidePanel,
-                              )
-                              .animate()
-                              .slideX(
-                                begin: 1.0,
-                                end: 0.0,
-                                duration: 300.ms,
-                                curve: Curves.easeOutCubic,
-                              )
-                              .fadeIn(duration: 200.ms),
+                      child: DesktopDetailsPanel(
+                        movie: _selectedMovie!,
+                        onClose: _closeSidePanel,
+                      )
+                          .animate()
+                          .slideX(
+                            begin: 1.0,
+                            end: 0.0,
+                            duration: 300.ms,
+                            curve: Curves.easeOutCubic,
+                          )
+                          .fadeIn(duration: 200.ms),
                     ),
                   ],
                 ),
@@ -235,7 +234,7 @@ class _SearchScreenState extends State<SearchScreen> {
       ),
       gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: isDesktop ? 200 : 150,
-        childAspectRatio: isDesktop ? (200 / 340) : 0.65,
+        childAspectRatio: isDesktop ? (200 / 340) : 0.58,
         crossAxisSpacing: isDesktop ? 16 : 12,
         mainAxisSpacing: isDesktop ? 16 : 12,
       ),

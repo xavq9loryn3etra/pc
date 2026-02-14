@@ -130,7 +130,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                       ),
                       gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
                         maxCrossAxisExtent: isDesktop ? 200 : 150,
-                        childAspectRatio: isDesktop ? (200 / 340) : 0.7,
+                        childAspectRatio: isDesktop ? (200 / 340) : 0.6,
                         crossAxisSpacing: isDesktop ? 16 : 12,
                         mainAxisSpacing: isDesktop ? 16 : 12,
                       ),
@@ -164,19 +164,18 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                       top: 0,
                       bottom: 0,
                       right: 0,
-                      child:
-                          DesktopDetailsPanel(
-                                movie: _selectedMovie!,
-                                onClose: _closeSidePanel,
-                              )
-                              .animate()
-                              .slideX(
-                                begin: 1.0,
-                                end: 0.0,
-                                duration: 300.ms,
-                                curve: Curves.easeOutCubic,
-                              )
-                              .fadeIn(duration: 200.ms),
+                      child: DesktopDetailsPanel(
+                        movie: _selectedMovie!,
+                        onClose: _closeSidePanel,
+                      )
+                          .animate()
+                          .slideX(
+                            begin: 1.0,
+                            end: 0.0,
+                            duration: 300.ms,
+                            curve: Curves.easeOutCubic,
+                          )
+                          .fadeIn(duration: 200.ms),
                     ),
                   ],
                 ),

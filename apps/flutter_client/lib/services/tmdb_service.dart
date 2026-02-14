@@ -86,10 +86,12 @@ class TMDBService {
         },
       );
 
-      return (response.data['results'] as List)
-          .map((m) => _formatMovie(m))
-          .whereType<Movie>() // Filter out nulls (people, etc)
+      // Filter out people, only Movies and TV (like Electron app does)
+      final results = (response.data['results'] as List)
+          .where((r) => r['media_type'] == 'movie' || r['media_type'] == 'tv')
           .toList();
+
+      return results.map((m) => _formatMovie(m)).whereType<Movie>().toList();
     } catch (e) {
       print('TMDB Search Error: $e');
       return [];
@@ -142,8 +144,8 @@ class TMDBService {
   }
 
   Movie? _formatMovie(Map<String, dynamic> m) {
-    if (m['poster_path'] == null && m['backdrop_path'] == null)
-      return null; // Filter out bad data
+    // Only filter out if BOTH images are missing (need at least one)
+    if (m['poster_path'] == null && m['backdrop_path'] == null) return null;
 
     bool inCinemas = false;
     final isTv = m['media_type'] == 'tv' || m['first_air_date'] != null;
@@ -162,9 +164,10 @@ class TMDBService {
       }
     }
 
-    final yearStr = (m['release_date'] ?? m['first_air_date'] ?? '0000')
-        .toString()
-        .substring(0, 4);
+    var dateStr =
+        (m['release_date'] ?? m['first_air_date'] ?? '0000').toString();
+    if (dateStr.isEmpty) dateStr = '0000';
+    final yearStr = dateStr.length >= 4 ? dateStr.substring(0, 4) : '0000';
 
     return Movie(
       id: m['id'].toString(),
@@ -220,8 +223,7 @@ class TMDBService {
         (c) => c['job'] == 'Director',
         orElse: () => null,
       )?['name'];
-      cast =
-          (credits['cast'] as List?)
+      cast = (credits['cast'] as List?)
               ?.take(5)
               .map((c) => c['name'].toString())
               .toList() ??
@@ -229,9 +231,8 @@ class TMDBService {
     }
 
     // Genres
-    final genres = (m['genres'] as List?)
-        ?.map((g) => g['name'].toString())
-        .toList();
+    final genres =
+        (m['genres'] as List?)?.map((g) => g['name'].toString()).toList();
 
     // Logo
     String? logoUrl;

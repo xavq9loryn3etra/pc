@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'dart:convert';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import 'dart:io';
 import 'dart:async';
 import 'web_player_platform_interface.dart';
@@ -32,10 +33,22 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
   @override
   void initState() {
     super.initState();
-    _controller = WebViewController();
+
+    late final PlatformWebViewControllerCreationParams params;
+    if (WebViewPlatform.instance is WebKitWebViewPlatform) {
+      params = WebKitWebViewControllerCreationParams(
+        allowsInlineMediaPlayback: true,
+        mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
+      );
+    } else {
+      params = const PlatformWebViewControllerCreationParams();
+    }
+
+    _controller = WebViewController.fromPlatformCreationParams(params);
 
     // Enable debugging for Android WebView
-    if (Platform.isAndroid) {
+    if (Platform.isAndroid &&
+        _controller.platform is AndroidWebViewController) {
       final androidController =
           _controller.platform as AndroidWebViewController;
       androidController.setMediaPlaybackRequiresUserGesture(false);
@@ -270,7 +283,10 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
         ),
       )
       ..setUserAgent(
-          "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36")
+        Platform.isIOS
+            ? "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+            : "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36",
+      )
       ..loadRequest(
         Uri.parse(widget.initialUrl),
         headers: {

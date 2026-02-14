@@ -601,6 +601,33 @@ class _DetailsScreenState extends State<DetailsScreen> {
                           ),
                         ),
 
+                        if (m.cast != null && m.cast!.isNotEmpty) ...[
+                          const SizedBox(height: 16),
+                          RichText(
+                            text: TextSpan(
+                              style: const TextStyle(
+                                fontSize: 14,
+                                height: 1.5,
+                              ),
+                              children: [
+                                const TextSpan(
+                                  text: "Starring: ",
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                TextSpan(
+                                  text: m.cast!.join(", "),
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+
                         const SizedBox(height: 32),
 
                         // Genres

@@ -167,7 +167,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
       widget.movie,
       season: s,
       episode: e,
-      progress: 0.25, // Mark as started (25%)
+      // Don't set progress here - let the player track it
     );
 
     final url = ScraperService().getEmbedUrl(
@@ -333,8 +333,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                 children: [
                                   Hero(
                                     tag: 'movie_${m.id}',
-                                    child:
-                                        (m.backdrop ?? m.posterUrl ?? '')
+                                    child: (m.backdrop ?? m.posterUrl ?? '')
                                             .toLowerCase()
                                             .endsWith('.svg')
                                         ? SvgPicture.network(
@@ -375,18 +374,18 @@ class _DetailsScreenState extends State<DetailsScreen> {
                             children: [
                               m.logoUrl != null
                                   ? (m.logoUrl!.toLowerCase().endsWith('.svg')
-                                        ? SvgPicture.network(
-                                            m.logoUrl!,
-                                            width: 200,
-                                            fit: BoxFit.contain,
-                                            alignment: Alignment.centerLeft,
-                                          )
-                                        : CachedNetworkImage(
-                                            imageUrl: m.logoUrl!,
-                                            width: 200,
-                                            fit: BoxFit.contain,
-                                            alignment: Alignment.centerLeft,
-                                          ))
+                                      ? SvgPicture.network(
+                                          m.logoUrl!,
+                                          width: 200,
+                                          fit: BoxFit.contain,
+                                          alignment: Alignment.centerLeft,
+                                        )
+                                      : CachedNetworkImage(
+                                          imageUrl: m.logoUrl!,
+                                          width: 200,
+                                          fit: BoxFit.contain,
+                                          alignment: Alignment.centerLeft,
+                                        ))
                                   : Text(
                                       m.title,
                                       style: const TextStyle(
@@ -453,15 +452,15 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                   ),
                                   child: Row(
                                     children: [
-                                      // Player 1 (Default: VidKing)
+                                      // Player 1 (Default: VidLink)
                                       Expanded(
                                         child: InkWell(
                                           onTap: () =>
-                                              _openWebPlayer('vidking'),
+                                              _openWebPlayer('vidlink'),
                                           borderRadius:
                                               const BorderRadius.horizontal(
-                                                left: Radius.circular(30),
-                                              ),
+                                            left: Radius.circular(30),
+                                          ),
                                           child: const Row(
                                             mainAxisAlignment:
                                                 MainAxisAlignment.center,
@@ -490,7 +489,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         height: 30,
                                         color: Colors.black12,
                                       ),
-                                      // Dropdown (Player 2: VidSrc)
+                                      // Dropdown (Player 2: MoviesAPI, Player 3: VidKing, Player 4: VidSrc)
                                       PopupMenuButton<String>(
                                         icon: const Icon(
                                           Icons.arrow_drop_down,
@@ -505,9 +504,29 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         color: Colors.white,
                                         itemBuilder: (context) => [
                                           const PopupMenuItem(
-                                            value: 'vidsrc',
+                                            value: 'moviesapi',
                                             child: Text(
-                                              'Player 2 (Cloud)',
+                                              'Player 2 (MoviesAPI)',
+                                              style: TextStyle(
+                                                color: Colors.black,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                          const PopupMenuItem(
+                                            value: 'vidking',
+                                            child: Text(
+                                              'Player 3 (VidKing)',
+                                              style: TextStyle(
+                                                color: Colors.black,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                          const PopupMenuItem(
+                                            value: 'vsembed',
+                                            child: Text(
+                                              'Player 4 (vsembed)',
                                               style: TextStyle(
                                                 color: Colors.black,
                                                 fontWeight: FontWeight.bold,
@@ -516,9 +535,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                           ),
                                         ],
                                         onSelected: (val) {
-                                          if (val == 'vidsrc') {
-                                            _openWebPlayer('vidsrc');
-                                          }
+                                          _openWebPlayer(val);
                                         },
                                       ),
                                     ],
@@ -672,10 +689,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                       onChanged: (val) {
                                         if (val != null) {
                                           setState(() {
-                                            _selectedSeason = m.seasons!
-                                                .firstWhere(
-                                                  (s) => s.seasonNumber == val,
-                                                );
+                                            _selectedSeason =
+                                                m.seasons!.firstWhere(
+                                              (s) => s.seasonNumber == val,
+                                            );
                                             _selectedEpisode =
                                                 null; // Reset episode
                                           });
@@ -730,7 +747,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                               _selectedEpisode =
                                                   ep.episodeNumber;
                                             });
-                                            _openWebPlayer('vidking');
+                                            _openWebPlayer('vidlink');
                                           },
                                     borderRadius: BorderRadius.circular(4),
                                     child: Row(
@@ -792,16 +809,16 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                   bottom: 0,
                                                   left: 0,
                                                   right: 0,
-                                                  child: LinearProgressIndicator(
+                                                  child:
+                                                      LinearProgressIndicator(
                                                     value: ep.progress,
                                                     backgroundColor:
                                                         Colors.white10,
                                                     valueColor:
                                                         const AlwaysStoppedAnimation<
-                                                          Color
-                                                        >(
-                                                          AppTheme.primaryColor,
-                                                        ),
+                                                            Color>(
+                                                      AppTheme.primaryColor,
+                                                    ),
                                                     minHeight: 3,
                                                   ),
                                                 ),

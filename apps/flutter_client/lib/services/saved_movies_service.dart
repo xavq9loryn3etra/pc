@@ -121,6 +121,13 @@ class SavedMoviesService {
     int? episode,
     double? progress,
   }) async {
+    // Get existing movie data to preserve progress if not updating
+    double? existingProgress;
+    if (_history.containsKey(movie.id)) {
+      final prevMovie = Movie.fromStorageJson(_history[movie.id]['movie']);
+      existingProgress = prevMovie.progress;
+    }
+
     // Create a copy of the movie with updated history data if provided
     final movieToSave = Movie(
       id: movie.id,
@@ -146,9 +153,22 @@ class SavedMoviesService {
       // Update history fields
       currentSeason: season ?? movie.currentSeason,
       currentEpisode: episode ?? movie.currentEpisode,
-      progress: progress ?? movie.progress,
+      // Preserve existing progress if new progress is null
+      progress: progress ?? existingProgress ?? movie.progress,
     );
 
+    // STRICT: Only allow forward progress or exactly same
+    // This prevents ANY stale/old saves from overwriting current progress
+    if (progress != null && existingProgress != null) {
+      if (progress < existingProgress) {
+        print(
+            "DEBUG: BLOCKED backwards save. Previous: $existingProgress, New: $progress");
+        return;
+      }
+    }
+
+    print(
+        "DEBUG: Saving history for ID=${movie.id} progress=$progress (prev=$existingProgress)");
     _history[movie.id] = {
       'movie': movieToSave.toStorageJson(),
       'last_watched': DateTime.now().millisecondsSinceEpoch,

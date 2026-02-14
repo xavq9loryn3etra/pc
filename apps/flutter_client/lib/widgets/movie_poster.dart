@@ -35,12 +35,11 @@ class _MoviePosterState extends State<MoviePoster> {
   @override
   Widget build(BuildContext context) {
     Widget imageContent = Hero(
-      tag: widget.heroTag ?? 'movie_${widget.movie.id}',
+      tag: widget.heroTag ?? 'movie_${widget.movie.id}_${hashCode}',
       child: Container(
         width: widget.width == double.infinity ? double.infinity : widget.width,
-        height: widget.height == double.infinity
-            ? double.infinity
-            : widget.height,
+        height:
+            widget.height == double.infinity ? double.infinity : widget.height,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(8),
           boxShadow: const [
@@ -58,43 +57,42 @@ class _MoviePosterState extends State<MoviePoster> {
             (widget.movie.posterUrl != null &&
                     widget.movie.posterUrl!.isNotEmpty)
                 ? (widget.movie.posterUrl!.toLowerCase().endsWith('.svg')
-                      ? SvgPicture.network(
-                          widget.movie.posterUrl!,
-                          fit: BoxFit.cover,
-                          alignment: Alignment.center,
-                          placeholderBuilder: (context) => Shimmer.fromColors(
-                            baseColor: Colors.grey[900]!,
-                            highlightColor: Colors.grey[800]!,
-                            child: Container(color: Colors.black),
-                          ),
-                        )
-                      : CachedNetworkImage(
-                          imageUrl: widget.movie.posterUrl!,
-                          fit: BoxFit.cover,
-                          alignment: Alignment.center,
-                          // Multiply by 1.5 to ensure sharpness (supersample slightly)
-                          memCacheHeight:
-                              ((widget.height == double.infinity
-                                          ? 400
-                                          : widget.height) *
-                                      MediaQuery.of(context).devicePixelRatio *
-                                      1.5)
-                                  .toInt(),
-                          placeholder: (context, url) => Shimmer.fromColors(
-                            baseColor: Colors.grey[900]!,
-                            highlightColor: Colors.grey[800]!,
-                            child: Container(color: Colors.black),
-                          ),
-                          errorWidget: (context, url, error) => Container(
-                            color: Colors.grey[900],
-                            child: const Center(
-                              child: Icon(
-                                Icons.broken_image,
-                                color: Colors.white24,
-                              ),
+                    ? SvgPicture.network(
+                        widget.movie.posterUrl!,
+                        fit: BoxFit.cover,
+                        alignment: Alignment.center,
+                        placeholderBuilder: (context) => Shimmer.fromColors(
+                          baseColor: Colors.grey[900]!,
+                          highlightColor: Colors.grey[800]!,
+                          child: Container(color: Colors.black),
+                        ),
+                      )
+                    : CachedNetworkImage(
+                        imageUrl: widget.movie.posterUrl!,
+                        fit: BoxFit.cover,
+                        alignment: Alignment.center,
+                        // Multiply by 1.5 to ensure sharpness (supersample slightly)
+                        memCacheHeight: ((widget.height == double.infinity
+                                    ? 400
+                                    : widget.height) *
+                                MediaQuery.of(context).devicePixelRatio *
+                                1.5)
+                            .toInt(),
+                        placeholder: (context, url) => Shimmer.fromColors(
+                          baseColor: Colors.grey[900]!,
+                          highlightColor: Colors.grey[800]!,
+                          child: Container(color: Colors.black),
+                        ),
+                        errorWidget: (context, url, error) => Container(
+                          color: Colors.grey[900],
+                          child: const Center(
+                            child: Icon(
+                              Icons.broken_image,
+                              color: Colors.white24,
                             ),
                           ),
-                        ))
+                        ),
+                      ))
                 : Container(
                     color: Colors.grey[900],
                     child: const Center(

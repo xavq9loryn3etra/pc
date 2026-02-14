@@ -9,15 +9,28 @@ class ScraperService {
   }) {
     final primaryColor = 'FDEDAD'; // Match existing app theme
 
-    if (provider == 'vidsrc') {
-      final idParam = imdbId != null ? 'imdb=$imdbId' : 'tmdb=$tmdbId';
+    if (provider == 'vidlink') {
       if (season != null && episode != null) {
-        return 'https://vidsrc.xyz/embed/tv?$idParam&season=$season&episode=$episode';
+        return 'https://vidlink.pro/tv/$tmdbId/$season/$episode?primaryColor=$primaryColor';
       }
-      return 'https://vidsrc.xyz/embed/movie?$idParam';
+      return 'https://vidlink.pro/movie/$tmdbId?primaryColor=$primaryColor';
     }
 
-    // Default: VidKing
+    if (provider == 'moviesapi') {
+      if (season != null && episode != null) {
+        return 'https://moviesapi.club/tv/$tmdbId-$season-$episode';
+      }
+      return 'https://moviesapi.club/movie/$tmdbId';
+    }
+
+    if (provider == 'vsembed') {
+      if (season != null && episode != null) {
+        return 'https://vsembed.ru/embed/tv?tmdb=$tmdbId&season=$season&episode=$episode';
+      }
+      return 'https://vsembed.ru/embed/movie?tmdb=$tmdbId';
+    }
+
+    // Default: VidKing, or explicit 'vidking'
     // VidKing also supports IMDB: https://vidking.net/embed/imdb/{imdb_id}
     // Prefer IMDB if available for better mapping accuracy
     if (imdbId != null && (season == null || episode == null)) {

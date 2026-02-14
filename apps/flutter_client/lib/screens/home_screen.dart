@@ -315,7 +315,7 @@ class _HomeScreenState extends State<HomeScreen> {
               );
               final movieDisplay = historyMovie ?? movie;
 
-              final tag = "${heroPrefix}_${movie.id}";
+              final tag = "${heroPrefix}_${movie.id}_$index";
               return MoviePoster(
                 movie: movieDisplay,
                 showTitle: true,

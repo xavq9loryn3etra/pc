@@ -4,12 +4,14 @@ import 'package:media_kit/media_kit.dart';
 import 'screens/splash_screen.dart';
 import 'theme/app_theme.dart';
 
+import 'services/app_mode_service.dart';
 import 'services/saved_movies_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   await SavedMoviesService().init();
+  await AppModeService().init();
 
   try {
     await dotenv.load(fileName: ".env");

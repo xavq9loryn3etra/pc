@@ -64,10 +64,8 @@ class ModeSwitcherDialog extends StatelessWidget {
                       const SizedBox(height: 24),
                       LayoutBuilder(
                         builder: (context, constraints) {
-                          return Wrap(
-                            spacing: 32,
-                            runSpacing: 24,
-                            alignment: WrapAlignment.center,
+                          return Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
                               _buildModeOption(
                                 context,
@@ -173,6 +171,10 @@ class ModeSwitcherDialog extends StatelessWidget {
                               assetPath,
                               height: size,
                               width: size,
+                              cacheWidth:
+                                  (size * 3).toInt(), // Optimize decode size
+                              cacheHeight: (size * 3).toInt(),
+                              gaplessPlayback: true,
                               opacity: isSelected
                                   ? const AlwaysStoppedAnimation(1.0)
                                   : const AlwaysStoppedAnimation(0.7),

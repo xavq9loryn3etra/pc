@@ -35,8 +35,10 @@ class _SplashScreenState extends State<SplashScreen>
   Future<void> _startSplashSequence() async {
     // 0. Precache images for smoother mode switching
     if (mounted) {
-      precacheImage(const AssetImage('assets/music-app-logo.png'), context);
-      precacheImage(const AssetImage('assets/book-app-logo.png'), context);
+      await Future.wait([
+        precacheImage(const AssetImage('assets/music-app-logo.png'), context),
+        precacheImage(const AssetImage('assets/book-app-logo.png'), context),
+      ]);
     }
 
     // 1. Wait a bit, then animate fill

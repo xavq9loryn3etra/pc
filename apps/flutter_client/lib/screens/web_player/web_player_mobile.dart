@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_client/theme/app_theme.dart';
 import 'dart:convert';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
@@ -358,7 +359,7 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
           ),
           if (_isLoading)
             const Center(
-              child: CircularProgressIndicator(color: Colors.amber),
+              child: CircularProgressIndicator(color: AppTheme.primaryColor),
             ),
           Positioned(
             top: 20,

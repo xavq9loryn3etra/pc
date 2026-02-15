@@ -1,8 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
-import '../theme/app_theme.dart';
 import '../models/movie.dart';
 import '../services/tmdb_service.dart';
 import 'details_screen.dart';
@@ -14,15 +12,16 @@ import 'search_screen.dart';
 import 'desktop_home_screen.dart';
 import 'favorites_screen.dart';
 import '../widgets/desktop_skeletons.dart';
+import '../widgets/custom_app_bar.dart';
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+class MovieHomeScreen extends StatefulWidget {
+  const MovieHomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<MovieHomeScreen> createState() => _MovieHomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _MovieHomeScreenState extends State<MovieHomeScreen> {
   final TMDBService _tmdb = TMDBService();
   final ScrollController _scrollController = ScrollController();
 
@@ -130,52 +129,21 @@ class _HomeScreenState extends State<HomeScreen> {
 
         return Scaffold(
           extendBodyBehindAppBar: true,
-          appBar: AppBar(
-            elevation: 0,
-            scrolledUnderElevation: 0,
-            title: SvgPicture.asset(
-              'assets/logo.svg',
-              height: 32,
-              colorFilter: const ColorFilter.mode(
-                AppTheme.primaryColor,
-                BlendMode.srcIn,
-              ), // Ensure it matches theme
-            ),
-            backgroundColor: Colors.transparent,
-            flexibleSpace: ClipRect(
-              child: BackdropFilter(
-                filter: ImageFilter.blur(
-                  sigmaX: 20 * _opacity, // Increased blur
-                  sigmaY: 20 * _opacity,
-                ),
-                child: Container(
-                  color: Colors.black.withOpacity(
-                    _opacity * 0.8,
-                  ), // Darker overlay
-                ),
-              ),
-            ),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.search, size: 28),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const SearchScreen()),
-                  );
-                },
-              ),
-              IconButton(
-                icon: const Icon(Icons.favorite_border, size: 28),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const FavoritesScreen()),
-                  );
-                },
-              ),
-              const SizedBox(width: 16),
-            ],
+          appBar: CustomAppBar(
+            scrollOffset:
+                _scrollController.hasClients ? _scrollController.offset : 0.0,
+            onSearchTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SearchScreen()),
+              );
+            },
+            onFavoritesTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const FavoritesScreen()),
+              );
+            },
           ),
           body: SingleChildScrollView(
             controller: _scrollController,

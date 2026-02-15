@@ -1,13 +1,10 @@
-import 'dart:ui';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../models/movie.dart';
 import '../services/saved_movies_service.dart';
 import '../widgets/movie_poster.dart';
 import 'details_screen.dart';
-import '../theme/app_theme.dart';
-import '../widgets/desktop_details_panel.dart';
-import 'package:flutter_animate/flutter_animate.dart';
+import '../widgets/screen_scaffold.dart';
 
 class FavoritesScreen extends StatefulWidget {
   const FavoritesScreen({super.key});
@@ -75,114 +72,62 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isDesktop = constraints.maxWidth > 800;
-        final horizontalPadding = isDesktop ? 60.0 : 16.0;
-
-        return Stack(
-          children: [
-            Scaffold(
-              extendBodyBehindAppBar: true,
-              appBar: AppBar(
-                title: const Text('My List'),
-                backgroundColor: Colors.transparent,
-                flexibleSpace: ClipRect(
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(
-                      sigmaX: 15 * _opacity,
-                      sigmaY: 15 * _opacity,
-                    ),
-                    child: Container(
-                      color: Colors.black.withOpacity(_opacity * 0.7),
-                    ),
+    return ScreenScaffold(
+      title: const Text('My List'),
+      body: (context, isDesktop, padding) {
+        if (_favorites.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.favorite_border,
+                  size: 64,
+                  color: Colors.white24,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  "No favorites yet",
+                  style: TextStyle(
+                    color: Colors.white54,
+                    fontSize: 16,
                   ),
                 ),
-              ),
-              body: _favorites.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.favorite_border,
-                            size: 64,
-                            color: Colors.white24,
-                          ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            "No favorites yet",
-                            style: TextStyle(
-                              color: Colors.white54,
-                              fontSize: 16,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : GridView.builder(
-                      controller: _scrollController,
-                      padding: EdgeInsets.fromLTRB(
-                        horizontalPadding,
-                        100,
-                        horizontalPadding,
-                        16,
-                      ),
-                      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                        maxCrossAxisExtent: isDesktop ? 200 : 150,
-                        childAspectRatio: isDesktop ? (200 / 340) : 0.58,
-                        crossAxisSpacing: isDesktop ? 16 : 12,
-                        mainAxisSpacing: isDesktop ? 16 : 12,
-                      ),
-                      itemCount: _favorites.length,
-                      itemBuilder: (context, index) {
-                        final movie = _favorites[index];
-                        return MoviePoster(
-                          movie: movie,
-                          showTitle: true,
-                          height: double.infinity,
-                          width: double.infinity,
-                          onTap: () => _navigateToDetails(movie, isDesktop),
-                        );
-                      },
-                    ),
+              ],
             ),
+          );
+        }
 
-            // Side panel overlay for desktop
-            if (isDesktop && _selectedMovie != null)
-              Positioned.fill(
-                child: Stack(
-                  children: [
-                    // Darkened background overlay
-                    GestureDetector(
-                      onTap: _closeSidePanel,
-                      child: Container(color: Colors.black.withOpacity(0.6)),
-                    ).animate().fadeIn(duration: 200.ms),
-
-                    // Side panel
-                    Positioned(
-                      top: 0,
-                      bottom: 0,
-                      right: 0,
-                      child: DesktopDetailsPanel(
-                        movie: _selectedMovie!,
-                        onClose: _closeSidePanel,
-                      )
-                          .animate()
-                          .slideX(
-                            begin: 1.0,
-                            end: 0.0,
-                            duration: 300.ms,
-                            curve: Curves.easeOutCubic,
-                          )
-                          .fadeIn(duration: 200.ms),
-                    ),
-                  ],
-                ),
-              ),
-          ],
+        final horizontalPadding = isDesktop ? 60.0 : 16.0;
+        return GridView.builder(
+          controller: _scrollController,
+          padding: padding.copyWith(
+            left: horizontalPadding,
+            right: horizontalPadding,
+            top: 100,
+          ),
+          gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: isDesktop ? 200 : 150,
+            childAspectRatio: isDesktop ? (200 / 340) : 0.58,
+            crossAxisSpacing: isDesktop ? 16 : 12,
+            mainAxisSpacing: isDesktop ? 16 : 12,
+          ),
+          itemCount: _favorites.length,
+          itemBuilder: (context, index) {
+            final movie = _favorites[index];
+            return MoviePoster(
+              movie: movie,
+              showTitle: true,
+              height: double.infinity,
+              width: double.infinity,
+              onTap: () => _navigateToDetails(movie, isDesktop),
+            );
+          },
         );
       },
+      opacity: _opacity,
+      selectedMovie: _selectedMovie,
+      onCloseSidePanel: _closeSidePanel,
     );
   }
 }

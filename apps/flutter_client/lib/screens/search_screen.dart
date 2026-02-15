@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -7,8 +6,7 @@ import '../services/tmdb_service.dart';
 import '../theme/app_theme.dart';
 import 'details_screen.dart';
 import '../widgets/movie_poster.dart';
-import '../widgets/desktop_details_panel.dart';
-import 'package:flutter_animate/flutter_animate.dart';
+import '../widgets/screen_scaffold.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -102,91 +100,36 @@ class _SearchScreenState extends State<SearchScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isDesktop = constraints.maxWidth > 800;
-
-        return Stack(
-          children: [
-            Scaffold(
-              extendBodyBehindAppBar: true,
-              appBar: AppBar(
-                title: TextField(
-                  controller: _controller,
-                  autofocus: true,
-                  style: const TextStyle(color: Colors.white, fontSize: 18),
-                  decoration: const InputDecoration(
-                    hintText: 'Search movies & TV shows...',
-                    hintStyle: TextStyle(color: Colors.white54),
-                    border: InputBorder.none,
-                  ),
-                  onChanged: _onSearchChanged,
-                ),
-                backgroundColor: Colors.transparent,
-                flexibleSpace: ClipRect(
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(
-                      sigmaX: 15 * _opacity,
-                      sigmaY: 15 * _opacity,
-                    ),
-                    child: Container(
-                      color: Colors.black.withOpacity(_opacity * 0.7),
-                    ),
-                  ),
-                ),
-                actions: [
-                  if (_controller.text.isNotEmpty)
-                    IconButton(
-                      icon: const Icon(Icons.clear, color: Colors.white54),
-                      onPressed: () {
-                        _controller.clear();
-                        _onSearchChanged('');
-                      },
-                    ),
-                ],
-              ),
-              body: _buildBody(isDesktop),
-            ),
-
-            // Side panel overlay for desktop
-            if (isDesktop && _selectedMovie != null)
-              Positioned.fill(
-                child: Stack(
-                  children: [
-                    // Darkened background overlay
-                    GestureDetector(
-                      onTap: _closeSidePanel,
-                      child: Container(color: Colors.black.withOpacity(0.6)),
-                    ).animate().fadeIn(duration: 200.ms),
-
-                    // Side panel
-                    Positioned(
-                      top: 0,
-                      bottom: 0,
-                      right: 0,
-                      child: DesktopDetailsPanel(
-                        movie: _selectedMovie!,
-                        onClose: _closeSidePanel,
-                      )
-                          .animate()
-                          .slideX(
-                            begin: 1.0,
-                            end: 0.0,
-                            duration: 300.ms,
-                            curve: Curves.easeOutCubic,
-                          )
-                          .fadeIn(duration: 200.ms),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        );
-      },
+    return ScreenScaffold(
+      title: TextField(
+        controller: _controller,
+        autofocus: true,
+        style: const TextStyle(color: Colors.white, fontSize: 18),
+        decoration: const InputDecoration(
+          hintText: 'Search movies & TV shows...',
+          hintStyle: TextStyle(color: Colors.white54),
+          border: InputBorder.none,
+        ),
+        onChanged: _onSearchChanged,
+      ),
+      actions: [
+        if (_controller.text.isNotEmpty)
+          IconButton(
+            icon: const Icon(Icons.clear, color: Colors.white54),
+            onPressed: () {
+              _controller.clear();
+              _onSearchChanged('');
+            },
+          ),
+      ],
+      body: _buildBody,
+      opacity: _opacity,
+      selectedMovie: _selectedMovie,
+      onCloseSidePanel: _closeSidePanel,
     );
   }
 
-  Widget _buildBody(bool isDesktop) {
+  Widget _buildBody(BuildContext context, bool isDesktop, EdgeInsets padding) {
     if (_isLoading) {
       return const Center(
         child: CircularProgressIndicator(color: AppTheme.primaryColor),
@@ -226,11 +169,10 @@ class _SearchScreenState extends State<SearchScreen> {
 
     return GridView.builder(
       controller: _scrollController,
-      padding: EdgeInsets.fromLTRB(
-        horizontalPadding,
-        100,
-        horizontalPadding,
-        16,
+      padding: padding.copyWith(
+        left: horizontalPadding,
+        right: horizontalPadding,
+        top: 100,
       ),
       gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: isDesktop ? 200 : 150,

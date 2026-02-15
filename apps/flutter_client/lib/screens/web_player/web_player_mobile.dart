@@ -29,6 +29,7 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
   bool _showControls = false;
   bool _isVideoPaused = false;
   Timer? _hideTimer;
+  Offset? _tapDownPosition;
 
   @override
   void initState() {
@@ -140,12 +141,20 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
           },
           onPageStarted: (String url) {
             if (mounted) {
-              setState(() => _isLoading = true);
+              setState(() {
+                _isLoading = true;
+                _showControls = true;
+              });
+              _startHideTimer();
             }
           },
           onPageFinished: (String url) {
             if (mounted) {
-              setState(() => _isLoading = false);
+              setState(() {
+                _isLoading = false;
+                _showControls = true;
+              });
+              _startHideTimer();
             }
 
             // Get saved progress to resume
@@ -191,8 +200,8 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
               };
 
               window.addEventListener('click', notifyTap, true);
-              window.addEventListener('touchstart', notifyTap, true);
-              window.addEventListener('pointerdown', notifyTap, true);
+              window.addEventListener('touchend', notifyTap, true);
+              window.addEventListener('pointerup', notifyTap, true);
               
               window.addEventListener('play', () => {
                 FlutterControlChannel.postMessage('playing');
@@ -226,6 +235,11 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
                 }
 
                 console.log("Video found! Setting up tracking...");
+                
+                // Force inline playback on iOS
+                video.setAttribute('playsinline', '');
+                video.setAttribute('webkit-playsinline', '');
+                
                 let hasResumed = false;
 
                 // Resume to saved position ONCE
@@ -329,7 +343,19 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          WebViewWidget(controller: _controller),
+          Listener(
+            onPointerDown: (event) => _tapDownPosition = event.position,
+            onPointerUp: (event) {
+              if (_tapDownPosition != null) {
+                if ((event.position - _tapDownPosition!).distance < 20.0) {
+                  _toggleControls();
+                }
+                _tapDownPosition = null;
+              }
+            },
+            onPointerCancel: (_) => _tapDownPosition = null,
+            child: WebViewWidget(controller: _controller),
+          ),
           if (_isLoading)
             const Center(
               child: CircularProgressIndicator(color: Colors.amber),

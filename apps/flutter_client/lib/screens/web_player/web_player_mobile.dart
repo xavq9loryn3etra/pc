@@ -6,7 +6,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import 'dart:io';
-import 'dart:async';
 import 'web_player_platform_interface.dart';
 import '../../services/saved_movies_service.dart';
 
@@ -107,6 +106,32 @@ const String _kFullscreenSuppressJs = r"""
     (document.head || document.documentElement).appendChild(s);
     window._flutterFullscreenStyle = true;
   }
+
+  // --- 6. Suppress the iOS Now Playing / notification panel media controls ---
+  // WKWebView auto-registers with MPNowPlayingInfoCenter when <video> plays.
+  // Override navigator.mediaSession so embed players can't set metadata.
+  if (navigator.mediaSession) {
+    try {
+      navigator.mediaSession.metadata = null;
+      navigator.mediaSession.setActionHandler('play', null);
+      navigator.mediaSession.setActionHandler('pause', null);
+      navigator.mediaSession.setActionHandler('seekbackward', null);
+      navigator.mediaSession.setActionHandler('seekforward', null);
+      navigator.mediaSession.setActionHandler('previoustrack', null);
+      navigator.mediaSession.setActionHandler('nexttrack', null);
+      // Prevent embed players from setting metadata
+      Object.defineProperty(navigator.mediaSession, 'metadata', {
+        get: function() { return null; },
+        set: function() {},
+        configurable: true
+      });
+      Object.defineProperty(navigator.mediaSession, 'playbackState', {
+        get: function() { return 'none'; },
+        set: function() {},
+        configurable: true
+      });
+    } catch(e) {}
+  }
 })();
 """;
 
@@ -127,9 +152,8 @@ class WebPlayerMobile extends WebPlayerPlatform {
 class _WebPlayerMobileState extends State<WebPlayerMobile> {
   late final WebViewController _controller;
   bool _isLoading = true;
-  bool _showControls = false;
-  bool _isVideoPaused = false;
-  Timer? _hideTimer;
+  bool _isVideoPaused =
+      true; // starts true so close button is visible initially
 
   @override
   void initState() {
@@ -181,16 +205,12 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
         'FlutterControlChannel',
         onMessageReceived: (JavaScriptMessage message) {
           try {
+            // Play/pause state drives close-button visibility.
             if (message.message == 'playing') {
-              setState(() => _isVideoPaused = false);
-              _startHideTimer();
+              if (mounted) setState(() => _isVideoPaused = false);
               return;
             } else if (message.message == 'paused') {
-              setState(() {
-                _isVideoPaused = true;
-                _showControls = true;
-              });
-              _hideTimer?.cancel();
+              if (mounted) setState(() => _isVideoPaused = true);
               return;
             }
 
@@ -247,11 +267,7 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
           // ----------------------------------------------------------------
           onPageStarted: (String url) {
             if (mounted) {
-              setState(() {
-                _isLoading = true;
-                _showControls = true;
-              });
-              _startHideTimer();
+              setState(() => _isLoading = true);
             }
             // Inject fullscreen-suppression as early as possible
             _controller.runJavaScript(_kFullscreenSuppressJs);
@@ -263,11 +279,7 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
           // ----------------------------------------------------------------
           onPageFinished: (String url) {
             if (mounted) {
-              setState(() {
-                _isLoading = false;
-                _showControls = true;
-              });
-              _startHideTimer();
+              setState(() => _isLoading = false);
             }
 
             // Get saved progress for resume
@@ -369,37 +381,20 @@ if (window.flutterTrackingActive) {
           },
         ),
       )
-      // Use Chrome user agent on BOTH platforms.
-      // Safari UA makes embed players trigger native iOS fullscreen.
+      // iOS: use default WKWebView UA (Safari). Fullscreen is suppressed by JS.
+      // Chrome UA on WKWebView causes a UA/engine mismatch that breaks some sites.
       ..setUserAgent(
-        'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
+        Platform.isIOS
+            ? null // use WKWebView default
+            : 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
       )
       ..loadRequest(
         Uri.parse(widget.initialUrl),
       );
   }
 
-  void _toggleControls() {
-    setState(() {
-      _showControls = true;
-    });
-    if (!_isVideoPaused) {
-      _startHideTimer();
-    }
-  }
-
-  void _startHideTimer() {
-    _hideTimer?.cancel();
-    _hideTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted && !_isVideoPaused) {
-        setState(() => _showControls = false);
-      }
-    });
-  }
-
   @override
   void dispose() {
-    _hideTimer?.cancel();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
@@ -413,45 +408,36 @@ if (window.flutterTrackingActive) {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // ---------------------------------------------------------------
-          // WebViewWidget sits directly in the tree — NO Listener wrapper.
-          // On iOS, wrapping the WebView in a Listener intercepted every
-          // touch before WKWebView could process it, creating a gesture
-          // conflict that triggered native fullscreen at the platform level.
-          // ---------------------------------------------------------------
+          // WebViewWidget directly in tree — NO overlays intercepting touches.
+          // All touch events go straight to WKWebView so the embed player's
+          // mute, pause, subtitle, etc. buttons work natively.
           WebViewWidget(controller: _controller),
-
-          // Transparent overlay that only toggles our close-button visibility.
-          // It uses HitTestBehavior.translucent so touches pass through to
-          // the WebView underneath.
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: _toggleControls,
-              // Don't add child — a childless Positioned.fill + translucent
-              // behavior lets taps flow through to the WebView.
-            ),
-          ),
 
           if (_isLoading)
             const Center(
               child: CircularProgressIndicator(color: AppTheme.primaryColor),
             ),
+
+          // Close button — visible when paused or loading, hidden during playback.
+          // Driven by JS play/pause events, no touch overlay needed.
           Positioned(
             top: 20,
             left: 20,
             child: AnimatedOpacity(
-              opacity: _showControls ? 1.0 : 0.0,
+              opacity: (_isLoading || _isVideoPaused) ? 1.0 : 0.0,
               duration: const Duration(milliseconds: 300),
-              child: SafeArea(
-                child: Container(
-                  decoration: const BoxDecoration(
-                    color: Colors.black54,
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white),
-                    onPressed: _showControls ? widget.onClose : null,
+              child: IgnorePointer(
+                ignoring: !(_isLoading || _isVideoPaused),
+                child: SafeArea(
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.black54,
+                      shape: BoxShape.circle,
+                    ),
+                    child: IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: widget.onClose,
+                    ),
                   ),
                 ),
               ),

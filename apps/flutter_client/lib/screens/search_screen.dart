@@ -52,8 +52,8 @@ class _SearchScreenState extends State<SearchScreen> {
   void _onSearchChanged(String query) {
     if (_debounce?.isActive ?? false) _debounce?.cancel();
 
-    // Clear results if empty
-    if (query.isEmpty) {
+    // Clear results if empty or less than 3 characters
+    if (query.length < 3) {
       setState(() {
         _results = [];
         _error = null;
@@ -100,32 +100,35 @@ class _SearchScreenState extends State<SearchScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ScreenScaffold(
-      title: TextField(
-        controller: _controller,
-        autofocus: true,
-        style: const TextStyle(color: Colors.white, fontSize: 18),
-        decoration: const InputDecoration(
-          hintText: 'Search movies & TV shows...',
-          hintStyle: TextStyle(color: Colors.white54),
-          border: InputBorder.none,
-        ),
-        onChanged: _onSearchChanged,
-      ),
-      actions: [
-        if (_controller.text.isNotEmpty)
-          IconButton(
-            icon: const Icon(Icons.clear, color: Colors.white54),
-            onPressed: () {
-              _controller.clear();
-              _onSearchChanged('');
-            },
+    return GestureDetector(
+      onTap: () => FocusScope.of(context).unfocus(),
+      child: ScreenScaffold(
+        title: TextField(
+          controller: _controller,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white, fontSize: 18),
+          decoration: const InputDecoration(
+            hintText: 'Search movies & TV shows...',
+            hintStyle: TextStyle(color: Colors.white54),
+            border: InputBorder.none,
           ),
-      ],
-      body: _buildBody,
-      opacity: _opacity,
-      selectedMovie: _selectedMovie,
-      onCloseSidePanel: _closeSidePanel,
+          onChanged: _onSearchChanged,
+        ),
+        actions: [
+          if (_controller.text.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.clear, color: Colors.white54),
+              onPressed: () {
+                _controller.clear();
+                _onSearchChanged('');
+              },
+            ),
+        ],
+        body: _buildBody,
+        opacity: _opacity,
+        selectedMovie: _selectedMovie,
+        onCloseSidePanel: _closeSidePanel,
+      ),
     );
   }
 

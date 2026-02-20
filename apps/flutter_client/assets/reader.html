@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPUB Reader</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #121212;
+            color: #e0e0e0;
+            font-family: sans-serif;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #viewer {
+            width: 100%;
+            height: 100vh;
+        }
+
+        /* Navigation areas */
+        #prev {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 15%;
+            cursor: pointer;
+            z-index: 10;
+        }
+
+        #next {
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: 15%;
+            cursor: pointer;
+            z-index: 10;
+        }
+
+        /* Loading */
+        #loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="viewer"></div>
+    <div id="prev" onclick="prevPage()"></div>
+    <div id="next" onclick="nextPage()"></div>
+    <div id="loader">Loading Book...</div>
+    <div id="error-log"
+        style="position:fixed; bottom:0; left:0; right:0; background:rgba(255,0,0,0.8); color:white; padding:10px; display:none; z-index:100; font-family:monospace; font-size:12px; max-height: 50vh; overflow:auto;">
+    </div>
+
+    <script>
+        // Global error handler to show issues on screen
+        window.onerror = function (msg, url, line, col, error) {
+            var log = document.getElementById('error-log');
+            log.style.display = 'block';
+            log.innerHTML += '<div>Error: ' + msg + ' at ' + line + ':' + col + '</div>';
+            return false;
+        };
+
+        // Catch unhandled promise rejections
+        window.onunhandledrejection = function (event) {
+            var log = document.getElementById('error-log');
+            log.style.display = 'block';
+            log.innerHTML += '<div>Promise Error: ' + event.reason + '</div>';
+        };
+    </script>
+
+    <script>
+        var book, rendition;
+
+        // Function called from Flutter to load book
+        function loadBook(bookDataBase64) {
+            document.getElementById('loader').style.display = 'block';
+
+            // Decode base64 to array buffer
+            var binary_string = window.atob(bookDataBase64);
+            var len = binary_string.length;
+            var bytes = new Uint8Array(len);
+            for (var i = 0; i < len; i++) {
+                bytes[i] = binary_string.charCodeAt(i);
+            }
+
+            try {
+                book = ePub(bytes.buffer);
+                rendition = book.renderTo("viewer", {
+                    width: "100%",
+                    height: "100%",
+                    flow: "paginated",
+                    manager: "default"
+                });
+
+                rendition.themes.register("dark", {
+                    body: { "background-color": "#121212", "color": "#e0e0e0" }
+                });
+                rendition.themes.select("dark");
+
+                rendition.display().then(function () {
+                    document.getElementById('loader').style.display = 'none';
+                    // Notify Flutter book is loaded
+                    if (window.flutter_inappwebview) window.flutter_inappwebview.callHandler('onBookLoaded');
+                });
+            } catch (e) {
+                document.getElementById('loader').innerText = 'Error loading book: ' + e;
+            }
+        }
+
+        function nextPage() {
+            if (rendition) rendition.next();
+        }
+
+        function prevPage() {
+            if (rendition) rendition.prev();
+        }
+    </script>
+</body>
+
+</html>

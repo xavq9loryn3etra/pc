@@ -14,6 +14,7 @@ class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _fillAnimation;
+  bool _hasStarted = false;
 
   @override
   void initState() {
@@ -27,9 +28,15 @@ class _SplashScreenState extends State<SplashScreen>
       begin: 0.0,
       end: 1.0,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+  }
 
-    // Start loading sequence
-    _startSplashSequence();
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_hasStarted) {
+      _hasStarted = true;
+      _startSplashSequence();
+    }
   }
 
   Future<void> _startSplashSequence() async {
@@ -43,7 +50,7 @@ class _SplashScreenState extends State<SplashScreen>
 
     // 1. Wait a bit, then animate fill
     await Future.delayed(const Duration(milliseconds: 500));
-    await _controller.forward();
+    if (mounted) await _controller.forward();
 
     // 2. Small pause after fill
     await Future.delayed(const Duration(milliseconds: 500));

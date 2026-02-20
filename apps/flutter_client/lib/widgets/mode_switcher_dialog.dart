@@ -155,7 +155,7 @@ class ModeSwitcherDialog extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   SizedBox(
-                    height: 48,
+                    height: 48, // Fixed height for alignment
                     child: Center(
                       child: isSvg
                           ? SvgPicture.asset(
@@ -173,8 +173,8 @@ class ModeSwitcherDialog extends StatelessWidget {
                               width: size,
                               cacheWidth:
                                   (size * 3).toInt(), // Optimize decode size
-                              cacheHeight: (size * 3).toInt(),
                               gaplessPlayback: true,
+                              fit: BoxFit.contain, // Prevent distortion
                               opacity: isSelected
                                   ? const AlwaysStoppedAnimation(1.0)
                                   : const AlwaysStoppedAnimation(0.7),

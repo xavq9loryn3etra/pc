@@ -176,56 +176,87 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
               if (m != null) startProgress = m.progress ?? 0.0;
             }
 
-            // Inject JS listener for click/tap, play/pause, and history tracking
-            // We debounce the tap event
-            // We also poll for the video element to restore progress and track time
+            // Inject JS: suppress iOS fullscreen takeover, restore progress, track watch time.
+            // NOTE: tap/play/pause JS listeners are intentionally removed — Flutter's Listener
+            // widget handles taps natively, and play/pause state is inferred from progress events.
             _controller.runJavaScript("""
               // Always update the start position for this video
               window.flutterPlayerStartProgress = $startProgress;
-              
-              // Only inject listeners once
+
+              // -- iOS FULLSCREEN SUPPRESSION --
+              // Inject CSS immediately so video never renders in a fullscreen-eligible state.
+              (function injectStyle() {
+                const style = document.createElement('style');
+                style.textContent = [
+                  'video { object-fit: contain !important; }',
+                  '::-webkit-media-controls-fullscreen-button { display: none !important; }',
+                  '::-webkit-media-controls-panel { display: none !important; }',
+                ].join(' ');
+                (document.head || document.documentElement).appendChild(style);
+              })();
+
+              // Override fullscreen APIs so the embed player can't trigger them
+              (function blockFullscreen() {
+                const noop = function() { return Promise.resolve(); };
+                try { Element.prototype.requestFullscreen = noop; } catch(e) {}
+                try { Element.prototype.webkitRequestFullscreen = noop; } catch(e) {}
+                try { HTMLVideoElement.prototype.webkitEnterFullscreen = noop; } catch(e) {}
+                try { HTMLVideoElement.prototype.webkitSetPresentationMode = function() {}; } catch(e) {}
+                Object.defineProperty(document, 'fullscreenEnabled', { get: () => false });
+                Object.defineProperty(document, 'webkitFullscreenEnabled', { get: () => false });
+              })();
+
+              // Only inject tracking once
               if (window.flutterTrackingActive) {
                 console.log("Tracking already active, position updated to: " + ($startProgress * 100) + "%");
                 return;
               }
               window.flutterTrackingActive = true;
-              
-              // Tap/Click for controls
-              let lastTap = 0;
-              const notifyTap = () => {
-                const now = Date.now();
-                if (now - lastTap > 300) {
-                  lastTap = now;
-                  FlutterControlChannel.postMessage('tap');
-                }
-              };
 
-              window.addEventListener('click', notifyTap, true);
-              window.addEventListener('touchend', notifyTap, true);
-              window.addEventListener('pointerup', notifyTap, true);
-              
               window.addEventListener('play', () => {
                 FlutterControlChannel.postMessage('playing');
               }, true);
-              
+
               window.addEventListener('pause', () => {
                 FlutterControlChannel.postMessage('paused');
               }, true);
 
-              // Find video element (simple search first, then Shadow DOM if needed)
+              // Find video element, including one level of Shadow DOM
               function findVideo() {
                 let v = document.querySelector('video');
                 if (v) return v;
-                
-                // Check one level of Shadow DOM
-                const elements = document.querySelectorAll('*');
-                for (let el of elements) {
+                for (let el of document.querySelectorAll('*')) {
                   if (el.shadowRoot) {
                     v = el.shadowRoot.querySelector('video');
                     if (v) return v;
                   }
                 }
                 return null;
+              }
+
+              function applyInlineAndBlock(video) {
+                // Force inline attributes
+                video.setAttribute('playsinline', '');
+                video.setAttribute('webkit-playsinline', '');
+                video.removeAttribute('controls'); // remove native controls to prevent fullscreen button tap
+
+                // Re-apply fullscreen block directly on the element
+                try { video.webkitEnterFullscreen = function() {}; } catch(e) {}
+                try { video.webkitSetPresentationMode = function() {}; } catch(e) {}
+                try { video.requestFullscreen = function() { return Promise.resolve(); }; } catch(e) {}
+                try { video.webkitRequestFullscreen = function() {}; } catch(e) {}
+
+                // Intercept fullscreenchange in case the embed triggers it
+                document.addEventListener('fullscreenchange', function(e) {
+                  if (document.fullscreenElement) {
+                    try { document.exitFullscreen(); } catch(err) {}
+                  }
+                }, true);
+                document.addEventListener('webkitfullscreenchange', function(e) {
+                  if (document.webkitFullscreenElement) {
+                    try { document.webkitExitFullscreen(); } catch(err) {}
+                  }
+                }, true);
               }
 
               function setupTracking() {
@@ -236,18 +267,12 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
                 }
 
                 console.log("Video found! Setting up tracking...");
-                
-                // Force inline playback on iOS
-                video.setAttribute('playsinline', '');
-                video.setAttribute('webkit-playsinline', '');
-                
-                let hasResumed = false;
+                applyInlineAndBlock(video);
 
-                // Resume to saved position ONCE
+                let hasResumed = false;
                 function resume() {
                   const startProg = window.flutterPlayerStartProgress || 0;
                   if (hasResumed || startProg < 0.01 || startProg > 0.95) return;
-                  
                   if (video.duration && Number.isFinite(video.duration)) {
                     video.currentTime = startProg * video.duration;
                     hasResumed = true;
@@ -255,14 +280,12 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
                   }
                 }
 
-                // Try to resume after metadata loads
                 if (video.readyState >= 1) {
                   setTimeout(resume, 500);
                 } else {
-                  video.addEventListener('loadedmetadata', () => setTimeout(resume, 500), {once: true});
+                  video.addEventListener('loadedmetadata', () => setTimeout(resume, 500), { once: true });
                 }
 
-                // Track progress every 5 seconds
                 let lastSave = 0;
                 video.addEventListener('timeupdate', () => {
                   const now = Date.now();
@@ -276,7 +299,6 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
                   }
                 });
 
-                // Save immediately on pause
                 video.addEventListener('pause', () => {
                   if (video.duration > 60) {
                     FlutterControlChannel.postMessage(JSON.stringify({

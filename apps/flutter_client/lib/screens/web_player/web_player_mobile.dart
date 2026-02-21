@@ -298,24 +298,54 @@ if (window.flutterTrackingActive) {
               isFraudulentWebsiteWarningEnabled: false,
               suppressesIncrementalRendering: false,
 
-              // --- User agent (Android only; iOS uses default Safari UA) ---
+              // User agent: only set on Android. On iOS, leave as default
+              // (WKWebView Safari UA). Passing '' breaks sites.
               userAgent: Platform.isAndroid
                   ? 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'
-                  : '',
+                  : null,
             ),
 
-            // --- Native fullscreen prevention ---
+            // --- Block pop-up windows (always ads) ---
+            onCreateWindow: (controller, createWindowAction) async {
+              debugPrint('Blocked pop-up: ${createWindowAction.request.url}');
+              return false;
+            },
+
+            // --- Block ad redirects while allowing CDN/video loads ---
+            shouldOverrideUrlLoading: (controller, navigationAction) async {
+              final url = navigationAction.request.url;
+              if (url == null) return NavigationActionPolicy.ALLOW;
+
+              final initialHost = Uri.parse(widget.initialUrl).host;
+              final targetHost = url.host;
+
+              // Allow same-domain navigations
+              if (targetHost.contains(initialHost) ||
+                  initialHost.contains(targetHost)) {
+                return NavigationActionPolicy.ALLOW;
+              }
+
+              // Block navigations triggered by user clicks to other domains
+              // (these are ad clicks). Allow everything else (sub-resources,
+              // iframes, XHR, etc. needed for video loading from CDNs).
+              final isMainFrame = navigationAction.isForMainFrame;
+              if (isMainFrame) {
+                debugPrint('Blocked ad redirect: $url');
+                return NavigationActionPolicy.CANCEL;
+              }
+
+              return NavigationActionPolicy.ALLOW;
+            },
+
+            // --- Native fullscreen callback ---
+            // Do NOT try to exit fullscreen here — the native transition has
+            // already started, and calling exitFullscreen creates a rapid
+            // enter-then-exit that flashes a white screen.
+            // The UserScript at AT_DOCUMENT_START should prevent fullscreen
+            // from being requested in the first place.
             onEnterFullscreen: (controller) {
-              // Immediately exit fullscreen when the native layer tries it
-              controller.evaluateJavascript(source: """
-                if (document.fullscreenElement) { document.exitFullscreen(); }
-                if (document.webkitFullscreenElement) { document.webkitExitFullscreen(); }
-                var vids = document.querySelectorAll('video');
-                vids.forEach(function(v) {
-                  try { v.webkitSetPresentationMode('inline'); } catch(e) {}
-                  v.setAttribute('playsinline', '');
-                });
-              """);
+              debugPrint(
+                  'WebView entered fullscreen — UserScript should have prevented this');
             },
 
             onWebViewCreated: (controller) {

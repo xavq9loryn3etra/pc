@@ -1,34 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_client/theme/app_theme.dart';
+import 'dart:collection';
 import 'dart:convert';
-import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_android/webview_flutter_android.dart';
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import 'dart:io';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'web_player_platform_interface.dart';
 import '../../services/saved_movies_service.dart';
 
 // ---------------------------------------------------------------------------
-// Fullscreen-suppression JS injected in both onPageStarted and onPageFinished.
+// Fullscreen-suppression JS injected at AT_DOCUMENT_START via UserScript.
 //
-// WHY TWO PASSES?
-//   • onPageStarted fires early — before most page JS runs — so our prototype
-//     overrides are often in place before the embed player caches them.
-//   • onPageFinished is a belt-and-suspenders pass that also sets up progress
-//     tracking once the DOM / video element is available.
-//
-// WHY NOT WKUserScript.atDocumentStart?
-//   The webview_flutter_wkwebview Dart API does not expose addUserScript on
-//   WebKitWebViewController; the method lives on WKUserContentController which
-//   is a lower-level Swift class not surfaced to Dart in this package version.
+// This runs BEFORE any page JavaScript — so our prototype overrides are in
+// place before any embed player caches the native fullscreen APIs.
 // ---------------------------------------------------------------------------
 const String _kFullscreenSuppressJs = r"""
 (function() {
   'use strict';
 
   // --- 1. Override fullscreen APIs on prototypes ---
-  // Using Object.defineProperty (configurable:true allows us to re-run safely).
   function noop() { return Promise.resolve(); }
   function defineNoop(obj, prop) {
     try {
@@ -42,15 +32,14 @@ const String _kFullscreenSuppressJs = r"""
   defineNoop(Element.prototype,             'webkitRequestFullscreen');
   defineNoop(HTMLVideoElement.prototype,    'webkitEnterFullscreen');
 
-  // webkitSetPresentationMode is the main iOS API for fullscreen/pip/inline
   try {
     Object.defineProperty(HTMLVideoElement.prototype, 'webkitSetPresentationMode', {
-      value: function(mode) { /* ignore fullscreen & pip; only inline allowed */ },
+      value: function(mode) { /* only inline allowed */ },
       writable: true, configurable: true
     });
   } catch(e) {}
 
-  // Report fullscreen as unsupported so players don't even try
+  // Report fullscreen as unsupported
   try { Object.defineProperty(document, 'fullscreenEnabled',       { get: function(){ return false; }, configurable: true }); } catch(e) {}
   try { Object.defineProperty(document, 'webkitFullscreenEnabled', { get: function(){ return false; }, configurable: true }); } catch(e) {}
 
@@ -62,7 +51,7 @@ const String _kFullscreenSuppressJs = r"""
     if (document.webkitFullscreenElement) { try { document.webkitExitFullscreen(); } catch(e) {} }
   }, true);
 
-  // --- 3. Helper: enforce inline on a single video element ---
+  // --- 3. Enforce inline on video elements ---
   function enforceInline(video) {
     video.setAttribute('playsinline', '');
     video.setAttribute('webkit-playsinline', '');
@@ -76,11 +65,10 @@ const String _kFullscreenSuppressJs = r"""
     } catch(e) {}
   }
 
-  // Apply to videos already in DOM
   (document.querySelectorAll('video') || []).forEach(enforceInline);
 
-  // --- 4. MutationObserver: catch videos added after initial parse ---
-  if (window._flutterFullscreenObserver) return; // already running
+  // --- 4. MutationObserver for dynamically added videos ---
+  if (window._flutterFullscreenObserver) return;
   window._flutterFullscreenObserver = new MutationObserver(function(mutations) {
     mutations.forEach(function(m) {
       m.addedNodes.forEach(function(node) {
@@ -97,7 +85,7 @@ const String _kFullscreenSuppressJs = r"""
     document.documentElement, { childList: true, subtree: true }
   );
 
-  // --- 5. CSS: hide native fullscreen button; keep video contained ---
+  // --- 5. CSS: hide native fullscreen button ---
   if (!window._flutterFullscreenStyle) {
     var s = document.createElement('style');
     s.textContent =
@@ -107,9 +95,7 @@ const String _kFullscreenSuppressJs = r"""
     window._flutterFullscreenStyle = true;
   }
 
-  // --- 6. Suppress the iOS Now Playing / notification panel media controls ---
-  // WKWebView auto-registers with MPNowPlayingInfoCenter when <video> plays.
-  // Override navigator.mediaSession so embed players can't set metadata.
+  // --- 6. Suppress iOS Now Playing / notification panel ---
   if (navigator.mediaSession) {
     try {
       navigator.mediaSession.metadata = null;
@@ -119,7 +105,6 @@ const String _kFullscreenSuppressJs = r"""
       navigator.mediaSession.setActionHandler('seekforward', null);
       navigator.mediaSession.setActionHandler('previoustrack', null);
       navigator.mediaSession.setActionHandler('nexttrack', null);
-      // Prevent embed players from setting metadata
       Object.defineProperty(navigator.mediaSession, 'metadata', {
         get: function() { return null; },
         set: function() {},
@@ -150,44 +135,18 @@ class WebPlayerMobile extends WebPlayerPlatform {
 }
 
 class _WebPlayerMobileState extends State<WebPlayerMobile> {
-  late final WebViewController _controller;
+  InAppWebViewController? _controller;
   bool _isLoading = true;
-  bool _isVideoPaused =
-      true; // starts true so close button is visible initially
+  bool _isVideoPaused = true; // starts true so close button is visible
 
   @override
   void initState() {
     super.initState();
-    _setupController();
-  }
-
-  void _setupController() {
-    late final PlatformWebViewControllerCreationParams params;
-    if (WebViewPlatform.instance is WebKitWebViewPlatform) {
-      params = WebKitWebViewControllerCreationParams(
-        allowsInlineMediaPlayback: true,
-        mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
-      );
-    } else {
-      params = const PlatformWebViewControllerCreationParams();
-    }
-
-    _controller = WebViewController.fromPlatformCreationParams(params);
-
-    // Android: disable gesture requirement for autoplay
-    if (Platform.isAndroid &&
-        _controller.platform is AndroidWebViewController) {
-      final androidController =
-          _controller.platform as AndroidWebViewController;
-      androidController.setMediaPlaybackRequiresUserGesture(false);
-    }
 
     // Force landscape and hide system UI
     if (Platform.isAndroid) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     } else {
-      // iOS: use manual mode — immersiveSticky can conflict with WKWebView's
-      // view controller hierarchy and cause black flashes.
       SystemChrome.setEnabledSystemUIMode(
         SystemUiMode.manual,
         overlays: [],
@@ -197,120 +156,29 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
+  }
 
-    _controller
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0xFF000000))
-      ..addJavaScriptChannel(
-        'FlutterControlChannel',
-        onMessageReceived: (JavaScriptMessage message) {
-          try {
-            // Play/pause state drives close-button visibility.
-            if (message.message == 'playing') {
-              if (mounted) setState(() => _isVideoPaused = false);
-              return;
-            } else if (message.message == 'paused') {
-              if (mounted) setState(() => _isVideoPaused = true);
-              return;
-            }
+  @override
+  void dispose() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+    ]);
+    super.dispose();
+  }
 
-            // JSON progress updates
-            final dynamic data = jsonDecode(message.message);
-            if (data is Map) {
-              if (data['type'] == 'pause') {
-                final double currentTime =
-                    (data['currentTime'] as num).toDouble();
-                final double duration = (data['duration'] as num).toDouble();
-                if (duration > 60 && mounted) {
-                  SavedMoviesService().addToHistory(
-                    widget.movie,
-                    season: widget.season,
-                    episode: widget.episode,
-                    progress: currentTime / duration,
-                  );
-                }
-              } else if (data['type'] == 'timeupdate') {
-                final double currentTime =
-                    (data['currentTime'] as num).toDouble();
-                final double duration = (data['duration'] as num).toDouble();
-                if (duration > 60 && mounted) {
-                  SavedMoviesService().addToHistory(
-                    widget.movie,
-                    season: widget.season,
-                    episode: widget.episode,
-                    progress: currentTime / duration,
-                  );
-                }
-              }
-            }
-          } catch (e) {
-            // Ignore parse errors
-          }
-        },
-      )
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onNavigationRequest: (NavigationRequest request) {
-            final host = Uri.parse(request.url).host;
-            final initialHost = Uri.parse(widget.initialUrl).host;
-            if (host.contains(initialHost) || initialHost.contains(host)) {
-              return NavigationDecision.navigate;
-            }
-            debugPrint('Blocking redirect to: ${request.url}');
-            return NavigationDecision.prevent;
-          },
-
-          // ----------------------------------------------------------------
-          // onPageStarted: EARLIEST available Dart callback.
-          // Inject fullscreen suppression here so it runs before most of the
-          // embed player's own JavaScript.
-          // ----------------------------------------------------------------
-          onPageStarted: (String url) {
-            if (mounted) {
-              setState(() => _isLoading = true);
-            }
-            // Inject fullscreen-suppression as early as possible
-            _controller.runJavaScript(_kFullscreenSuppressJs);
-          },
-
-          // ----------------------------------------------------------------
-          // onPageFinished: set up progress tracking + re-run suppression
-          // for any content loaded dynamically after page start.
-          // ----------------------------------------------------------------
-          onPageFinished: (String url) {
-            if (mounted) {
-              setState(() => _isLoading = false);
-            }
-
-            // Get saved progress for resume
-            double startProgress = 0.0;
-            final service = SavedMoviesService();
-            if (widget.season != null && widget.episode != null) {
-              startProgress = service.getEpisodeProgress(
-                    widget.movie.id,
-                    widget.season!,
-                    widget.episode!,
-                  ) ??
-                  0.0;
-            } else {
-              final m = service.getMovieFromHistory(widget.movie.id);
-              if (m != null) startProgress = m.progress ?? 0.0;
-            }
-
-            // Re-run fullscreen suppression (belt-and-suspenders), then set
-            // up play/pause events and progress tracking.
-            _controller.runJavaScript("""
-$_kFullscreenSuppressJs
-
+  /// Build the tracking JavaScript (play/pause events, progress save/resume).
+  String _buildTrackingJs(double startProgress) {
+    return """
 window.flutterPlayerStartProgress = $startProgress;
 
 if (window.flutterTrackingActive) {
-  console.log('Tracking active, progress -> ' + ($startProgress * 100) + '%');
+  console.log('Tracking active, progress -> ' + (${startProgress} * 100) + '%');
 } else {
   window.flutterTrackingActive = true;
 
-  window.addEventListener('play',  function() { FlutterControlChannel.postMessage('playing'); }, true);
-  window.addEventListener('pause', function() { FlutterControlChannel.postMessage('paused');  }, true);
+  window.addEventListener('play',  function() { window.flutter_inappwebview.callHandler('onPlayPause', 'playing'); }, true);
+  window.addEventListener('pause', function() { window.flutter_inappwebview.callHandler('onPlayPause', 'paused');  }, true);
 
   function findVideo() {
     var v = document.querySelector('video');
@@ -351,7 +219,7 @@ if (window.flutterTrackingActive) {
       var now = Date.now();
       if (now - lastSave > 5000 && video.duration > 60) {
         lastSave = now;
-        FlutterControlChannel.postMessage(JSON.stringify({
+        window.flutter_inappwebview.callHandler('onProgress', JSON.stringify({
           type: 'timeupdate',
           currentTime: video.currentTime,
           duration: video.duration
@@ -361,7 +229,7 @@ if (window.flutterTrackingActive) {
 
     video.addEventListener('pause', function() {
       if (video.duration > 60) {
-        FlutterControlChannel.postMessage(JSON.stringify({
+        window.flutter_inappwebview.callHandler('onProgress', JSON.stringify({
           type: 'pause',
           currentTime: video.currentTime,
           duration: video.duration
@@ -372,34 +240,27 @@ if (window.flutterTrackingActive) {
 
   setupTracking();
 }
-""");
-          },
-
-          onWebResourceError: (WebResourceError error) {
-            debugPrint(
-                'WebView error for url ${widget.initialUrl}: ${error.description} (code: ${error.errorCode}, type: ${error.errorType})');
-          },
-        ),
-      )
-      // iOS: use default WKWebView UA (Safari). Fullscreen is suppressed by JS.
-      // Chrome UA on WKWebView causes a UA/engine mismatch that breaks some sites.
-      ..setUserAgent(
-        Platform.isIOS
-            ? null // use WKWebView default
-            : 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
-      )
-      ..loadRequest(
-        Uri.parse(widget.initialUrl),
-      );
+""";
   }
 
-  @override
-  void dispose() {
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-    ]);
-    super.dispose();
+  void _handleProgress(String jsonStr) {
+    try {
+      final dynamic data = jsonDecode(jsonStr);
+      if (data is Map) {
+        final double currentTime = (data['currentTime'] as num).toDouble();
+        final double duration = (data['duration'] as num).toDouble();
+        if (duration > 60 && mounted) {
+          SavedMoviesService().addToHistory(
+            widget.movie,
+            season: widget.season,
+            episode: widget.episode,
+            progress: currentTime / duration,
+          );
+        }
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
   }
 
   @override
@@ -408,10 +269,118 @@ if (window.flutterTrackingActive) {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // WebViewWidget directly in tree — NO overlays intercepting touches.
-          // All touch events go straight to WKWebView so the embed player's
-          // mute, pause, subtitle, etc. buttons work natively.
-          WebViewWidget(controller: _controller),
+          InAppWebView(
+            initialUrlRequest: URLRequest(
+              url: WebUri(widget.initialUrl),
+            ),
+            initialUserScripts: UnmodifiableListView([
+              // Injected at DOCUMENT_START — runs BEFORE any page JS.
+              // This is the key advantage over webview_flutter.
+              UserScript(
+                source: _kFullscreenSuppressJs,
+                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+              ),
+            ]),
+            initialSettings: InAppWebViewSettings(
+              // --- Inline playback ---
+              allowsInlineMediaPlayback: true,
+              mediaPlaybackRequiresUserGesture: false,
+
+              // --- General ---
+              javaScriptEnabled: true,
+              supportZoom: false,
+              disableVerticalScroll: false,
+              disableHorizontalScroll: false,
+
+              // --- iOS-specific ---
+              allowsBackForwardNavigationGestures: false,
+              allowsPictureInPictureMediaPlayback: false,
+              isFraudulentWebsiteWarningEnabled: false,
+              suppressesIncrementalRendering: false,
+
+              // --- User agent (Android only; iOS uses default Safari UA) ---
+              userAgent: Platform.isAndroid
+                  ? 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'
+                  : '',
+            ),
+
+            // --- Native fullscreen prevention ---
+            onEnterFullscreen: (controller) {
+              // Immediately exit fullscreen when the native layer tries it
+              controller.evaluateJavascript(source: """
+                if (document.fullscreenElement) { document.exitFullscreen(); }
+                if (document.webkitFullscreenElement) { document.webkitExitFullscreen(); }
+                var vids = document.querySelectorAll('video');
+                vids.forEach(function(v) {
+                  try { v.webkitSetPresentationMode('inline'); } catch(e) {}
+                  v.setAttribute('playsinline', '');
+                });
+              """);
+            },
+
+            onWebViewCreated: (controller) {
+              _controller = controller;
+
+              // Register JS handlers
+              controller.addJavaScriptHandler(
+                handlerName: 'onPlayPause',
+                callback: (args) {
+                  if (args.isNotEmpty && mounted) {
+                    final state = args[0] as String;
+                    setState(() => _isVideoPaused = state == 'paused');
+                  }
+                },
+              );
+
+              controller.addJavaScriptHandler(
+                handlerName: 'onProgress',
+                callback: (args) {
+                  if (args.isNotEmpty) {
+                    _handleProgress(args[0] as String);
+                  }
+                },
+              );
+            },
+
+            onLoadStart: (controller, url) {
+              if (mounted) {
+                setState(() => _isLoading = true);
+              }
+            },
+
+            onLoadStop: (controller, url) async {
+              if (mounted) {
+                setState(() => _isLoading = false);
+              }
+
+              // Get saved progress for resume
+              double startProgress = 0.0;
+              final service = SavedMoviesService();
+              if (widget.season != null && widget.episode != null) {
+                startProgress = service.getEpisodeProgress(
+                      widget.movie.id,
+                      widget.season!,
+                      widget.episode!,
+                    ) ??
+                    0.0;
+              } else {
+                final m = service.getMovieFromHistory(widget.movie.id);
+                if (m != null) startProgress = m.progress ?? 0.0;
+              }
+
+              // Re-run fullscreen suppression + set up tracking
+              await controller.evaluateJavascript(
+                source:
+                    '$_kFullscreenSuppressJs\n${_buildTrackingJs(startProgress)}',
+              );
+            },
+
+            onReceivedError: (controller, request, error) {
+              debugPrint(
+                'WebView error for ${request.url}: ${error.description} (type: ${error.type})',
+              );
+            },
+          ),
 
           if (_isLoading)
             const Center(
@@ -419,7 +388,6 @@ if (window.flutterTrackingActive) {
             ),
 
           // Close button — visible when paused or loading, hidden during playback.
-          // Driven by JS play/pause events, no touch overlay needed.
           Positioned(
             top: 20,
             left: 20,

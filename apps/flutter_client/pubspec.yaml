@@ -57,6 +57,8 @@ dependencies:
   firebase_remote_config: ^6.2.0
   package_info_plus: ^9.0.0
   lottie: ^3.3.2
+  volume_controller: ^3.4.4
+  screen_brightness: ^2.1.7
 
 dev_dependencies:
   flutter_test:

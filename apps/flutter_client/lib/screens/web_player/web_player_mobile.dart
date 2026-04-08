@@ -10,6 +10,7 @@ import 'dart:async';
 import 'web_player_platform_interface.dart';
 import '../../services/saved_movies_service.dart';
 import '../../widgets/custom_loader.dart';
+import '../../widgets/player_gesture_overlay.dart';
 
 // ---------------------------------------------------------------------------
 // Fullscreen-suppression JS injected in both onPageStarted and onPageFinished.
@@ -445,51 +446,40 @@ if (window.flutterTrackingActive) {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          // ---------------------------------------------------------------
-          // WebViewWidget sits directly in the tree — NO Listener wrapper.
-          // On iOS, wrapping the WebView in a Listener intercepted every
-          // touch before WKWebView could process it, creating a gesture
-          // conflict that triggered native fullscreen at the platform level.
-          // ---------------------------------------------------------------
-          WebViewWidget(controller: _controller),
+      // PlayerGestureOverlay wraps the body as a PARENT so its Listener
+      // receives pointer events from the WebView PlatformView reliably.
+      body: PlayerGestureOverlay(
+        onTap: _toggleControls,
+        child: Stack(
+          children: [
+            WebViewWidget(controller: _controller),
 
-          // Transparent overlay that toggles close-button visibility.
-          // Uses a raw Listener instead of GestureDetector so it does NOT
-          // enter the gesture arena — the WebView keeps full touch control.
-          Positioned.fill(
-            child: Listener(
-              behavior: HitTestBehavior.translucent,
-              onPointerDown: (_) => _toggleControls(),
-            ),
-          ),
-
-          if (_isLoading)
-            const Center(
-              child: CustomLoader(),
-            ),
-          Positioned(
-            top: 20,
-            left: 20,
-            child: AnimatedOpacity(
-              opacity: _showControls ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 300),
-              child: SafeArea(
-                child: Container(
-                  decoration: const BoxDecoration(
-                    color: Colors.black54,
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white),
-                    onPressed: _showControls ? widget.onClose : null,
+            if (_isLoading)
+              const Center(
+                child: CustomLoader(),
+              ),
+            Positioned(
+              top: 20,
+              left: 20,
+              child: AnimatedOpacity(
+                opacity: _showControls ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 300),
+                child: SafeArea(
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.black54,
+                      shape: BoxShape.circle,
+                    ),
+                    child: IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: _showControls ? widget.onClose : null,
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

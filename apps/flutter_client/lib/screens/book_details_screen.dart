@@ -8,6 +8,7 @@ import '../models/book.dart';
 import '../services/books_service.dart';
 import '../widgets/book_skeletons.dart';
 import 'epub_player_screen.dart';
+import '../widgets/custom_loader.dart';
 
 class BookDetailsScreen extends StatefulWidget {
   final Book book;
@@ -247,10 +248,10 @@ class _BookDetailsScreenState extends State<BookDetailsScreen> {
                           onPressed: _isLoading ? null : _handleRead,
                           icon: _isLoading
                               ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
+                                  width: 24,
+                                  height: 24,
                                   child:
-                                      CircularProgressIndicator(strokeWidth: 2))
+                                      CustomLoader(size: 24))
                               : const Icon(Icons.menu_book),
                           label:
                               Text(_isLoading ? 'Downloading...' : 'Read Now'),

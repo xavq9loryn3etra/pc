@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_client/theme/app_theme.dart';
+
 import 'dart:convert';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
@@ -9,6 +9,7 @@ import 'dart:io';
 import 'dart:async';
 import 'web_player_platform_interface.dart';
 import '../../services/saved_movies_service.dart';
+import '../../widgets/custom_loader.dart';
 
 // ---------------------------------------------------------------------------
 // Fullscreen-suppression JS injected in both onPageStarted and onPageFinished.
@@ -158,21 +159,36 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
       androidController.setMediaPlaybackRequiresUserGesture(false);
     }
 
-    // Force landscape and hide system UI
+    // iOS: extra hardening via the platform-specific controller
+    if (Platform.isIOS &&
+        _controller.platform is WebKitWebViewController) {
+      final iosController =
+          _controller.platform as WebKitWebViewController;
+      // Disable back-forward swipe gestures — they can trigger native
+      // view controller transitions that break inline playback.
+      iosController.setAllowsBackForwardNavigationGestures(false);
+    }
+
+    // --- System UI & Orientation ---
+    // On Android: immersiveSticky works perfectly with platform views.
+    // On iOS: DO NOT use manual/immersiveSticky — both rip out system UI
+    // overlays which conflicts with WKWebView's view controller hierarchy,
+    // causing black screen flashes. Use edgeToEdge instead, which keeps
+    // the status bar area but makes it transparent.
     if (Platform.isAndroid) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     } else {
-      // iOS: use manual mode — immersiveSticky can conflict with WKWebView's
-      // view controller hierarchy and cause black flashes.
-      SystemChrome.setEnabledSystemUIMode(
-        SystemUiMode.manual,
-        overlays: [],
-      );
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+
+    // Delay orientation change to next frame so it doesn't race with
+    // the widget tree build and WKWebView initialization.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    });
 
     _controller
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -361,6 +377,24 @@ if (window.flutterTrackingActive) {
   setupTracking();
 }
 """);
+
+            // iOS: Third-pass delayed re-injection.
+            // Some embed players set up their video elements 2-5s after
+            // the page "finishes" loading. Our MutationObserver catches
+            // new <video> tags, but prototype overrides may have been
+            // replaced by the player's own JS. Re-apply after a delay.
+            if (Platform.isIOS) {
+              Future.delayed(const Duration(seconds: 3), () {
+                if (mounted) {
+                  _controller.runJavaScript(_kFullscreenSuppressJs);
+                }
+              });
+              Future.delayed(const Duration(seconds: 6), () {
+                if (mounted) {
+                  _controller.runJavaScript(_kFullscreenSuppressJs);
+                }
+              });
+            }
           },
 
           onWebResourceError: (WebResourceError error) {
@@ -421,21 +455,19 @@ if (window.flutterTrackingActive) {
           // ---------------------------------------------------------------
           WebViewWidget(controller: _controller),
 
-          // Transparent overlay that only toggles our close-button visibility.
-          // It uses HitTestBehavior.translucent so touches pass through to
-          // the WebView underneath.
+          // Transparent overlay that toggles close-button visibility.
+          // Uses a raw Listener instead of GestureDetector so it does NOT
+          // enter the gesture arena — the WebView keeps full touch control.
           Positioned.fill(
-            child: GestureDetector(
+            child: Listener(
               behavior: HitTestBehavior.translucent,
-              onTap: _toggleControls,
-              // Don't add child — a childless Positioned.fill + translucent
-              // behavior lets taps flow through to the WebView.
+              onPointerDown: (_) => _toggleControls(),
             ),
           ),
 
           if (_isLoading)
             const Center(
-              child: CircularProgressIndicator(color: AppTheme.primaryColor),
+              child: CustomLoader(),
             ),
           Positioned(
             top: 20,

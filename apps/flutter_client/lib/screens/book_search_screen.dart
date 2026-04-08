@@ -4,6 +4,7 @@ import '../models/book.dart';
 import '../services/books_service.dart';
 import '../widgets/book_card.dart';
 import 'book_details_screen.dart';
+import '../widgets/custom_loader.dart';
 
 class BookSearchScreen extends StatefulWidget {
   const BookSearchScreen({super.key});
@@ -114,9 +115,9 @@ class _BookSearchScreenState extends State<BookSearchScreen> {
             const Padding(
               padding: EdgeInsets.only(right: 16.0),
               child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
+                width: 24,
+                height: 24,
+                child: CustomLoader(size: 24),
               ),
             ),
         ],

@@ -57,6 +57,13 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# firebase_remote_config ships its C++ SDK compiled in Debug mode only,
+# which causes LNK2001/LNK2019 errors in Release builds (missing
+# __imp__CrtDbgReport, __imp__calloc_dbg, _Crt_new_delete symbols).
+# The desktop Electron app handles Firebase separately, so we exclude
+# the Firebase native plugins from the Windows build entirely.
+list(REMOVE_ITEM FLUTTER_PLUGIN_LIST firebase_core firebase_remote_config)
+
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can

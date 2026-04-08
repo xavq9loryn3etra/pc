@@ -3,6 +3,8 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  firebase_core
+  firebase_remote_config
   media_kit_libs_windows_video
   media_kit_video
   screen_retriever_windows

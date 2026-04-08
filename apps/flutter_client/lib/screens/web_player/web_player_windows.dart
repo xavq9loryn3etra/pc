@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:webview_windows/webview_windows.dart';
 import 'web_player_platform_interface.dart';
 import '../../services/saved_movies_service.dart';
+import '../../widgets/custom_loader.dart';
 
 class WebPlayerWindows extends WebPlayerPlatform {
   const WebPlayerWindows({
@@ -295,7 +296,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
           children: [
             _initialized
                 ? Webview(_controller)
-                : const Center(child: CircularProgressIndicator()),
+                : const Center(child: CustomLoader()),
             Positioned(
               top: 10,
               left: 10,

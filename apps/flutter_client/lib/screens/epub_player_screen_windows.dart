@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_windows/webview_windows.dart';
+import '../widgets/custom_loader.dart';
 
 class EpubPlayerScreenWindows extends StatefulWidget {
   final File file;
@@ -96,7 +97,7 @@ class _EpubPlayerScreenWindowsState extends State<EpubPlayerScreenWindows> {
           Webview(_controller),
           if (_isLoading)
             const Center(
-              child: CircularProgressIndicator(),
+              child: CustomLoader(),
             ),
         ],
       ),

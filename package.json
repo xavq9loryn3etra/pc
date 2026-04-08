@@ -1,10 +1,12 @@
 {
   "name": "popcorn-monorepo",
+  "version": "1.0.29",
   "private": true,
   "workspaces": [
     "apps/*"
   ],
   "scripts": {
+    "sync-version": "node sync-version.js",
     "dev:desktop": "npm run dev -w apps/desktop",
     "dev:electron": "npm run dev:electron -w apps/desktop",
     "dev:web": "npm run dev -w apps/web",

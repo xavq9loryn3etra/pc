@@ -3,10 +3,11 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../models/movie.dart';
 import '../services/tmdb_service.dart';
-import '../theme/app_theme.dart';
+
 import 'details_screen.dart';
 import '../widgets/movie_poster.dart';
 import '../widgets/screen_scaffold.dart';
+import '../widgets/custom_loader.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -132,7 +133,7 @@ class _SearchScreenState extends State<SearchScreen> {
   Widget _buildBody(BuildContext context, bool isDesktop, EdgeInsets padding) {
     if (_isLoading) {
       return const Center(
-        child: CircularProgressIndicator(color: AppTheme.primaryColor),
+        child: CustomLoader(),
       );
     }
 

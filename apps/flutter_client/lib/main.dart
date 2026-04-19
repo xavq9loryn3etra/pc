@@ -25,7 +25,15 @@ void main() async {
   // Firebase C++ SDK on Windows only ships Debug libs, causing linker
   // errors in Release builds. The desktop Electron app handles Firebase
   // separately, so we only initialise on mobile.
-  if (Platform.isAndroid || Platform.isIOS) {
+  //
+  // iOS: Currently skipped because firebase_options.dart has a *web* appId
+  // for iOS (no iOS app is registered in the Firebase Console and there is
+  // no GoogleService-Info.plist). The Firebase iOS native SDK validates the
+  // appId format at the Obj-C level, throwing an NSException that kills
+  // the process before Dart's try-catch can intercept it.
+  // When you register a proper iOS app in Firebase Console, replace the
+  // ios FirebaseOptions and add GoogleService-Info.plist, then re-enable.
+  if (Platform.isAndroid) {
     try {
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
@@ -78,9 +86,11 @@ class _MyAppState extends State<MyApp> {
   }
 
   Future<void> _checkConfig() async {
-    // Only check Remote Config on mobile — Windows uses the Electron app's
+    // Only check Remote Config on Android — Windows uses the Electron app's
     // own Firebase integration and the C++ SDK doesn't link in Release.
-    if (Platform.isAndroid || Platform.isIOS) {
+    // iOS is skipped because Firebase initialization is skipped until
+    // native iOS configuration is added.
+    if (Platform.isAndroid) {
       try {
         final remoteConfig = FirebaseRemoteConfig.instance;
         await remoteConfig.setConfigSettings(RemoteConfigSettings(

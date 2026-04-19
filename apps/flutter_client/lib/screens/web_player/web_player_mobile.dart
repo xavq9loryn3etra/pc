@@ -129,9 +129,12 @@ class WebPlayerMobile extends WebPlayerPlatform {
 class _WebPlayerMobileState extends State<WebPlayerMobile> {
   late final WebViewController _controller;
   bool _isLoading = true;
-  bool _showControls = false;
-  bool _isVideoPaused = false;
   Timer? _hideTimer;
+
+  // Use ValueNotifiers so toggling controls doesn't rebuild the WebView
+  // platform view — which on iOS WKWebView causes black-screen flashes.
+  final ValueNotifier<bool> _showControls = ValueNotifier(false);
+  final ValueNotifier<bool> _isVideoPaused = ValueNotifier(false);
 
   @override
   void initState() {
@@ -199,14 +202,12 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
         onMessageReceived: (JavaScriptMessage message) {
           try {
             if (message.message == 'playing') {
-              setState(() => _isVideoPaused = false);
+              _isVideoPaused.value = false;
               _startHideTimer();
               return;
             } else if (message.message == 'paused') {
-              setState(() {
-                _isVideoPaused = true;
-                _showControls = true;
-              });
+              _isVideoPaused.value = true;
+              _showControls.value = true;
               _hideTimer?.cancel();
               return;
             }
@@ -248,11 +249,39 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onNavigationRequest: (NavigationRequest request) {
-            final host = Uri.parse(request.url).host;
+            // Allow all sub-frame loads (iframes, sub-resources).
+            // iOS WKWebView fires this for iframe navigations that
+            // Android WebView handles silently. Blocking them breaks
+            // embed players that load content via nested iframes.
+            if (!request.isMainFrame) {
+              return NavigationDecision.navigate;
+            }
+
+            final uri = Uri.parse(request.url);
+            final host = uri.host;
             final initialHost = Uri.parse(widget.initialUrl).host;
+
+            // Same-origin — always allow
             if (host.contains(initialHost) || initialHost.contains(host)) {
               return NavigationDecision.navigate;
             }
+
+            // Allow media/streaming URLs.
+            // iOS WKWebView can report HLS manifest or direct video
+            // fetches as navigation events (Android does not).
+            final path = uri.path.toLowerCase();
+            if (path.endsWith('.m3u8') || path.endsWith('.mp4') ||
+                path.endsWith('.ts') || path.endsWith('.webm') ||
+                path.endsWith('.mpd')) {
+              return NavigationDecision.navigate;
+            }
+
+            // Allow common CDN/streaming sub-domains
+            if (host.contains('cdn') || host.contains('stream') ||
+                host.contains('cache') || host.contains('cloud')) {
+              return NavigationDecision.navigate;
+            }
+
             debugPrint('Blocking redirect to: ${request.url}');
             return NavigationDecision.prevent;
           },
@@ -264,10 +293,8 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
           // ----------------------------------------------------------------
           onPageStarted: (String url) {
             if (mounted) {
-              setState(() {
-                _isLoading = true;
-                _showControls = true;
-              });
+              setState(() => _isLoading = true);
+              _showControls.value = true;
               _startHideTimer();
             }
             // Inject fullscreen-suppression as early as possible
@@ -280,10 +307,8 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
           // ----------------------------------------------------------------
           onPageFinished: (String url) {
             if (mounted) {
-              setState(() {
-                _isLoading = false;
-                _showControls = true;
-              });
+              setState(() => _isLoading = false);
+              _showControls.value = true;
               _startHideTimer();
             }
 
@@ -415,10 +440,8 @@ if (window.flutterTrackingActive) {
   }
 
   void _toggleControls() {
-    setState(() {
-      _showControls = true;
-    });
-    if (!_isVideoPaused) {
+    _showControls.value = true;
+    if (!_isVideoPaused.value) {
       _startHideTimer();
     }
   }
@@ -426,8 +449,8 @@ if (window.flutterTrackingActive) {
   void _startHideTimer() {
     _hideTimer?.cancel();
     _hideTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted && !_isVideoPaused) {
-        setState(() => _showControls = false);
+      if (mounted && !_isVideoPaused.value) {
+        _showControls.value = false;
       }
     });
   }
@@ -435,6 +458,8 @@ if (window.flutterTrackingActive) {
   @override
   void dispose() {
     _hideTimer?.cancel();
+    _showControls.dispose();
+    _isVideoPaused.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
@@ -452,30 +477,39 @@ if (window.flutterTrackingActive) {
         onTap: _toggleControls,
         child: Stack(
           children: [
+            // WebView is NOT inside any ValueListenableBuilder —
+            // it never gets rebuilt when controls toggle.
             WebViewWidget(controller: _controller),
 
             if (_isLoading)
               const Center(
                 child: CustomLoader(),
               ),
+
+            // Only the close button rebuilds on controls visibility change.
             Positioned(
               top: 20,
               left: 20,
-              child: AnimatedOpacity(
-                opacity: _showControls ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 300),
-                child: SafeArea(
-                  child: Container(
-                    decoration: const BoxDecoration(
-                      color: Colors.black54,
-                      shape: BoxShape.circle,
+              child: ValueListenableBuilder<bool>(
+                valueListenable: _showControls,
+                builder: (context, visible, child) {
+                  return AnimatedOpacity(
+                    opacity: visible ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 300),
+                    child: SafeArea(
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          color: Colors.black54,
+                          shape: BoxShape.circle,
+                        ),
+                        child: IconButton(
+                          icon: const Icon(Icons.close, color: Colors.white),
+                          onPressed: visible ? widget.onClose : null,
+                        ),
+                      ),
                     ),
-                    child: IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white),
-                      onPressed: _showControls ? widget.onClose : null,
-                    ),
-                  ),
-                ),
+                  );
+                },
               ),
             ),
           ],

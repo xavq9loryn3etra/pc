@@ -11,6 +11,7 @@ import 'web_player_platform_interface.dart';
 import '../../services/saved_movies_service.dart';
 import '../../widgets/custom_loader.dart';
 import '../../widgets/player_gesture_overlay.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 
 // ---------------------------------------------------------------------------
 // Fullscreen-suppression JS injected in both onPageStarted and onPageFinished.
@@ -109,6 +110,23 @@ const String _kFullscreenSuppressJs = r"""
     (document.head || document.documentElement).appendChild(s);
     window._flutterFullscreenStyle = true;
   }
+
+  // --- 6. Block Media Session Details (Notification Screen) ---
+  // Overrides the lock screen / control center media details so it
+  // doesn't leak the scraper URL or show ugly details.
+  if ('mediaSession' in navigator) {
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: 'Popcorn',
+        artist: 'Playing Video',
+        album: '',
+        artwork: []
+      });
+      // Optionally block play/pause from lock screen overriding our state
+      // navigator.mediaSession.setActionHandler('pause', function() {});
+      // navigator.mediaSession.setActionHandler('play', function() {});
+    } catch(e) {}
+  }
 })();
 """;
 
@@ -126,7 +144,8 @@ class WebPlayerMobile extends WebPlayerPlatform {
   State<WebPlayerMobile> createState() => _WebPlayerMobileState();
 }
 
-class _WebPlayerMobileState extends State<WebPlayerMobile> {
+class _WebPlayerMobileState extends State<WebPlayerMobile>
+    with WidgetsBindingObserver {
   late final WebViewController _controller;
   bool _isLoading = true;
   Timer? _hideTimer;
@@ -139,7 +158,19 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _setupController();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      // When the app goes to the background, pause video elements so WKWebView
+      // does not keep playing audio in the background.
+      _controller.runJavaScript(
+          "document.querySelectorAll('video').forEach(function(v) { try { v.pause(); } catch(e){} });"
+      );
+    }
   }
 
   void _setupController() {
@@ -185,9 +216,31 @@ class _WebPlayerMobileState extends State<WebPlayerMobile> {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
 
-    // Delay orientation change to next frame so it doesn't race with
-    // the widget tree build and WKWebView initialization.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    // Detect hardware gyroscope to override OS orientation locks
+    // Using a quick 500ms timeout so we don't hold up UI if sensors fail
+    accelerometerEventStream().first.timeout(const Duration(milliseconds: 500)).then((event) {
+      // On most devices, holding the phone in landscape:
+      // X < -3.0 means top of phone is on the right (landscapeRight)
+      // X > 3.0 means top of phone is on the left (landscapeLeft)
+      final forcedOrientation = event.x < -3.0 
+          ? DeviceOrientation.landscapeRight 
+          : DeviceOrientation.landscapeLeft;
+          
+      // 1. Force the exact physical tilt so it rotates even if Portrait Lock is ON
+      SystemChrome.setPreferredOrientations([forcedOrientation]);
+
+      // 2. Clear the hard-lock after 1 second so users can physically rotate 
+      // the phone mid-movie if they decide to switch sides.
+      Future.delayed(const Duration(seconds: 1), () {
+        if (mounted) {
+          SystemChrome.setPreferredOrientations([
+            DeviceOrientation.landscapeLeft,
+            DeviceOrientation.landscapeRight,
+          ]);
+        }
+      });
+    }).catchError((_) {
+      // Fallback if sensors fail or timeout
       SystemChrome.setPreferredOrientations([
         DeviceOrientation.landscapeLeft,
         DeviceOrientation.landscapeRight,
@@ -457,6 +510,10 @@ if (window.flutterTrackingActive) {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    // Load blank page to destroy media elements and stop background audio instantly
+    _controller.loadRequest(Uri.parse('about:blank'));
+    
     _hideTimer?.cancel();
     _showControls.dispose();
     _isVideoPaused.dispose();

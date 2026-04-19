@@ -62,6 +62,19 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   // ───────────────── Pointer Handlers ─────────────────
 
   void _onPointerDown(PointerDownEvent event) {
+    final screenSize = MediaQuery.of(context).size;
+    
+    // Ignore edge swipes (50px on all sides) so the user can pull system UI
+    // or trigger native back gestures without accidentally triggering volume/brightness.
+    if (event.position.dy < 50 || 
+        event.position.dy > screenSize.height - 50 ||
+        event.position.dx < 50 || 
+        event.position.dx > screenSize.width - 50) {
+      _pointerStart = null;
+      _isDragging = false;
+      return;
+    }
+    
     _pointerStart = event.position;
     _isDragging = false;
   }
@@ -117,14 +130,18 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
     final valueDelta = verticalDelta / (screenHeight * 0.7);
     final newValue = (_startValue + valueDelta).clamp(0.0, 1.0);
 
-    setState(() => _currentValue = newValue);
+    // Throttle UI rebuilds and platform channel calls to ~100 steps
+    // iOS platform channels for volume/brightness drop frames if called 120Hz
+    if ((newValue - _currentValue).abs() >= 0.01) {
+      setState(() => _currentValue = newValue);
 
-    if (_activeGesture == _GestureType.volume) {
-      VolumeController.instance.setVolume(newValue);
-    } else {
-      ScreenBrightness.instance
-          .setApplicationScreenBrightness(newValue)
-          .catchError((_) {});
+      if (_activeGesture == _GestureType.volume) {
+        VolumeController.instance.setVolume(newValue);
+      } else {
+        ScreenBrightness.instance
+            .setApplicationScreenBrightness(newValue)
+            .catchError((_) {});
+      }
     }
   }
 

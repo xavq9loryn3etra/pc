@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  app_links
   connectivity_plus
   firebase_core
   firebase_remote_config
@@ -10,6 +11,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   media_kit_video
   screen_brightness_windows
   screen_retriever_windows
+  share_plus
   url_launcher_windows
   volume_controller
   webview_windows

@@ -1,6 +1,10 @@
+import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:dio/dio.dart';
 import '../theme/app_theme.dart';
 import '../widgets/skeletons.dart';
 import '../models/movie.dart';
@@ -43,6 +47,44 @@ class _DetailsScreenState extends State<DetailsScreen> {
   Season? _selectedSeason;
   int? _selectedEpisode;
   bool _loadingEpisodes = false;
+
+  Future<void> _shareMovie() async {
+    final m = _details ?? widget.movie;
+    const downloadUrl =
+        'https://drive.google.com/drive/folders/1ftzQcKIUkB2sKwInoSdMG7-SH4rPf96i?usp=sharing';
+    final smartLink = 'https://script.google.com/macros/s/AKfycbzEwmEgC4JXWXz4TPHUUxPon_56ZN4VsOKq7FAw_3rWgRi2L4KIZAx1rs_HZ94-1h6IVg/exec?id=${m.id}&type=${m.type}';
+    
+    final message = '🍿 Watch "${m.title}" on Popcorn!\n\n'
+        '📲 Tap to Play: $smartLink\n\n'
+        '📥 Download App: $downloadUrl';
+
+    try {
+      // 1. Get temp directory
+      final temp = await getTemporaryDirectory();
+      final path = '${temp.path}/poster_${m.id}.jpg';
+
+      // 2. Download image if it doesn't exist in temp and m.image is not null
+      final file = File(path);
+      if (!await file.exists() && m.image != null) {
+        await Dio().download(m.image!, path);
+      }
+
+      if (await file.exists()) {
+        // 3. Share file + text
+        await Share.shareXFiles(
+          [XFile(path)],
+          text: message,
+          subject: 'Share ${m.title}',
+        );
+      } else {
+        // Fallback to text only
+        Share.share(message, subject: 'Share ${m.title}');
+      }
+    } catch (e) {
+      // Fallback to text only if image download fails
+      Share.share(message, subject: 'Share ${m.title}');
+    }
+  }
 
   @override
   void initState() {
@@ -640,6 +682,24 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                   ),
                                 ),
                               ),
+                            const SizedBox(width: 12),
+                            // Share Button
+                            Container(
+                              height: 50,
+                              width: 50,
+                              decoration: BoxDecoration(
+                                color: Colors.white10,
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                              child: InkWell(
+                                onTap: _shareMovie,
+                                borderRadius: BorderRadius.circular(30),
+                                child: const Icon(
+                                  Icons.share_outlined,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                         const SizedBox(height: 24),

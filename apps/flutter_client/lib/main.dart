@@ -20,6 +20,7 @@ import 'theme/app_theme.dart';
 
 import 'services/app_mode_service.dart';
 import 'services/saved_movies_service.dart';
+import 'services/deep_link_service.dart';
 import 'widgets/custom_loader.dart';
 
 void main() async {
@@ -82,6 +83,7 @@ class _MyAppState extends State<MyApp> {
   String _maintenanceMsg = "";
   String _updateMsg = "";
   
+  final _navigatorKey = GlobalKey<NavigatorState>();
   late StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
   bool _isOffline = false;
 
@@ -90,6 +92,7 @@ class _MyAppState extends State<MyApp> {
     super.initState();
     _checkConfig();
     _initConnectivity();
+    DeepLinkService().init(_navigatorKey);
   }
 
   void _initConnectivity() {
@@ -105,6 +108,7 @@ class _MyAppState extends State<MyApp> {
   @override
   void dispose() {
     _connectivitySubscription.cancel();
+    DeepLinkService().dispose();
     super.dispose();
   }
 
@@ -253,6 +257,7 @@ class _MyAppState extends State<MyApp> {
 
     return MaterialApp(
       title: 'Popcorn',
+      navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
       builder: (context, child) {

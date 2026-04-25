@@ -175,6 +175,10 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
   late int _browsingSeason;
   late List<Episode> _episodes;
 
+  // YouTube-style continuous gyro rotation
+  StreamSubscription? _accelSubscription;
+  DeviceOrientation _currentOrientation = DeviceOrientation.landscapeLeft;
+
   @override
   void initState() {
     super.initState();
@@ -242,34 +246,49 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
 
-    // Detect hardware gyroscope to override OS orientation locks
-    // Using a quick 500ms timeout so we don't hold up UI if sensors fail
-    accelerometerEventStream().first.timeout(const Duration(milliseconds: 500)).then((event) {
-      if (!mounted) return;
-      
-      // On most devices, holding the phone in landscape:
-      // X < -3.0 means top of phone is on the right (landscapeRight)
-      // X > 3.0 means top of phone is on the left (landscapeLeft)
-      final forcedOrientation = event.x < -3.0 
-          ? DeviceOrientation.landscapeRight 
-          : DeviceOrientation.landscapeLeft;
-          
-      // 1. Force the exact physical tilt so it rotates even if Portrait Lock is ON
-      SystemChrome.setPreferredOrientations([forcedOrientation]);
+    // --- YouTube-style continuous gyro rotation ---
+    // Force landscape immediately, then continuously monitor the accelerometer
+    // to auto-rotate between landscapeLeft and landscapeRight even when the
+    // OS auto-rotate lock is ON.
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
 
-      // 2. Clear the hard-lock after 1 second so users can physically rotate 
-      // the phone mid-movie if they decide to switch sides.
-      Future.delayed(const Duration(seconds: 1), () {
-        if (mounted) {
-          SystemChrome.setPreferredOrientations([
-            DeviceOrientation.landscapeLeft,
-            DeviceOrientation.landscapeRight,
-          ]);
-        }
-      });
-    }).catchError((_) {
+    _accelSubscription = accelerometerEventStream(
+      samplingPeriod: const Duration(milliseconds: 500),
+    ).listen((event) {
+      if (!mounted) return;
+
+      // Determine which landscape the phone is physically in:
+      // x < -4 => phone top pointing right => landscapeRight
+      // x >  4 => phone top pointing left  => landscapeLeft
+      // |x| <= 4 => ambiguous / in-between, keep current
+      DeviceOrientation? detected;
+      if (event.x < -4.0) {
+        detected = DeviceOrientation.landscapeRight;
+      } else if (event.x > 4.0) {
+        detected = DeviceOrientation.landscapeLeft;
+      }
+
+      if (detected != null && detected != _currentOrientation) {
+        _currentOrientation = detected;
+        SystemChrome.setPreferredOrientations([detected]);
+
+        // After rotating, unlock both landscape directions so that
+        // subsequent tilts are picked up naturally by the OS too.
+        Future.delayed(const Duration(milliseconds: 800), () {
+          if (mounted) {
+            SystemChrome.setPreferredOrientations([
+              DeviceOrientation.landscapeLeft,
+              DeviceOrientation.landscapeRight,
+            ]);
+          }
+        });
+      }
+    }, onError: (_) {
+      // Sensors unavailable — just allow both landscape directions
       if (mounted) {
-        // Fallback if sensors fail or timeout
         SystemChrome.setPreferredOrientations([
           DeviceOrientation.landscapeLeft,
           DeviceOrientation.landscapeRight,
@@ -619,6 +638,7 @@ if (window.flutterTrackingActive) {
     // Load blank page to destroy media elements and stop background audio instantly
     _controller.loadRequest(Uri.parse('about:blank'));
     
+    _accelSubscription?.cancel();
     _hideTimer?.cancel();
     _showControls.dispose();
     _isVideoPaused.dispose();

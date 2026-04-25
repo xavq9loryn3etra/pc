@@ -133,6 +133,22 @@ const String _kFullscreenSuppressJs = r"""
       // navigator.mediaSession.setActionHandler('play', function() {});
     } catch(e) {}
   }
+
+  // --- 7. iOS viewport fix ---
+  // WKWebView often renders embed pages at desktop scale, making buttons
+  // tiny. Inject a proper viewport meta tag so content fills the screen
+  // at device-native resolution.
+  (function() {
+    var existing = document.querySelector('meta[name="viewport"]');
+    if (!existing) {
+      var meta = document.createElement('meta');
+      meta.name = 'viewport';
+      meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+      (document.head || document.documentElement).appendChild(meta);
+    } else {
+      existing.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+    }
+  })();
 })();
 """;
 
@@ -675,11 +691,18 @@ if (window.flutterTrackingActive) {
                     // it never gets rebuilt when controls toggle.
                     WebViewWidget(
                       controller: _controller,
-                      gestureRecognizers: {
-                        Factory<OneSequenceGestureRecognizer>(
-                          () => EagerGestureRecognizer(),
-                        ),
-                      },
+                      // EagerGestureRecognizer is needed on Android to prevent
+                      // Flutter's navigation system from stealing horizontal
+                      // drags (seeking). On iOS, it causes touch coordinates to
+                      // misalign with WKWebView's internal hit-testing, making
+                      // buttons un-tappable without zooming in first.
+                      gestureRecognizers: Platform.isAndroid
+                          ? {
+                              Factory<OneSequenceGestureRecognizer>(
+                                () => EagerGestureRecognizer(),
+                              ),
+                            }
+                          : const <Factory<OneSequenceGestureRecognizer>>{},
                     ),
 
                     if (_isLoading)

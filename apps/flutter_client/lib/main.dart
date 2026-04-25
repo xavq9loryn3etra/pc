@@ -6,6 +6,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_remote_config/firebase_remote_config.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'dart:async';
 
 import 'firebase_options.dart';
 import 'screens/welcome_screen.dart';
@@ -13,6 +15,7 @@ import 'screens/onboarding_screen.dart';
 import 'screens/mode_selector_screen.dart';
 import 'screens/update_overlay.dart';
 import 'screens/maintenance_overlay.dart';
+import 'screens/no_internet_overlay.dart';
 import 'theme/app_theme.dart';
 
 import 'services/app_mode_service.dart';
@@ -78,11 +81,31 @@ class _MyAppState extends State<MyApp> {
   _AppScreen _currentScreen = _AppScreen.checking;
   String _maintenanceMsg = "";
   String _updateMsg = "";
+  
+  late StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
+  bool _isOffline = false;
 
   @override
   void initState() {
     super.initState();
     _checkConfig();
+    _initConnectivity();
+  }
+
+  void _initConnectivity() {
+    _connectivitySubscription =
+        Connectivity().onConnectivityChanged.listen((results) {
+      final offline = results.every((r) => r == ConnectivityResult.none);
+      if (offline != _isOffline && mounted) {
+        setState(() => _isOffline = offline);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _connectivitySubscription.cancel();
+    super.dispose();
   }
 
   Future<void> _checkConfig() async {
@@ -232,6 +255,12 @@ class _MyAppState extends State<MyApp> {
       title: 'Popcorn',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
+      builder: (context, child) {
+        if (_isOffline) {
+          return const NoInternetOverlay();
+        }
+        return child!;
+      },
       home: homeWidget,
     );
   }

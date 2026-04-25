@@ -6,6 +6,7 @@
 
 #include "generated_plugin_registrant.h"
 
+#include <connectivity_plus/connectivity_plus_windows_plugin.h>
 #include <firebase_core/firebase_core_plugin_c_api.h>
 #include <firebase_remote_config/firebase_remote_config_plugin_c_api.h>
 #include <media_kit_libs_windows_video/media_kit_libs_windows_video_plugin_c_api.h>
@@ -18,6 +19,8 @@
 #include <window_manager/window_manager_plugin.h>
 
 void RegisterPlugins(flutter::PluginRegistry* registry) {
+  ConnectivityPlusWindowsPluginRegisterWithRegistrar(
+      registry->GetRegistrarForPlugin("ConnectivityPlusWindowsPlugin"));
   FirebaseCorePluginCApiRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("FirebaseCorePluginCApi"));
   FirebaseRemoteConfigPluginCApiRegisterWithRegistrar(

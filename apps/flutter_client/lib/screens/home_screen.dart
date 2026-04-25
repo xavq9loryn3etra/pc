@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'dart:math';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../models/movie.dart';
@@ -69,7 +70,8 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
       Movie? featured;
       if (trending.isNotEmpty) {
         try {
-          final basic = trending.first;
+          final randomIndex = Random().nextInt(min(trending.length, 10)); // Pick from top 10
+          final basic = trending[randomIndex];
           featured = await _tmdb.getDetails(basic.id, type: basic.type);
         } catch (_) {}
       }

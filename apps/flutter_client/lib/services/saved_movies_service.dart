@@ -127,9 +127,21 @@ class SavedMoviesService with ChangeNotifier {
   }) async {
     // Get existing movie data to preserve progress if not updating
     double? existingProgress;
+    bool isSameEpisode = true;
+    
     if (_history.containsKey(movie.id)) {
       final prevMovie = Movie.fromStorageJson(_history[movie.id]['movie']);
       existingProgress = prevMovie.progress;
+      
+      // If we are passing specific season/episode, check if it changed
+      if (season != null && episode != null) {
+        if (prevMovie.currentSeason != season || prevMovie.currentEpisode != episode) {
+          isSameEpisode = false;
+          // We switched episodes! We should NOT use the old episode's progress.
+          // Instead, look up the progress for the NEW episode we are switching to.
+          existingProgress = _episodeHistory['${movie.id}_${season}_$episode'];
+        }
+      }
     }
 
     // Create a copy of the movie with updated history data if provided
@@ -155,10 +167,11 @@ class SavedMoviesService with ChangeNotifier {
       trailerUrl: movie.trailerUrl,
       imdbId: movie.imdbId,
       // Update history fields
-      currentSeason: season ?? movie.currentSeason,
-      currentEpisode: episode ?? movie.currentEpisode,
-      // Preserve existing progress if new progress is null
-      progress: progress ?? existingProgress ?? movie.progress,
+      currentSeason: season ?? (isSameEpisode ? movie.currentSeason : null),
+      currentEpisode: episode ?? (isSameEpisode ? movie.currentEpisode : null),
+      // Preserve existing progress if new progress is null.
+      // If we switched episodes and have no saved progress, it must be null (not the old movie's progress).
+      progress: progress ?? existingProgress ?? (isSameEpisode ? movie.progress : null),
     );
 
     // STRICT: Only allow forward progress or exactly same

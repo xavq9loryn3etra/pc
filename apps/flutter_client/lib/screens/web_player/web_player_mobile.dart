@@ -298,27 +298,18 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
             // JSON progress updates
             final dynamic data = jsonDecode(message.message);
             if (data is Map) {
-              if (data['type'] == 'pause') {
+              if (data['type'] == 'pause' || data['type'] == 'timeupdate') {
                 final double currentTime =
                     (data['currentTime'] as num).toDouble();
                 final double duration = (data['duration'] as num).toDouble();
+                final int s = data.containsKey('season') ? data['season'] as int : _currentSeason;
+                final int e = data.containsKey('episode') ? data['episode'] as int : _currentEpisode;
+
                 if (duration > 60 && mounted) {
                   SavedMoviesService().addToHistory(
                     widget.movie,
-                    season: _currentSeason,
-                    episode: _currentEpisode,
-                    progress: currentTime / duration,
-                  );
-                }
-              } else if (data['type'] == 'timeupdate') {
-                final double currentTime =
-                    (data['currentTime'] as num).toDouble();
-                final double duration = (data['duration'] as num).toDouble();
-                if (duration > 60 && mounted) {
-                  SavedMoviesService().addToHistory(
-                    widget.movie,
-                    season: _currentSeason,
-                    episode: _currentEpisode,
+                    season: s,
+                    episode: e,
                     progress: currentTime / duration,
                   );
                 }
@@ -549,6 +540,9 @@ if (window.flutterTrackingActive) {
 
   Future<void> _switchEpisode(int episodeNumber) async {
     // 1. Save current progress of old episode before switching
+    final oldSeason = _currentSeason;
+    final oldEpisode = _currentEpisode;
+    
     await _controller.runJavaScript("""
       (function() {
         var v = document.querySelector('video');
@@ -556,7 +550,9 @@ if (window.flutterTrackingActive) {
           FlutterControlChannel.postMessage(JSON.stringify({
             type: 'pause',
             currentTime: v.currentTime,
-            duration: v.duration
+            duration: v.duration,
+            season: $oldSeason,
+            episode: $oldEpisode
           }));
         }
       })();

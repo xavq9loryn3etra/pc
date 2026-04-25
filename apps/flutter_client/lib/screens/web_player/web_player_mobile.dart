@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 
 import 'dart:convert';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -303,8 +305,8 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
                 if (duration > 60 && mounted) {
                   SavedMoviesService().addToHistory(
                     widget.movie,
-                    season: widget.season,
-                    episode: widget.episode,
+                    season: _currentSeason,
+                    episode: _currentEpisode,
                     progress: currentTime / duration,
                   );
                 }
@@ -315,8 +317,8 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
                 if (duration > 60 && mounted) {
                   SavedMoviesService().addToHistory(
                     widget.movie,
-                    season: widget.season,
-                    episode: widget.episode,
+                    season: _currentSeason,
+                    episode: _currentEpisode,
                     progress: currentTime / duration,
                   );
                 }
@@ -634,7 +636,9 @@ if (window.flutterTrackingActive) {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false, // Prevent iOS back-swipe from accidentally closing the player
+      child: Scaffold(
       backgroundColor: Colors.black,
       // Use a top-level Stack so the EpisodeDrawer sits ABOVE and OUTSIDE
       // the PlayerGestureOverlay. This prevents drawer touches from
@@ -653,7 +657,14 @@ if (window.flutterTrackingActive) {
                   children: [
                     // WebView is NOT inside any ValueListenableBuilder —
                     // it never gets rebuilt when controls toggle.
-                    WebViewWidget(controller: _controller),
+                    WebViewWidget(
+                      controller: _controller,
+                      gestureRecognizers: {
+                        Factory<OneSequenceGestureRecognizer>(
+                          () => EagerGestureRecognizer(),
+                        ),
+                      },
+                    ),
 
                     if (_isLoading)
                       const Center(
@@ -717,6 +728,7 @@ if (window.flutterTrackingActive) {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 }

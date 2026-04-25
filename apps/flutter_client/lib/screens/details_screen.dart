@@ -262,10 +262,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final m = _details ?? widget.movie;
-    final bool isTv = m.type == 'tv';
+    return ListenableBuilder(
+      listenable: SavedMoviesService(),
+      builder: (context, _) {
+        final m = _details ?? widget.movie;
+        final bool isTv = m.type == 'tv';
+        final historyMovie = SavedMoviesService().getMovieFromHistory(widget.movie.id);
 
-    return Scaffold(
+        return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: CustomAppBar(
         scrollOffset: _scrollController.hasClients ? _scrollController.offset : 0.0,
@@ -433,10 +437,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         // Action Buttons
-                        if (!isTv) ...[
-                          Row(
-                            children: [
-                              // Split Play Button (Player 1 / Player 2)
+                        Row(
+                          children: [
+                            if (!isTv)
+                              // Split Play Button (Player 1 / Player 2) for Movies
                               Expanded(
                                 flex: 3,
                                 child: Container(
@@ -450,25 +454,24 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                       // Player 1 (Default: VidLink)
                                       Expanded(
                                         child: InkWell(
-                                          onTap: () =>
-                                              _openWebPlayer('vidlink'),
-                                          borderRadius:
-                                              const BorderRadius.horizontal(
+                                          onTap: () => _openWebPlayer('vidlink'),
+                                          borderRadius: const BorderRadius.horizontal(
                                             left: Radius.circular(30),
                                           ),
-                                          child: const Row(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
+                                          child: Row(
+                                            mainAxisAlignment: MainAxisAlignment.center,
                                             children: [
-                                              Icon(
+                                              const Icon(
                                                 Icons.play_arrow_rounded,
                                                 color: Colors.black,
                                                 size: 28,
                                               ),
-                                              SizedBox(width: 8),
+                                              const SizedBox(width: 8),
                                               Text(
-                                                'Player 1',
-                                                style: TextStyle(
+                                                historyMovie?.progress != null && historyMovie!.progress! > 0
+                                                    ? 'Resume'
+                                                    : 'Player 1',
+                                                style: const TextStyle(
                                                   color: Colors.black,
                                                   fontWeight: FontWeight.bold,
                                                   fontSize: 16,
@@ -492,9 +495,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         ),
                                         offset: const Offset(0, 50),
                                         shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
+                                          borderRadius: BorderRadius.circular(12),
                                         ),
                                         color: Colors.white,
                                         itemBuilder: (context) => [
@@ -536,56 +537,112 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                     ],
                                   ),
                                 ),
-                              ),
-                              const SizedBox(width: 12),
-                              // Trailer Button
-                              if (m.trailerUrl != null)
-                                Expanded(
-                                  flex: 2,
-                                  child: Container(
-                                    height: 50,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white10,
-                                      borderRadius: BorderRadius.circular(30),
-                                    ),
-                                    child: InkWell(
-                                      onTap: () async {
-                                        final uri = Uri.parse(m.trailerUrl!);
-                                        if (await canLaunchUrl(uri)) {
-                                          await launchUrl(
-                                            uri,
-                                            mode:
-                                                LaunchMode.externalApplication,
+                              )
+                            else
+                              // TV Show Play/Resume Button
+                              Expanded(
+                                flex: 3,
+                                child: Container(
+                                  height: 50,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(30),
+                                  ),
+                                  child: InkWell(
+                                    onTap: () async {
+                                      int s = historyMovie?.currentSeason ?? 1;
+                                      int e = historyMovie?.currentEpisode ?? 1;
+                                      if (_details?.seasons != null && _details!.seasons!.isNotEmpty) {
+                                        setState(() {
+                                          _selectedSeason = _details!.seasons!.firstWhere(
+                                            (sea) => sea.seasonNumber == s,
+                                            orElse: () => _details!.seasons!.first,
                                           );
-                                        }
-                                      },
-                                      borderRadius: BorderRadius.circular(30),
-                                      child: const Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          Icon(
-                                            Icons.movie_creation_outlined,
-                                            color: Colors.white,
+                                          _selectedEpisode = e;
+                                        });
+                                      } else {
+                                        _selectedEpisode = e;
+                                      }
+                                      
+                                      // Ensure the episodes list is loaded for the target season
+                                      // before passing it to the WebPlayer's drawer.
+                                      await _loadSeasonDetails(s);
+                                      
+                                      _openWebPlayer('vidlink');
+                                    },
+                                    borderRadius: BorderRadius.circular(30),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          historyMovie?.currentSeason != null
+                                              ? Icons.play_circle_filled
+                                              : Icons.play_arrow_rounded,
+                                          color: Colors.black,
+                                          size: 28,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          historyMovie?.currentSeason != null
+                                              ? 'Resume S${historyMovie!.currentSeason} E${historyMovie.currentEpisode}'
+                                              : 'Play S1 E1',
+                                          style: const TextStyle(
+                                            color: Colors.black,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 16,
                                           ),
-                                          SizedBox(width: 8),
-                                          Text(
-                                            'Trailer',
-                                            style: TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 16,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ),
-                            ],
-                          ),
-                          const SizedBox(height: 24),
-                        ],
+                              ),
+                            const SizedBox(width: 12),
+                            // Trailer Button
+                            if (m.trailerUrl != null)
+                              Expanded(
+                                flex: 2,
+                                child: Container(
+                                  height: 50,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white10,
+                                    borderRadius: BorderRadius.circular(30),
+                                  ),
+                                  child: InkWell(
+                                    onTap: () async {
+                                      final uri = Uri.parse(m.trailerUrl!);
+                                      if (await canLaunchUrl(uri)) {
+                                        await launchUrl(
+                                          uri,
+                                          mode: LaunchMode.externalApplication,
+                                        );
+                                      }
+                                    },
+                                    borderRadius: BorderRadius.circular(30),
+                                    child: const Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.movie_creation_outlined,
+                                          color: Colors.white,
+                                        ),
+                                        SizedBox(width: 8),
+                                        Text(
+                                          'Trailer',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 16,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 24),
 
                         Text(
                           m.description,
@@ -914,6 +971,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 ],
               ),
             ),
+          );
+      },
     );
   }
 }

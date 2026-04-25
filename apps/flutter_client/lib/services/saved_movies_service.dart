@@ -1,8 +1,9 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/movie.dart';
 
-class SavedMoviesService {
+class SavedMoviesService with ChangeNotifier {
   static const String _favoritesKey = 'favorites_v1';
   static const String _historyKey = 'watch_history_v1';
   static const String _episodeHistoryKey = 'episode_history_v1';
@@ -52,6 +53,8 @@ class SavedMoviesService {
         print("Error loading episode history: $e");
       }
     }
+    
+    notifyListeners();
   }
 
   // --- Favorites API ---
@@ -88,6 +91,7 @@ class SavedMoviesService {
       _favorites.add(movie);
     }
     await _saveFavorites();
+    notifyListeners();
   }
 
   Future<void> _saveFavorites() async {
@@ -181,6 +185,7 @@ class SavedMoviesService {
     }
 
     await _saveHistory();
+    notifyListeners();
   }
 
   Future<void> removeFromHistory(String movieId) async {
@@ -191,6 +196,7 @@ class SavedMoviesService {
       // Clear associated episode history
       _episodeHistory.removeWhere((key, _) => key.startsWith('${movieId}_'));
       await _saveEpisodeHistory();
+      notifyListeners();
     }
   }
 

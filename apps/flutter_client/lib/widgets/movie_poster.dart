@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shimmer/shimmer.dart';
 import '../models/movie.dart';
 import '../theme/app_theme.dart';
+import '../services/saved_movies_service.dart';
 
 class MoviePoster extends StatefulWidget {
   final Movie movie;
@@ -51,97 +52,106 @@ class _MoviePosterState extends State<MoviePoster> {
           ],
         ),
         clipBehavior: Clip.antiAlias,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            (widget.movie.posterUrl != null &&
-                    widget.movie.posterUrl!.isNotEmpty)
-                ? (widget.movie.posterUrl!.toLowerCase().endsWith('.svg')
-                    ? SvgPicture.network(
-                        widget.movie.posterUrl!,
-                        fit: BoxFit.cover,
-                        alignment: Alignment.topCenter,
-                        placeholderBuilder: (context) => Shimmer.fromColors(
-                          baseColor: Colors.grey[900]!,
-                          highlightColor: Colors.grey[800]!,
-                          child: Container(color: Colors.black),
-                        ),
-                      )
-                    : CachedNetworkImage(
-                        imageUrl: widget.movie.posterUrl!,
-                        fit: BoxFit.cover,
-                        alignment: Alignment.topCenter,
-                        // Multiply by 1.5 to ensure sharpness (supersample slightly)
-                        memCacheHeight: ((widget.height == double.infinity
-                                    ? 400
-                                    : widget.height) *
-                                MediaQuery.of(context).devicePixelRatio *
-                                1.5)
-                            .toInt(),
-                        placeholder: (context, url) => Shimmer.fromColors(
-                          baseColor: Colors.grey[900]!,
-                          highlightColor: Colors.grey[800]!,
-                          child: Container(color: Colors.black),
-                        ),
-                        errorWidget: (context, url, error) => Container(
-                          color: Colors.grey[900],
-                          child: const Center(
-                            child: Icon(
-                              Icons.broken_image,
-                              color: Colors.white24,
-                            ),
-                          ),
-                        ),
-                      ))
-                : Container(
-                    color: Colors.grey[900],
-                    child: const Center(
-                      child: Icon(Icons.movie, color: Colors.white24),
-                    ),
-                  ),
-            // History Badge (S1 E1)
-            if (widget.movie.currentSeason != null &&
-                widget.movie.currentEpisode != null)
-              Positioned(
-                bottom: 8,
-                right: 8,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.8),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: Colors.white24, width: 0.5),
-                  ),
-                  child: Text(
-                    'S${widget.movie.currentSeason} E${widget.movie.currentEpisode}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
+        child: ListenableBuilder(
+          listenable: SavedMoviesService(),
+          builder: (context, _) {
+            final historyMovie = SavedMoviesService().getMovieFromHistory(widget.movie.id);
+            final progress = historyMovie?.progress ?? widget.movie.progress;
+            final currentSeason = historyMovie?.currentSeason ?? widget.movie.currentSeason;
+            final currentEpisode = historyMovie?.currentEpisode ?? widget.movie.currentEpisode;
 
-            // Progress Bar
-            if (widget.movie.progress != null && widget.movie.progress! > 0)
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: LinearProgressIndicator(
-                  value: widget.movie.progress,
-                  backgroundColor: Colors.white10,
-                  valueColor: const AlwaysStoppedAnimation<Color>(
-                    AppTheme.primaryColor,
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                (widget.movie.posterUrl != null &&
+                        widget.movie.posterUrl!.isNotEmpty)
+                    ? (widget.movie.posterUrl!.toLowerCase().endsWith('.svg')
+                        ? SvgPicture.network(
+                            widget.movie.posterUrl!,
+                            fit: BoxFit.cover,
+                            alignment: Alignment.topCenter,
+                            placeholderBuilder: (context) => Shimmer.fromColors(
+                              baseColor: Colors.grey[900]!,
+                              highlightColor: Colors.grey[800]!,
+                              child: Container(color: Colors.black),
+                            ),
+                          )
+                        : CachedNetworkImage(
+                            imageUrl: widget.movie.posterUrl!,
+                            fit: BoxFit.cover,
+                            alignment: Alignment.topCenter,
+                            // Multiply by 1.5 to ensure sharpness (supersample slightly)
+                            memCacheHeight: ((widget.height == double.infinity
+                                        ? 400
+                                        : widget.height) *
+                                    MediaQuery.of(context).devicePixelRatio *
+                                    1.5)
+                                .toInt(),
+                            placeholder: (context, url) => Shimmer.fromColors(
+                              baseColor: Colors.grey[900]!,
+                              highlightColor: Colors.grey[800]!,
+                              child: Container(color: Colors.black),
+                            ),
+                            errorWidget: (context, url, error) => Container(
+                              color: Colors.grey[900],
+                              child: const Center(
+                                child: Icon(
+                                  Icons.broken_image,
+                                  color: Colors.white24,
+                                ),
+                              ),
+                            ),
+                          ))
+                    : Container(
+                        color: Colors.grey[900],
+                        child: const Center(
+                          child: Icon(Icons.movie, color: Colors.white24),
+                        ),
+                      ),
+                // History Badge (S1 E1)
+                if (currentSeason != null && currentEpisode != null)
+                  Positioned(
+                    bottom: 8,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.8),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: Colors.white24, width: 0.5),
+                      ),
+                      child: Text(
+                        'S$currentSeason E$currentEpisode',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                   ),
-                  minHeight: 3,
-                ),
-              ),
-          ],
+
+                // Progress Bar
+                if (progress != null && progress > 0)
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      backgroundColor: Colors.white10,
+                      valueColor: const AlwaysStoppedAnimation<Color>(
+                        AppTheme.primaryColor,
+                      ),
+                      minHeight: 3,
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
       ),
     );

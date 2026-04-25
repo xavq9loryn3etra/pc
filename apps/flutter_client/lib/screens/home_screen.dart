@@ -13,6 +13,9 @@ import 'desktop_home_screen.dart';
 import 'favorites_screen.dart';
 import '../widgets/desktop_skeletons.dart';
 import '../widgets/custom_app_bar.dart';
+import '../services/backup_service.dart';
+import '../main.dart';
+import '../theme/app_theme.dart';
 
 class MovieHomeScreen extends StatefulWidget {
   const MovieHomeScreen({super.key});
@@ -144,6 +147,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
                 MaterialPageRoute(builder: (_) => const FavoritesScreen()),
               );
             },
+            onLogoLongPress: _showBackupDialog,
           ),
           body: SingleChildScrollView(
             controller: _scrollController,
@@ -213,6 +217,80 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
       ),
     );
     if (mounted) setState(() {});
+  }
+
+  void _showBackupDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.cloud_sync, color: AppTheme.primaryColor),
+            SizedBox(width: 12),
+            Text('Backup & Restore', style: TextStyle(color: Colors.white)),
+          ],
+        ),
+        content: const Text(
+          'Export your favorites and history to a file, or import them from a previously saved backup.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('CANCEL', style: TextStyle(color: Colors.grey)),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              final success = await BackupService().exportData();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(success ? 'Backup exported successfully!' : 'Failed to export backup.'),
+                    backgroundColor: success ? Colors.green : Colors.red,
+                  ),
+                );
+              }
+            },
+            child: const Text('EXPORT', style: TextStyle(color: AppTheme.primaryColor)),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              final success = await BackupService().importData();
+              if (mounted && success) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Backup imported! Reloading app...'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+                // Restart app by navigating to main
+                Future.delayed(const Duration(seconds: 1), () {
+                  if (mounted) {
+                    Navigator.pushAndRemoveUntil(
+                      context,
+                      MaterialPageRoute(builder: (_) => const MyApp()),
+                      (route) => false,
+                    );
+                  }
+                });
+              } else if (mounted && !success) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Failed to import backup.'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            },
+            child: const Text('IMPORT', style: TextStyle(color: AppTheme.primaryColor)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _confirmRemoveHistory(Movie movie) async {

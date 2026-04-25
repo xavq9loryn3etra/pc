@@ -108,7 +108,8 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen>
                   child: ValueListenableBuilder<AppMode>(
                     valueListenable: AppModeService().currentMode,
                     builder: (context, currentMode, _) {
-                      return Column(
+                      return ListView(
+                        padding: EdgeInsets.zero,
                         children: [
                           _buildModeCard(
                             mode: AppMode.movies,
@@ -120,7 +121,6 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen>
                             gradientColor: const Color(0xFF2A1800),
                             accentColor: AppTheme.primaryColor,
                           ),
-                          const SizedBox(height: 16),
                           _buildModeCard(
                             mode: AppMode.music,
                             currentMode: currentMode,
@@ -131,7 +131,6 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen>
                             gradientColor: const Color(0xFF420420),
                             accentColor: const Color(0xFFE91E63),
                           ),
-                          const SizedBox(height: 16),
                           _buildModeCard(
                             mode: AppMode.books,
                             currentMode: currentMode,
@@ -167,7 +166,9 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen>
   }) {
     final isSelected = currentMode == mode;
 
-    return Expanded(
+    return Container(
+      height: 120,
+      margin: const EdgeInsets.only(bottom: 16),
       child: GestureDetector(
         onTap: () => _selectMode(mode),
         child: AnimatedContainer(

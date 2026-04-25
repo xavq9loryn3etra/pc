@@ -8,9 +8,13 @@ import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import 'dart:io';
 import 'dart:async';
 import 'web_player_platform_interface.dart';
+import '../../models/movie.dart';
 import '../../services/saved_movies_service.dart';
+import '../../services/scraper_service.dart';
+import '../../services/tmdb_service.dart';
 import '../../widgets/custom_loader.dart';
 import '../../widgets/player_gesture_overlay.dart';
+import '../../widgets/episode_drawer.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 // ---------------------------------------------------------------------------
@@ -138,7 +142,13 @@ class WebPlayerMobile extends WebPlayerPlatform {
     required super.movie,
     super.season,
     super.episode,
-  });
+    super.episodes,
+    List<Season>? seasons,
+    required Movie details,
+  }) : super(
+          seasons: seasons,
+          details: details,
+        );
 
   @override
   State<WebPlayerMobile> createState() => _WebPlayerMobileState();
@@ -154,11 +164,25 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
   // platform view — which on iOS WKWebView causes black-screen flashes.
   final ValueNotifier<bool> _showControls = ValueNotifier(false);
   final ValueNotifier<bool> _isVideoPaused = ValueNotifier(false);
+  final ValueNotifier<bool> _showEpisodeDrawer = ValueNotifier(false);
+
+  // What's actually loaded in the WebView
+  late int _currentSeason;
+  late int _currentEpisode;
+  // What season the drawer is currently browsing (may differ from playing)
+  late int _browsingSeason;
+  late List<Episode> _episodes;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    
+    _currentSeason = widget.season ?? 1;
+    _currentEpisode = widget.episode ?? 1;
+    _browsingSeason = _currentSeason;
+    _episodes = widget.episodes;
+    
     _setupController();
   }
 
@@ -219,6 +243,8 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
     // Detect hardware gyroscope to override OS orientation locks
     // Using a quick 500ms timeout so we don't hold up UI if sensors fail
     accelerometerEventStream().first.timeout(const Duration(milliseconds: 500)).then((event) {
+      if (!mounted) return;
+      
       // On most devices, holding the phone in landscape:
       // X < -3.0 means top of phone is on the right (landscapeRight)
       // X > 3.0 means top of phone is on the left (landscapeLeft)
@@ -240,11 +266,13 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
         }
       });
     }).catchError((_) {
-      // Fallback if sensors fail or timeout
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
+      if (mounted) {
+        // Fallback if sensors fail or timeout
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ]);
+      }
     });
 
     _controller
@@ -499,6 +527,85 @@ if (window.flutterTrackingActive) {
     }
   }
 
+  void _toggleEpisodeDrawer() {
+    _showEpisodeDrawer.value = !_showEpisodeDrawer.value;
+    if (_showEpisodeDrawer.value) {
+      _showControls.value = false;
+      // Reset drawer to show the currently-playing season
+      if (_browsingSeason != _currentSeason) {
+        _browsingSeason = _currentSeason;
+        _episodes = widget.episodes;
+        // Re-fetch in case episodes changed
+        TMDBService().getSeasonDetails(widget.details.id, _currentSeason).then((eps) {
+          if (mounted && _showEpisodeDrawer.value) {
+            setState(() => _episodes = eps);
+          }
+        });
+      }
+    }
+  }
+
+  Future<void> _switchEpisode(int episodeNumber) async {
+    // 1. Save current progress of old episode before switching
+    await _controller.runJavaScript("""
+      (function() {
+        var v = document.querySelector('video');
+        if (v && v.duration > 60) {
+          FlutterControlChannel.postMessage(JSON.stringify({
+            type: 'pause',
+            currentTime: v.currentTime,
+            duration: v.duration
+          }));
+        }
+      })();
+    """);
+
+    setState(() {
+      // Update both playing and browsing state
+      _currentSeason = _browsingSeason;
+      _currentEpisode = episodeNumber;
+      _isLoading = true;
+    });
+    _showEpisodeDrawer.value = false;
+
+    // 2. Generate new URL
+    final newUrl = ScraperService().getEmbedUrl(
+      widget.details.id,
+      season: _currentSeason,
+      episode: _currentEpisode,
+      imdbId: widget.details.imdbId,
+      provider: 'vidlink',
+    );
+
+    // 3. Load new URL
+    _controller.loadRequest(Uri.parse(newUrl));
+    
+    // 4. Update history
+    SavedMoviesService().addToHistory(
+      widget.movie,
+      season: _currentSeason,
+      episode: _currentEpisode,
+    );
+  }
+
+  Future<void> _switchSeason(int seasonNumber) async {
+    // Only update browsing state — don't change what's playing
+    setState(() => _isLoading = true);
+    
+    final episodes = await TMDBService().getSeasonDetails(
+      widget.details.id,
+      seasonNumber,
+    );
+
+    if (mounted) {
+      setState(() {
+        _browsingSeason = seasonNumber;
+        _episodes = episodes;
+        _isLoading = false;
+      });
+    }
+  }
+
   void _startHideTimer() {
     _hideTimer?.cancel();
     _hideTimer = Timer(const Duration(seconds: 3), () {
@@ -517,6 +624,7 @@ if (window.flutterTrackingActive) {
     _hideTimer?.cancel();
     _showControls.dispose();
     _isVideoPaused.dispose();
+    _showEpisodeDrawer.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
@@ -528,49 +636,86 @@ if (window.flutterTrackingActive) {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      // PlayerGestureOverlay wraps the body as a PARENT so its Listener
-      // receives pointer events from the WebView PlatformView reliably.
-      body: PlayerGestureOverlay(
-        onTap: _toggleControls,
-        child: Stack(
-          children: [
-            // WebView is NOT inside any ValueListenableBuilder —
-            // it never gets rebuilt when controls toggle.
-            WebViewWidget(controller: _controller),
+      // Use a top-level Stack so the EpisodeDrawer sits ABOVE and OUTSIDE
+      // the PlayerGestureOverlay. This prevents drawer touches from
+      // triggering volume/brightness gestures.
+      body: Stack(
+        children: [
+          // Layer 1: PlayerGestureOverlay + WebView + controls
+          ValueListenableBuilder<bool>(
+            valueListenable: _showEpisodeDrawer,
+            builder: (context, drawerOpen, child) {
+              return PlayerGestureOverlay(
+                enabled: !drawerOpen,
+                onTap: _toggleControls,
+                onSwipeUp: widget.movie.type == 'tv' ? _toggleEpisodeDrawer : null,
+                child: Stack(
+                  children: [
+                    // WebView is NOT inside any ValueListenableBuilder —
+                    // it never gets rebuilt when controls toggle.
+                    WebViewWidget(controller: _controller),
 
-            if (_isLoading)
-              const Center(
-                child: CustomLoader(),
-              ),
+                    if (_isLoading)
+                      const Center(
+                        child: CustomLoader(),
+                      ),
 
-            // Only the close button rebuilds on controls visibility change.
-            Positioned(
-              top: 20,
-              left: 20,
-              child: ValueListenableBuilder<bool>(
-                valueListenable: _showControls,
-                builder: (context, visible, child) {
-                  return AnimatedOpacity(
-                    opacity: visible ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 300),
-                    child: SafeArea(
-                      child: Container(
-                        decoration: const BoxDecoration(
-                          color: Colors.black54,
-                          shape: BoxShape.circle,
-                        ),
-                        child: IconButton(
-                          icon: const Icon(Icons.close, color: Colors.white),
-                          onPressed: visible ? widget.onClose : null,
-                        ),
+                    // Only the close button rebuilds on controls visibility change.
+                    Positioned(
+                      top: 20,
+                      left: 20,
+                      child: ValueListenableBuilder<bool>(
+                        valueListenable: _showControls,
+                        builder: (context, visible, child) {
+                          return AnimatedOpacity(
+                            opacity: visible ? 1.0 : 0.0,
+                            duration: const Duration(milliseconds: 300),
+                            child: SafeArea(
+                              child: Container(
+                                decoration: const BoxDecoration(
+                                  color: Colors.black54,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: IconButton(
+                                  icon: const Icon(Icons.close, color: Colors.white),
+                                  onPressed: visible ? widget.onClose : null,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
+                  ],
+                ),
+              );
+            },
+          ),
+
+          // Layer 2: Episode Drawer (fully outside gesture overlay)
+          ValueListenableBuilder<bool>(
+            valueListenable: _showEpisodeDrawer,
+            builder: (context, showDrawer, _) {
+              if (!showDrawer || widget.movie.type != 'tv') {
+                return const SizedBox.shrink();
+              }
+              return Positioned.fill(
+                child: EpisodeDrawer(
+                  episodes: _episodes,
+                  seasons: widget.seasons,
+                  movie: widget.details, // Use details to get logoUrl
+                  currentSeason: _browsingSeason,
+                  playingSeason: _currentSeason,
+                  playingEpisode: _currentEpisode,
+                  movieId: widget.movie.id,
+                  onEpisodeTap: _switchEpisode,
+                  onSeasonChanged: _switchSeason,
+                  onClose: () => _showEpisodeDrawer.value = false,
+                ),
+              );
+            },
+          ),
+        ],
       ),
     );
   }

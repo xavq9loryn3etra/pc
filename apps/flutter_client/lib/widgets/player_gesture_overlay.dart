@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:volume_controller/volume_controller.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 
+// Netflix-style gestures
+
 /// Netflix-style vertical swipe overlay for volume (right) and brightness (left).
 ///
 /// Wraps its [child] in a raw [Listener] so pointer events are captured as a
@@ -11,11 +13,17 @@ import 'package:screen_brightness/screen_brightness.dart';
 class PlayerGestureOverlay extends StatefulWidget {
   final Widget child;
   final VoidCallback? onTap;
+  final VoidCallback? onSwipeUp;
+  /// When false, all gesture processing is disabled (e.g. when the episode
+  /// drawer is open and should receive all touches).
+  final bool enabled;
 
   const PlayerGestureOverlay({
     super.key,
     required this.child,
     this.onTap,
+    this.onSwipeUp,
+    this.enabled = true,
   });
 
   @override
@@ -32,6 +40,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
 
   Offset? _pointerStart;
   bool _isDragging = false;
+  bool _isBottomEdgeSwipe = false;
   static const double _dragThreshold = 18.0;
 
   late final AnimationController _fadeController;
@@ -62,9 +71,18 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   // ───────────────── Pointer Handlers ─────────────────
 
   void _onPointerDown(PointerDownEvent event) {
+    if (!widget.enabled) return;
     final screenSize = MediaQuery.of(context).size;
     
-    // Ignore edge swipes (50px on all sides) so the user can pull system UI
+    // Detect bottom edge swipe for drawer
+    if (event.position.dy > screenSize.height - 80) {
+      _isBottomEdgeSwipe = true;
+      _pointerStart = event.position;
+      _isDragging = false;
+      return;
+    }
+
+    // Ignore other edge swipes (50px on all sides) so the user can pull system UI
     // or trigger native back gestures without accidentally triggering volume/brightness.
     if (event.position.dy < 50 || 
         event.position.dy > screenSize.height - 50 ||
@@ -80,7 +98,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   }
 
   void _onPointerMove(PointerMoveEvent event) {
-    if (_pointerStart == null) return;
+    if (!widget.enabled || _pointerStart == null) return;
 
     final delta = event.position - _pointerStart!;
 
@@ -92,6 +110,15 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
       if (delta.dy.abs() < delta.dx.abs()) {
         // Horizontal — ignore, let WebView handle
         _pointerStart = null;
+        _isBottomEdgeSwipe = false;
+        return;
+      }
+
+      // Check for swipe up if it started from bottom edge
+      if (_isBottomEdgeSwipe && delta.dy < 0) {
+        widget.onSwipeUp?.call();
+        _pointerStart = null;
+        _isBottomEdgeSwipe = false;
         return;
       }
 
@@ -146,11 +173,13 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   }
 
   void _onPointerUp(PointerUpEvent event) {
-    if (!_isDragging && _pointerStart != null) {
+    if (!widget.enabled) return;
+    if (!_isDragging && _pointerStart != null && !_isBottomEdgeSwipe) {
       widget.onTap?.call();
     }
 
     _pointerStart = null;
+    _isBottomEdgeSwipe = false;
 
     if (_isDragging) {
       _fadeTimer?.cancel();
@@ -168,6 +197,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   void _onPointerCancel(PointerCancelEvent event) {
     _pointerStart = null;
     _isDragging = false;
+    _isBottomEdgeSwipe = false;
     _activeGesture = _GestureType.none;
     _fadeTimer?.cancel();
     _fadeController.reverse();

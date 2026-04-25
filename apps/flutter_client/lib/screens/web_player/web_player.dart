@@ -22,6 +22,9 @@ class WebPlayer extends StatelessWidget {
   final Movie movie;
   final int? season;
   final int? episode;
+  final List<Episode> episodes;
+  final List<Season>? seasons;
+  final Movie details;
 
   const WebPlayer({
     super.key,
@@ -30,10 +33,22 @@ class WebPlayer extends StatelessWidget {
     required this.movie,
     this.season,
     this.episode,
+    this.episodes = const [],
+    this.seasons,
+    required this.details,
   });
 
   @override
   Widget build(BuildContext context) {
-    return createWebPlayer(url, onClose, movie, season, episode);
+    return createWebPlayer(
+      url,
+      onClose,
+      movie,
+      season,
+      episode,
+      episodes,
+      seasons,
+      details,
+    );
   }
 }

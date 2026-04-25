@@ -10,6 +10,7 @@ import '../services/saved_movies_service.dart';
 import 'web_player/web_player.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:ui'; // For BackdropFilter
+import '../widgets/custom_app_bar.dart';
 
 class DetailsScreen extends StatefulWidget {
   final Movie movie;
@@ -64,8 +65,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   void _onScroll() {
     final offset = _scrollController.offset;
-    // Fade in sticky header background
-    double newOpacity = (offset / 300).clamp(0.0, 1.0);
+    // Fade in sticky header background - matching home screen logic (divisor 200)
+    double newOpacity = (offset / 200).clamp(0.0, 1.0);
     if (newOpacity != _opacity) {
       setState(() => _opacity = newOpacity);
     }
@@ -189,6 +190,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
           movie: widget.movie,
           season: s,
           episode: e,
+          episodes: _episodes,
+          seasons: _details?.seasons,
+          details: _details!,
         ),
       ),
     );
@@ -263,17 +267,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
     return Scaffold(
       extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        flexibleSpace: ClipRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(
-              sigmaX: 15 * _opacity,
-              sigmaY: 15 * _opacity,
-            ),
-            child: Container(color: Colors.black.withOpacity(_opacity * 0.7)),
-          ),
-        ),
+      appBar: CustomAppBar(
+        scrollOffset: _scrollController.hasClients ? _scrollController.offset : 0.0,
         leading: Padding(
           padding: const EdgeInsets.all(8.0),
           child: CircleAvatar(
@@ -293,7 +288,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           duration: const Duration(milliseconds: 300),
           child: _showAppBarTitle ? _buildAppBarTitle(m) : null,
         ),
-        centerTitle: false,
+        showActions: false,
         actions: [
           IconButton(
             icon: Icon(
@@ -302,7 +297,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
             ),
             onPressed: _toggleFavorite,
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 8),
         ],
       ),
       body: _loading

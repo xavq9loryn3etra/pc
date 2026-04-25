@@ -14,6 +14,9 @@ class WebPlayerWindows extends WebPlayerPlatform {
     required super.movie,
     super.season,
     super.episode,
+    super.episodes,
+    super.seasons,
+    required super.details,
   });
 
   @override

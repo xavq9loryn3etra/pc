@@ -1,8 +1,8 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../models/movie.dart';
 import 'desktop_details_panel.dart';
+import '../widgets/custom_app_bar.dart';
 
 typedef BodyBuilder = Widget Function(
     BuildContext context, bool isDesktop, EdgeInsets padding);
@@ -38,23 +38,11 @@ class ScreenScaffold extends StatelessWidget {
           children: [
             Scaffold(
               extendBodyBehindAppBar: extendBodyBehindAppBar,
-              appBar: AppBar(
+              appBar: CustomAppBar(
                 title: title,
-                backgroundColor: Colors.transparent,
-                elevation: 0,
-                scrolledUnderElevation: 0,
-                flexibleSpace: ClipRect(
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(
-                      sigmaX: 15 * opacity,
-                      sigmaY: 15 * opacity,
-                    ),
-                    child: Container(
-                      color: Colors.black.withOpacity(opacity * 0.7),
-                    ),
-                  ),
-                ),
                 actions: actions,
+                forceOpacity: opacity,
+                showActions: false, // Scaffold users provide their own actions
               ),
               body: body(
                 context,

@@ -14,6 +14,9 @@ Widget createWebPlayer(
   Movie movie,
   int? season,
   int? episode,
+  List<Episode> episodes,
+  List<Season>? seasons,
+  Movie details,
 ) {
   if (Platform.isAndroid || Platform.isIOS) {
     return WebPlayerMobile(
@@ -22,6 +25,9 @@ Widget createWebPlayer(
       movie: movie,
       season: season,
       episode: episode,
+      episodes: episodes,
+      seasons: seasons,
+      details: details,
     );
   } else if (Platform.isWindows) {
     return WebPlayerWindows(
@@ -30,6 +36,9 @@ Widget createWebPlayer(
       movie: movie,
       season: season,
       episode: episode,
+      episodes: episodes,
+      seasons: seasons,
+      details: details,
     );
   }
   return WebPlayerStub(
@@ -38,5 +47,8 @@ Widget createWebPlayer(
     movie: movie,
     season: season,
     episode: episode,
+    episodes: episodes,
+    seasons: seasons,
+    details: details,
   );
 }

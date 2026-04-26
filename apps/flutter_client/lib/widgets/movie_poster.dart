@@ -109,7 +109,7 @@ class _MoviePosterState extends State<MoviePoster> {
                         ),
                       ),
                 // History Badge (S1 E1)
-                if (currentSeason != null && currentEpisode != null)
+                if (widget.movie.type == 'tv' && currentSeason != null && currentEpisode != null)
                   Positioned(
                     bottom: 8,
                     right: 8,

@@ -185,10 +185,10 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
   final ValueNotifier<bool> _showEpisodeDrawer = ValueNotifier(false);
 
   // What's actually loaded in the WebView
-  late int _currentSeason;
-  late int _currentEpisode;
+  int? _currentSeason;
+  int? _currentEpisode;
   // What season the drawer is currently browsing (may differ from playing)
-  late int _browsingSeason;
+  int? _browsingSeason;
   late List<Episode> _episodes;
 
   // YouTube-style continuous gyro rotation
@@ -200,8 +200,15 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     
-    _currentSeason = widget.season ?? 1;
-    _currentEpisode = widget.episode ?? 1;
+    _currentSeason = widget.season;
+    _currentEpisode = widget.episode;
+
+    // Default to S1 E1 only for TV shows if not provided
+    if (widget.movie.type == 'tv') {
+      _currentSeason ??= 1;
+      _currentEpisode ??= 1;
+    }
+
     _browsingSeason = _currentSeason;
     _episodes = widget.episodes;
     
@@ -337,8 +344,8 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
                 final double currentTime =
                     (data['currentTime'] as num).toDouble();
                 final double duration = (data['duration'] as num).toDouble();
-                final int s = data.containsKey('season') ? data['season'] as int : _currentSeason;
-                final int e = data.containsKey('episode') ? data['episode'] as int : _currentEpisode;
+                final int? s = data.containsKey('season') ? data['season'] as int : _currentSeason;
+                final int? e = data.containsKey('episode') ? data['episode'] as int : _currentEpisode;
 
                 if (duration > 60 && mounted) {
                   SavedMoviesService().addToHistory(
@@ -564,7 +571,7 @@ if (window.flutterTrackingActive) {
         _browsingSeason = _currentSeason;
         _episodes = widget.episodes;
         // Re-fetch in case episodes changed
-        TMDBService().getSeasonDetails(widget.details.id, _currentSeason).then((eps) {
+        TMDBService().getSeasonDetails(widget.details.id, _currentSeason!).then((eps) {
           if (mounted && _showEpisodeDrawer.value) {
             setState(() => _episodes = eps);
           }
@@ -754,9 +761,9 @@ if (window.flutterTrackingActive) {
                   episodes: _episodes,
                   seasons: widget.seasons,
                   movie: widget.details, // Use details to get logoUrl
-                  currentSeason: _browsingSeason,
-                  playingSeason: _currentSeason,
-                  playingEpisode: _currentEpisode,
+                  currentSeason: _browsingSeason!,
+                  playingSeason: _currentSeason!,
+                  playingEpisode: _currentEpisode!,
                   movieId: widget.movie.id,
                   onEpisodeTap: _switchEpisode,
                   onSeasonChanged: _switchSeason,

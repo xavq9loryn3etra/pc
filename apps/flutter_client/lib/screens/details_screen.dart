@@ -478,230 +478,233 @@ class _DetailsScreenState extends State<DetailsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Action Buttons
-                        Row(
-                          children: [
-                            if (!isTv)
-                              // Split Play Button (Player 1 / Player 2) for Movies
-                              Expanded(
-                                flex: 3,
-                                child: Container(
-                                  height: 50,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(30),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      // Player 1 (Default: VidLink)
-                                      Expanded(
-                                        child: InkWell(
-                                          onTap: () => _openWebPlayer('vidlink'),
-                                          borderRadius: const BorderRadius.horizontal(
-                                            left: Radius.circular(30),
+                        // Dynamic Server Logic
+                        () {
+                          final defaultProvider = Platform.isIOS ? 'vsembed' : 'vidlink';
+                          final altProvider = Platform.isIOS ? 'vidlink' : 'vsembed';
+                          final altLabel = Platform.isIOS ? 'Server 1' : 'Server 4';
+                          
+                          return Row(
+                            children: [
+                              if (!isTv)
+                                // Split Play Button (Main / Alternatives) for Movies
+                                Expanded(
+                                  flex: 3,
+                                  child: Container(
+                                    height: 50,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(30),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        // Main Server
+                                        Expanded(
+                                          child: InkWell(
+                                            onTap: () => _openWebPlayer(defaultProvider),
+                                            borderRadius: const BorderRadius.horizontal(
+                                              left: Radius.circular(30),
+                                            ),
+                                            child: Row(
+                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              children: [
+                                                const Icon(
+                                                  Icons.play_arrow_rounded,
+                                                  color: Colors.black,
+                                                  size: 28,
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Text(
+                                                  historyMovie?.progress != null && historyMovie!.progress! > 0
+                                                      ? 'Resume'
+                                                      : (Platform.isIOS ? 'Server 4' : 'Server 1'),
+                                                  style: const TextStyle(
+                                                    color: Colors.black,
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 16,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
                                           ),
-                                          child: Row(
-                                            mainAxisAlignment: MainAxisAlignment.center,
-                                            children: [
-                                              const Icon(
-                                                Icons.play_arrow_rounded,
-                                                color: Colors.black,
-                                                size: 28,
+                                        ),
+                                        // Divider
+                                        Container(
+                                          width: 1,
+                                          height: 30,
+                                          color: Colors.black12,
+                                        ),
+                                        // Dropdown
+                                        PopupMenuButton<String>(
+                                          icon: const Icon(
+                                            Icons.arrow_drop_down,
+                                            color: Colors.black,
+                                          ),
+                                          offset: const Offset(0, 50),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          color: Colors.white,
+                                          itemBuilder: (context) => [
+                                            const PopupMenuItem(
+                                              value: 'moviesapi',
+                                              child: Text(
+                                                'Server 2',
+                                                style: TextStyle(
+                                                  color: Colors.black,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
                                               ),
-                                              const SizedBox(width: 8),
-                                              Text(
-                                                historyMovie?.progress != null && historyMovie!.progress! > 0
-                                                    ? 'Resume'
-                                                    : 'Player 1',
+                                            ),
+                                            const PopupMenuItem(
+                                              value: 'vidking',
+                                              child: Text(
+                                                'Server 3',
+                                                style: TextStyle(
+                                                  color: Colors.black,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ),
+                                            PopupMenuItem(
+                                              value: altProvider,
+                                              child: Text(
+                                                altLabel,
                                                 style: const TextStyle(
                                                   color: Colors.black,
                                                   fontWeight: FontWeight.bold,
-                                                  fontSize: 16,
                                                 ),
                                               ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                      // Divider
-                                      Container(
-                                        width: 1,
-                                        height: 30,
-                                        color: Colors.black12,
-                                      ),
-                                      // Dropdown (Player 2: MoviesAPI, Player 3: VidKing, Player 4: VidSrc)
-                                      PopupMenuButton<String>(
-                                        icon: const Icon(
-                                          Icons.arrow_drop_down,
-                                          color: Colors.black,
-                                        ),
-                                        offset: const Offset(0, 50),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        color: Colors.white,
-                                        itemBuilder: (context) => [
-                                          const PopupMenuItem(
-                                            value: 'moviesapi',
-                                            child: Text(
-                                              'Player 2 (MoviesAPI)',
-                                              style: TextStyle(
-                                                color: Colors.black,
-                                                fontWeight: FontWeight.bold,
-                                              ),
                                             ),
+                                          ],
+                                          onSelected: (val) {
+                                            _openWebPlayer(val);
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                )
+                              else
+                                // TV Show Play/Resume Button
+                                Expanded(
+                                  flex: 3,
+                                  child: Container(
+                                    height: 50,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(30),
+                                    ),
+                                    child: InkWell(
+                                      onTap: () async {
+                                        int s = historyMovie?.currentSeason ?? 1;
+                                        int e = historyMovie?.currentEpisode ?? 1;
+                                        if (_details?.seasons != null && _details!.seasons!.isNotEmpty) {
+                                          setState(() {
+                                            _selectedSeason = _details!.seasons!.firstWhere(
+                                              (sea) => sea.seasonNumber == s,
+                                              orElse: () => _details!.seasons!.first,
+                                            );
+                                            _selectedEpisode = e;
+                                          });
+                                        } else {
+                                          _selectedEpisode = e;
+                                        }
+                                        
+                                        await _loadSeasonDetails(s);
+                                        _openWebPlayer(defaultProvider);
+                                      },
+                                      borderRadius: BorderRadius.circular(30),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            historyMovie?.currentSeason != null
+                                                ? Icons.play_circle_filled
+                                                : Icons.play_arrow_rounded,
+                                            color: Colors.black,
+                                            size: 28,
                                           ),
-                                          const PopupMenuItem(
-                                            value: 'vidking',
-                                            child: Text(
-                                              'Player 3 (VidKing)',
-                                              style: TextStyle(
-                                                color: Colors.black,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                          ),
-                                          const PopupMenuItem(
-                                            value: 'vsembed',
-                                            child: Text(
-                                              'Player 4 (vsembed)',
-                                              style: TextStyle(
-                                                color: Colors.black,
-                                                fontWeight: FontWeight.bold,
-                                              ),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            historyMovie?.currentSeason != null
+                                                ? 'Resume S${historyMovie!.currentSeason} E${historyMovie.currentEpisode}'
+                                                : 'Play S1 E1',
+                                            style: const TextStyle(
+                                              color: Colors.black,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 16,
                                             ),
                                           ),
                                         ],
-                                        onSelected: (val) {
-                                          _openWebPlayer(val);
-                                        },
                                       ),
-                                    ],
+                                    ),
                                   ),
                                 ),
-                              )
-                            else
-                              // TV Show Play/Resume Button
-                              Expanded(
-                                flex: 3,
-                                child: Container(
-                                  height: 50,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(30),
-                                  ),
-                                  child: InkWell(
-                                    onTap: () async {
-                                      int s = historyMovie?.currentSeason ?? 1;
-                                      int e = historyMovie?.currentEpisode ?? 1;
-                                      if (_details?.seasons != null && _details!.seasons!.isNotEmpty) {
-                                        setState(() {
-                                          _selectedSeason = _details!.seasons!.firstWhere(
-                                            (sea) => sea.seasonNumber == s,
-                                            orElse: () => _details!.seasons!.first,
+                              const SizedBox(width: 12),
+                              // Trailer Button
+                              if (m.trailerUrl != null)
+                                Expanded(
+                                  flex: 2,
+                                  child: Container(
+                                    height: 50,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white10,
+                                      borderRadius: BorderRadius.circular(30),
+                                    ),
+                                    child: InkWell(
+                                      onTap: () async {
+                                        final uri = Uri.parse(m.trailerUrl!);
+                                        if (await canLaunchUrl(uri)) {
+                                          await launchUrl(
+                                            uri,
+                                            mode: LaunchMode.externalApplication,
                                           );
-                                          _selectedEpisode = e;
-                                        });
-                                      } else {
-                                        _selectedEpisode = e;
-                                      }
-                                      
-                                      // Ensure the episodes list is loaded for the target season
-                                      // before passing it to the WebPlayer's drawer.
-                                      await _loadSeasonDetails(s);
-                                      
-                                      _openWebPlayer('vidlink');
-                                    },
-                                    borderRadius: BorderRadius.circular(30),
-                                    child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        Icon(
-                                          historyMovie?.currentSeason != null
-                                              ? Icons.play_circle_filled
-                                              : Icons.play_arrow_rounded,
-                                          color: Colors.black,
-                                          size: 28,
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          historyMovie?.currentSeason != null
-                                              ? 'Resume S${historyMovie!.currentSeason} E${historyMovie.currentEpisode}'
-                                              : 'Play S1 E1',
-                                          style: const TextStyle(
-                                            color: Colors.black,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 16,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            const SizedBox(width: 12),
-                            // Trailer Button
-                            if (m.trailerUrl != null)
-                              Expanded(
-                                flex: 2,
-                                child: Container(
-                                  height: 50,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white10,
-                                    borderRadius: BorderRadius.circular(30),
-                                  ),
-                                  child: InkWell(
-                                    onTap: () async {
-                                      final uri = Uri.parse(m.trailerUrl!);
-                                      if (await canLaunchUrl(uri)) {
-                                        await launchUrl(
-                                          uri,
-                                          mode: LaunchMode.externalApplication,
-                                        );
-                                      }
-                                    },
-                                    borderRadius: BorderRadius.circular(30),
-                                    child: const Row(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        Icon(
-                                          Icons.movie_creation_outlined,
-                                          color: Colors.white,
-                                        ),
-                                        SizedBox(width: 8),
-                                        Text(
-                                          'Trailer',
-                                          style: TextStyle(
+                                        }
+                                      },
+                                      borderRadius: BorderRadius.circular(30),
+                                      child: const Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.movie_creation_outlined,
                                             color: Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 16,
                                           ),
-                                        ),
-                                      ],
+                                          SizedBox(width: 8),
+                                          Text(
+                                            'Trailer',
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 16,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            const SizedBox(width: 12),
-                            // Share Button
-                            Container(
-                              height: 50,
-                              width: 50,
-                              decoration: BoxDecoration(
-                                color: Colors.white10,
-                                borderRadius: BorderRadius.circular(30),
-                              ),
-                              child: InkWell(
-                                onTap: _shareMovie,
-                                borderRadius: BorderRadius.circular(30),
-                                child: const Icon(
-                                  Icons.share_outlined,
-                                  color: Colors.white,
+                              const SizedBox(width: 12),
+                              // Share Button
+                              Container(
+                                height: 50,
+                                width: 50,
+                                decoration: BoxDecoration(
+                                  color: Colors.white10,
+                                  borderRadius: BorderRadius.circular(30),
+                                ),
+                                child: InkWell(
+                                  onTap: _shareMovie,
+                                  borderRadius: BorderRadius.circular(30),
+                                  child: const Icon(
+                                    Icons.share_outlined,
+                                    color: Colors.white,
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
+                            ],
+                          );
+                        }(),
                         const SizedBox(height: 24),
 
                         Text(
@@ -886,7 +889,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                               _selectedEpisode =
                                                   ep.episodeNumber;
                                             });
-                                            _openWebPlayer('vidlink');
+                                            _openWebPlayer(Platform.isIOS ? 'vsembed' : 'vidlink');
                                           },
                                     borderRadius: BorderRadius.circular(4),
                                     child: Row(

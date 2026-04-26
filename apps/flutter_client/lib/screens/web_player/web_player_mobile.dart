@@ -607,7 +607,7 @@ if (window.flutterTrackingActive) {
       season: _currentSeason,
       episode: _currentEpisode,
       imdbId: widget.details.imdbId,
-      provider: 'vidlink',
+      provider: Platform.isIOS ? 'vsembed' : 'vidlink',
     );
 
     // 3. Load new URL

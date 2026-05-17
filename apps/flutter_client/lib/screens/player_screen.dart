@@ -109,10 +109,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _browsingSeason = widget.season;
     _episodes = widget.episodes;
 
-    // Set screen orientations to landscape for immersive viewing
+    // Enable auto-rotation for the player (allow all orientations)
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
     ]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 

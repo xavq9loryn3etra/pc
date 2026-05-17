@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'web_player_platform_interface.dart';
+import '../../models/movie.dart';
 
 class WebPlayerStub extends WebPlayerPlatform {
   const WebPlayerStub({
@@ -33,3 +34,26 @@ class _WebPlayerStubState extends State<WebPlayerStub> {
     );
   }
 }
+
+Widget createWebPlayer(
+  String url,
+  VoidCallback onClose,
+  Movie movie,
+  int? season,
+  int? episode,
+  List<Episode> episodes,
+  List<Season>? seasons,
+  Movie details,
+) {
+  return WebPlayerStub(
+    initialUrl: url,
+    onClose: onClose,
+    movie: movie,
+    season: season,
+    episode: episode,
+    episodes: episodes,
+    seasons: seasons,
+    details: details,
+  );
+}
+

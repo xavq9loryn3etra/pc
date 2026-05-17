@@ -111,7 +111,7 @@ class TMDBService {
           '$_baseUrl/movie/$id',
           queryParameters: {
             'api_key': _apiKey,
-            'append_to_response': 'credits,videos,images,release_dates',
+            'append_to_response': 'credits,videos,images,release_dates,external_ids',
             'include_image_language': 'en,null',
           },
         );
@@ -280,7 +280,9 @@ class TMDBService {
 
     // IMDB ID
     String? imdbId;
-    if (m['external_ids'] != null) {
+    if (m['imdb_id'] != null && m['imdb_id'].toString().isNotEmpty) {
+      imdbId = m['imdb_id'];
+    } else if (m['external_ids'] != null) {
       imdbId = m['external_ids']['imdb_id'];
     }
 

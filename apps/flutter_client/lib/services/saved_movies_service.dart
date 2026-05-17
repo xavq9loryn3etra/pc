@@ -174,15 +174,7 @@ class SavedMoviesService with ChangeNotifier {
       progress: progress ?? existingProgress ?? (isSameEpisode ? movie.progress : null),
     );
 
-    // STRICT: Only allow forward progress or exactly same
-    // This prevents ANY stale/old saves from overwriting current progress
-    if (progress != null && existingProgress != null) {
-      if (progress < existingProgress) {
-        print(
-            "DEBUG: BLOCKED backwards save. Previous: $existingProgress, New: $progress");
-        return;
-      }
-    }
+
 
     print(
         "DEBUG: Saving history for ID=${movie.id} progress=$progress (prev=$existingProgress)");

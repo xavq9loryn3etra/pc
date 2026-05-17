@@ -111,7 +111,7 @@ class _MoviePosterState extends State<MoviePoster> {
                 // History Badge (S1 E1)
                 if (widget.movie.type == 'tv' && currentSeason != null && currentEpisode != null)
                   Positioned(
-                    bottom: 8,
+                    bottom: (progress != null && progress > 0) ? 18 : 8,
                     right: 8,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -137,16 +137,23 @@ class _MoviePosterState extends State<MoviePoster> {
                 // Progress Bar
                 if (progress != null && progress > 0)
                   Positioned(
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    child: LinearProgressIndicator(
-                      value: progress,
-                      backgroundColor: Colors.white10,
-                      valueColor: const AlwaysStoppedAnimation<Color>(
-                        AppTheme.primaryColor,
+                    bottom: 6,
+                    left: 12,
+                    right: 12,
+                    child: Container(
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(4),
                       ),
-                      minHeight: 3,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: FractionallySizedBox(
+                          alignment: Alignment.centerLeft,
+                          widthFactor: progress.clamp(0.0, 1.0),
+                          child: Container(color: AppTheme.primaryColor),
+                        ),
+                      ),
                     ),
                   ),
               ],

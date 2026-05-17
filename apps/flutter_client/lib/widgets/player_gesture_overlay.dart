@@ -3,17 +3,20 @@ import 'package:flutter/material.dart';
 import 'package:volume_controller/volume_controller.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 
-// Netflix-style gestures
+// Netflix/YouTube-style gestures
 
-/// Netflix-style vertical swipe overlay for volume (right) and brightness (left).
+/// Netflix/YouTube-style vertical swipe overlay for volume (right) and brightness (left),
+/// along with premium YouTube-style double-tap to seek (10s) with glowing animated overlays.
 ///
 /// Wraps its [child] in a raw [Listener] so pointer events are captured as a
 /// PARENT of the WebView — not as a sibling overlay. This guarantees we receive
-/// onPointerMove even when a PlatformView (WebView) handles touches natively.
+/// pointer events even when a PlatformView (WebView) handles touches natively.
 class PlayerGestureOverlay extends StatefulWidget {
   final Widget child;
   final VoidCallback? onTap;
   final VoidCallback? onSwipeUp;
+  final ValueChanged<bool>? onDoubleTapSeek;
+  
   /// When false, all gesture processing is disabled (e.g. when the episode
   /// drawer is open and should receive all touches).
   final bool enabled;
@@ -23,6 +26,7 @@ class PlayerGestureOverlay extends StatefulWidget {
     required this.child,
     this.onTap,
     this.onSwipeUp,
+    this.onDoubleTapSeek,
     this.enabled = true,
   });
 
@@ -46,6 +50,13 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   late final AnimationController _fadeController;
   Timer? _fadeTimer;
 
+  // Double tap seeking state variables
+  DateTime? _lastTapTime;
+  Offset? _lastTapPosition;
+  bool _showLeftSeekIndicator = false;
+  bool _showRightSeekIndicator = false;
+  int _seekOverlayPulseCount = 0;
+
   @override
   void initState() {
     super.initState();
@@ -66,6 +77,30 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
         .resetApplicationScreenBrightness()
         .catchError((_) {});
     super.dispose();
+  }
+
+  void _triggerDoubleTapAnimation(bool isForward) {
+    setState(() {
+      if (isForward) {
+        _showRightSeekIndicator = true;
+        _showLeftSeekIndicator = false;
+      } else {
+        _showLeftSeekIndicator = true;
+        _showRightSeekIndicator = false;
+      }
+      _seekOverlayPulseCount++;
+    });
+    
+    final currentPulse = _seekOverlayPulseCount;
+    // Pulse animation/fade-out after 650ms
+    Future.delayed(const Duration(milliseconds: 650), () {
+      if (mounted && _seekOverlayPulseCount == currentPulse) {
+        setState(() {
+          _showLeftSeekIndicator = false;
+          _showRightSeekIndicator = false;
+        });
+      }
+    });
   }
 
   // ───────────────── Pointer Handlers ─────────────────
@@ -174,8 +209,30 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
 
   void _onPointerUp(PointerUpEvent event) {
     if (!widget.enabled) return;
+    
     if (!_isDragging && _pointerStart != null && !_isBottomEdgeSwipe) {
-      widget.onTap?.call();
+      final now = DateTime.now();
+      final tapPos = event.position;
+
+      if (_lastTapTime != null && 
+          now.difference(_lastTapTime!) < const Duration(milliseconds: 320) &&
+          _lastTapPosition != null &&
+          (tapPos - _lastTapPosition!).distance < 35.0) {
+        // Registered a beautiful double tap!
+        final screenWidth = MediaQuery.of(context).size.width;
+        final isForward = tapPos.dx > screenWidth / 2;
+
+        widget.onDoubleTapSeek?.call(isForward);
+        _triggerDoubleTapAnimation(isForward);
+
+        _lastTapTime = null; // Avoid triple taps triggering immediately again
+      } else {
+        _lastTapTime = now;
+        _lastTapPosition = tapPos;
+
+        // Perform standard single-tap overlay toggle
+        widget.onTap?.call();
+      }
     }
 
     _pointerStart = null;
@@ -207,6 +264,8 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: _onPointerDown,
@@ -215,8 +274,116 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
       onPointerCancel: _onPointerCancel,
       child: Stack(
         children: [
-          // The actual content (WebView + other overlays)
+          // The actual content (Video + custom controls)
           Positioned.fill(child: widget.child),
+
+          // Left Double Tap Seek Overlay
+          if (_showLeftSeekIndicator)
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: size.width * 0.35,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: ClipPath(
+                      clipper: LeftArcClipper(),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: RadialGradient(
+                            center: Alignment.centerLeft,
+                            radius: 1.0,
+                            colors: [
+                              Colors.white.withValues(alpha: 0.12),
+                              Colors.white.withValues(alpha: 0.0),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.center,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 16.0), // push slightly away from center line
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const _DoubleTapArrows(isForward: false),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '10 seconds',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              shadows: [
+                                Shadow(color: Colors.black54, blurRadius: 4),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          // Right Double Tap Seek Overlay
+          if (_showRightSeekIndicator)
+            Positioned(
+              right: 0,
+              top: 0,
+              bottom: 0,
+              width: size.width * 0.35,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: ClipPath(
+                      clipper: RightArcClipper(),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: RadialGradient(
+                            center: Alignment.centerRight,
+                            radius: 1.0,
+                            colors: [
+                              Colors.white.withValues(alpha: 0.12),
+                              Colors.white.withValues(alpha: 0.0),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.center,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 16.0), // push slightly away from center line
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const _DoubleTapArrows(isForward: true),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '10 seconds',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              shadows: [
+                                Shadow(color: Colors.black54, blurRadius: 4),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
           // Volume indicator — right side
           if (_activeGesture == _GestureType.volume)
@@ -297,6 +464,115 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
           ),
         ),
       ),
+    );
+  }
+}
+
+// ───────────────── Custom Clippers ─────────────────
+
+class LeftArcClipper extends CustomClipper<Path> {
+  @override
+  Path getClip(Size size) {
+    final path = Path();
+    path.lineTo(0, size.height);
+    path.quadraticBezierTo(
+      size.width,
+      size.height * 0.5,
+      0,
+      0,
+    );
+    return path;
+  }
+
+  @override
+  bool shouldReclip(CustomClipper<Path> oldClipper) => false;
+}
+
+class RightArcClipper extends CustomClipper<Path> {
+  @override
+  Path getClip(Size size) {
+    final path = Path();
+    path.moveTo(size.width, 0);
+    path.lineTo(size.width, size.height);
+    path.quadraticBezierTo(
+      0,
+      size.height * 0.5,
+      size.width,
+      0,
+    );
+    return path;
+  }
+
+  @override
+  bool shouldReclip(CustomClipper<Path> oldClipper) => false;
+}
+
+// ───────────────── Chasing Double-Tap Arrows Animation ─────────────────
+
+class _DoubleTapArrows extends StatefulWidget {
+  final bool isForward;
+  const _DoubleTapArrows({required this.isForward});
+
+  @override
+  State<_DoubleTapArrows> createState() => _DoubleTapArrowsState();
+}
+
+class _DoubleTapArrowsState extends State<_DoubleTapArrows>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(3, (index) {
+        final double step = index / 3.0;
+        return AnimatedBuilder(
+          animation: _controller,
+          builder: (context, child) {
+            double opacity = 0.3;
+            // Create a chasing arrow light effect
+            double val = (_controller.value - step) % 1.0;
+            if (val < 0) val += 1.0;
+            if (widget.isForward) {
+              opacity = 0.3 + (1.0 - val) * 0.7;
+            } else {
+              // Backward chases from right to left (index 2 to 0)
+              double valBack = (_controller.value - (2 - index) / 3.0) % 1.0;
+              if (valBack < 0) valBack += 1.0;
+              opacity = 0.3 + (1.0 - valBack) * 0.7;
+            }
+            
+            Widget arrow = Icon(
+              Icons.play_arrow_rounded,
+              color: Colors.white.withValues(alpha: opacity),
+              size: 22,
+            );
+            if (!widget.isForward) {
+              arrow = RotatedBox(
+                quarterTurns: 2,
+                child: arrow,
+              );
+            }
+            return arrow;
+          },
+        );
+      }),
     );
   }
 }

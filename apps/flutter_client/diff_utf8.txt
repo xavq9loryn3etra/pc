@@ -1,0 +1,979 @@
+﻿diff --git a/apps/flutter_client/lib/screens/player_screen.dart b/apps/flutter_client/lib/screens/player_screen.dart
+index e5fb9e6..72aad11 100644
+--- a/apps/flutter_client/lib/screens/player_screen.dart
++++ b/apps/flutter_client/lib/screens/player_screen.dart
+@@ -1,36 +1,969 @@
++import 'dart:async';
++import 'dart:io';
+ import 'package:flutter/material.dart';
++import 'package:flutter/services.dart';
+ import 'package:media_kit/media_kit.dart';
+ import 'package:media_kit_video/media_kit_video.dart';
++import 'package:libtorrent_flutter/libtorrent_flutter.dart';
++import 'package:screen_brightness/screen_brightness.dart';
++import '../services/saved_movies_service.dart';
++import '../services/torrent/torrent_engine_service.dart';
++import '../services/torrent/torrent_index_service.dart';
++import '../services/torrent/stream_resolver.dart';
++import '../models/movie.dart';
++import '../theme/app_theme.dart';
+ 
+ class PlayerScreen extends StatefulWidget {
+   final String url;
+-  const PlayerScreen({super.key, required this.url});
++  final int torrentId;
++  final TorrentStream selectedStream;
++  final List<TorrentStream> availableStreams;
++  final Movie movie;
++  final Movie details;
++  final int? season;
++  final int? episode;
++  final List<Episode> episodes;
++
++  const PlayerScreen({
++    super.key,
++    required this.url,
++    required this.torrentId,
++    required this.selectedStream,
++    required this.availableStreams,
++    required this.movie,
++    required this.details,
++    this.season,
++    this.episode,
++    required this.episodes,
++  });
+ 
+   @override
+   State<PlayerScreen> createState() => _PlayerScreenState();
+ }
+ 
+ class _PlayerScreenState extends State<PlayerScreen> {
+-  late final player = Player();
+-  late final controller = VideoController(player);
++  late final Player player;
++  late final VideoController controller;
++
++  // Mutable Stream/Torrent State
++  late TorrentStream _currentStream;
++  late int _torrentId;
++  late String _streamUrl;
++  late int? _currentEpisode;
++
++  // Peer & Torrent Statistics
++  int _peers = 0;
++  double _downloadSpeed = 0.0;
++  StreamSubscription? _torrentSub;
++
++  // UI Control State
++  bool _controlsVisible = true;
++  Timer? _controlsTimer;
++  bool _switchingQuality = false;
++  String? _switchingMessage;
++
++  // Gesture Controls (Swipe overlays)
++  double? _volumeGestureValue;
++  double? _brightnessGestureValue;
++  bool _showVolumeIndicator = false;
++  bool _showBrightnessIndicator = false;
++  Timer? _gestureIndicatorTimer;
++
++  // Playback position tracking
++  Duration _currentPosition = Duration.zero;
++  Duration _duration = Duration.zero;
++  Duration _bufferPosition = Duration.zero;
++  StreamSubscription? _positionSub;
++  StreamSubscription? _durationSub;
++  StreamSubscription? _bufferSub;
++
++  final _resolver = StreamResolver();
+ 
+   @override
+   void initState() {
+     super.initState();
+-    player.open(Media(widget.url));
++    _currentStream = widget.selectedStream;
++    _torrentId = widget.torrentId;
++    _streamUrl = widget.url;
++    _currentEpisode = widget.episode;
++
++    // Set screen orientations to landscape for immersive viewing
++    SystemChrome.setPreferredOrientations([
++      DeviceOrientation.landscapeLeft,
++      DeviceOrientation.landscapeRight,
++    ]);
++    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
++
++    // Initialize media_kit Player
++    player = Player();
++    controller = VideoController(player);
++
++    _initPlayer();
++    _subscribeToTorrent(_torrentId);
++    _resetControlsTimer();
++  }
++
++  Future<void> _initPlayer() async {
++    // Configure MPV for torrent streaming — P2P data arrives in bursts,
++    // so we need a larger read-ahead buffer to avoid constant stalling.
++    final mpv = player.platform as NativePlayer;
++    await mpv.setProperty('demuxer-readahead-secs', '30');
++    await mpv.setProperty('demuxer-max-bytes', '150M');   // 150MB demuxer cache
++    await mpv.setProperty('demuxer-max-back-bytes', '50M'); // 50MB back-buffer
++    await mpv.setProperty('cache', 'yes');
++    await mpv.setProperty('cache-secs', '60');             // 60s of video cached ahead
++    player.open(Media(_streamUrl));
++
++    // Listen to video position
++    _positionSub = player.stream.position.listen((pos) {
++      if (mounted) {
++        setState(() => _currentPosition = pos);
++        // Save progress periodically (throttled by service)
++        _saveProgress();
++      }
++    });
++
++    // Listen to total duration
++    _durationSub = player.stream.duration.listen((dur) {
++      if (mounted) setState(() => _duration = dur);
++    });
++
++    // Listen to buffer position
++    _bufferSub = player.stream.buffer.listen((buf) {
++      if (mounted) setState(() => _bufferPosition = buf);
++    });
++  }
++
++  void _subscribeToTorrent(int id) {
++    _torrentSub?.cancel();
++    _torrentSub = LibtorrentFlutter.instance.torrentUpdates.listen((torrents) {
++      final t = torrents[id];
++      if (t != null && mounted) {
++        setState(() {
++          _peers = t.numPeers;
++          _downloadSpeed = t.downloadRate / 1024 / 1024; // Convert to MB/s
++        });
++      }
++    });
++  }
++
++  void _saveProgress() {
++    if (_duration.inSeconds > 0) {
++      final double progress = _currentPosition.inSeconds / _duration.inSeconds;
++      SavedMoviesService().addToHistory(
++        widget.movie,
++        season: widget.season,
++        episode: _currentEpisode,
++        progress: progress,
++      );
++    }
++  }
++
++  void _resetControlsTimer() {
++    _controlsTimer?.cancel();
++    if (player.state.playing) {
++      _controlsTimer = Timer(const Duration(seconds: 4), () {
++        if (mounted && player.state.playing) {
++          setState(() => _controlsVisible = false);
++        }
++      });
++    }
++  }
++
++  void _toggleControls() {
++    setState(() {
++      _controlsVisible = !_controlsVisible;
++      if (_controlsVisible) _resetControlsTimer();
++    });
++  }
++
++  void _playPause() {
++    if (player.state.playing) {
++      player.pause();
++      setState(() => _controlsVisible = true);
++      _controlsTimer?.cancel();
++    } else {
++      player.play();
++      _resetControlsTimer();
++    }
++  }
++
++  void _skipBackward() {
++    final newPos = _currentPosition - const Duration(seconds: 10);
++    player.seek(newPos < Duration.zero ? Duration.zero : newPos);
++    _resetControlsTimer();
++  }
++
++  void _skipForward() {
++    final newPos = _currentPosition + const Duration(seconds: 10);
++    player.seek(newPos > _duration ? _duration : newPos);
++    _resetControlsTimer();
++  }
++
++  /// Perform premium mid-playback quality switching keeping exact timestamp
++  Future<void> _switchQuality(TorrentStream newStream) async {
++    if (newStream.infoHash == _currentStream.infoHash) return;
++
++    final savedPos = _currentPosition;
++    player.pause();
++
++    setState(() {
++      _switchingQuality = true;
++      _switchingMessage = 'Switching quality to ${newStream.quality ?? "HD"}...';
++      _controlsVisible = false;
++    });
++
++    try {
++      // 1. Dispose old torrent FFI daemon to save resources
++      _resolver.cleanup(_torrentId);
++
++      // 2. Spin up new torrent
++      final result = await _resolver.resolve(newStream);
++
++      // 3. Open new media at exactly saved position
++      await player.open(Media(result.streamUrl), play: false);
++      await player.seek(savedPos);
++      player.play();
++
++      if (mounted) {
++        setState(() {
++          _currentStream = newStream;
++          _torrentId = result.torrentId;
++          _streamUrl = result.streamUrl;
++          _switchingQuality = false;
++          _resetControlsTimer();
++        });
++        _subscribeToTorrent(_torrentId);
++      }
++    } catch (e) {
++      if (mounted) {
++        setState(() {
++          _switchingQuality = false;
++        });
++        ScaffoldMessenger.of(context).showSnackBar(
++          SnackBar(
++            backgroundColor: Colors.red[900],
++            content: Text('Failed to switch quality: $e'),
++          ),
++        );
++      }
++    }
++  }
++
++  /// Netflix Auto Play Next Episode Feature
++  Future<void> _playNextEpisode() async {
++    if (_currentEpisode == null || widget.episodes.isEmpty) return;
++
++    final currentIndex = widget.episodes.indexWhere((e) => e.episodeNumber == _currentEpisode);
++    if (currentIndex == -1 || currentIndex >= widget.episodes.length - 1) return;
++
++    final nextEp = widget.episodes[currentIndex + 1];
++
++    setState(() {
++      _switchingQuality = true;
++      _switchingMessage = 'Loading Next Episode: S${widget.season} E${nextEp.episodeNumber}...';
++      _controlsVisible = false;
++    });
++
++    player.pause();
++
++    try {
++      // 1. Clean up old torrent
++      _resolver.cleanup(_torrentId);
++
++      // 2. Fetch Streams for Next Episode from Torrentio
++      final torrentIndex = TorrentIndexService();
++      final imdbId = widget.details.imdbId ?? widget.details.id;
++      final nextStreams = await torrentIndex.getSeriesStreams(imdbId, widget.season ?? 1, nextEp.episodeNumber);
++
++      if (nextStreams.isEmpty) {
++        throw Exception('No streams found for the next episode.');
++      }
++
++      // 3. Sort & Resolve Best Option (First stream)
++      nextStreams.sort((a, b) {
++        int score(TorrentStream s) {
++          int sc = 0;
++          final q = s.quality?.toLowerCase() ?? '';
++          if (q.contains('4k') || q.contains('2160')) sc += 3000;
++          else if (q.contains('1080')) sc += 2000;
++          else if (q.contains('720')) sc += 1000;
++          score(s) => sc + (s.seeders ?? 0).clamp(0, 1000);
++          return sc;
++        }
++        return score(b) - score(a);
++      });
++
++      final bestStream = nextStreams.first;
++      final result = await _resolver.resolve(bestStream);
++
++      // 4. Save history for the next episode
++      await SavedMoviesService().addToHistory(
++        widget.movie,
++        season: widget.season,
++        episode: nextEp.episodeNumber,
++      );
++
++      // 5. Play in same controller
++      await player.open(Media(result.streamUrl));
++
++      if (mounted) {
++        setState(() {
++          _currentStream = bestStream;
++          _torrentId = result.torrentId;
++          _streamUrl = result.streamUrl;
++          _currentEpisode = nextEp.episodeNumber;
++          _switchingQuality = false;
++          _currentPosition = Duration.zero;
++          _duration = Duration.zero;
++          _bufferPosition = Duration.zero;
++          _resetControlsTimer();
++        });
++        _subscribeToTorrent(_torrentId);
++      }
++    } catch (e) {
++      if (mounted) {
++        setState(() {
++          _switchingQuality = false;
++        });
++        ScaffoldMessenger.of(context).showSnackBar(
++          SnackBar(
++            backgroundColor: Colors.red[900],
++            content: Text('Failed to play next episode: $e'),
++          ),
++        );
++      }
++    }
++  }
++
++  // Swipe Gestures for Volume & Brightness (Netflix Style)
++  void _handleVerticalDragUpdate(DragUpdateDetails details, double screenWidth) {
++    final double dragDelta = -details.primaryDelta! / 200.0; // Invert delta direction
++
++    if (details.globalPosition.dx < screenWidth / 2) {
++      // Left side: Brightness
++      _showBrightnessIndicator = true;
++      _showVolumeIndicator = false;
++      _brightnessGestureValue = ((_brightnessGestureValue ?? 0.5) + dragDelta).clamp(0.0, 1.0);
++      try {
++        ScreenBrightness().setScreenBrightness(_brightnessGestureValue!);
++      } catch (_) {}
++    } else {
++      // Right side: Volume
++      _showVolumeIndicator = true;
++      _showBrightnessIndicator = false;
++      _volumeGestureValue = ((_volumeGestureValue ?? (player.state.volume / 100)) + dragDelta).clamp(0.0, 1.0);
++      player.setVolume(_volumeGestureValue! * 100);
++    }
++    setState(() {});
++
++    _gestureIndicatorTimer?.cancel();
++    _gestureIndicatorTimer = Timer(const Duration(milliseconds: 1000), () {
++      if (mounted) {
++        setState(() {
++          _showVolumeIndicator = false;
++          _showBrightnessIndicator = false;
++        });
++      }
++    });
+   }
+ 
+   @override
+   void dispose() {
++    // 1. Reset system navigation and landscape orientation to app defaults
++    SystemChrome.setPreferredOrientations([
++      DeviceOrientation.portraitUp,
++    ]);
++    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
++
++    // Restore default screen brightness
++    try {
++      ScreenBrightness().resetScreenBrightness();
++    } catch (_) {}
++
++    // 2. Save final history position
++    _saveProgress();
++
++    // 3. Cancel subscriptions & timers
++    _positionSub?.cancel();
++    _durationSub?.cancel();
++    _bufferSub?.cancel();
++    _torrentSub?.cancel();
++    _controlsTimer?.cancel();
++    _gestureIndicatorTimer?.cancel();
++
++    // 4. Dispose players and clean up active FFI torrent process
+     player.dispose();
++    _resolver.cleanup(_torrentId);
++
+     super.dispose();
+   }
+ 
++  String _formatDuration(Duration duration) {
++    final hours = duration.inHours;
++    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
++    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
++    return hours > 0 ? '$hours:$minutes:$seconds' : '$minutes:$seconds';
++  }
++
++  void _showQualityPicker() {
++    _controlsTimer?.cancel();
++    showModalBottomSheet(
++      context: context,
++      backgroundColor: Colors.transparent,
++      builder: (sheetContext) {
++        return Container(
++          decoration: const BoxDecoration(
++            color: Color(0xFF0C0C0C),
++            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
++            border: Border(top: BorderSide(color: Colors.white12, width: 0.5)),
++          ),
++          padding: const EdgeInsets.all(20),
++          child: Column(
++            mainAxisSize: MainAxisSize.min,
++            crossAxisAlignment: CrossAxisAlignment.start,
++            children: [
++              const Text(
++                'Switch Quality',
++                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
++              ),
++              const SizedBox(height: 12),
++              ListView.builder(
++                shrinkWrap: true,
++                itemCount: widget.availableStreams.length,
++                itemBuilder: (context, index) {
++                  final stream = widget.availableStreams[index];
++                  final isCurrent = stream.infoHash == _currentStream.infoHash;
++
++                  return ListTile(
++                    contentPadding: EdgeInsets.zero,
++                    leading: Icon(
++                      Icons.check,
++                      color: isCurrent ? AppTheme.primaryColor : Colors.transparent,
++                    ),
++                    title: Row(
++                      children: [
++                        Text(
++                          stream.quality ?? '1080p',
++                          style: TextStyle(
++                            color: isCurrent ? AppTheme.primaryColor : Colors.white,
++                            fontWeight: FontWeight.bold,
++                          ),
++                        ),
++                        const SizedBox(width: 8),
++                        Text(
++                          stream.size ?? '',
++                          style: const TextStyle(color: Colors.white38, fontSize: 12),
++                        ),
++                      ],
++                    ),
++                    trailing: Text(
++                      '👤 ${stream.seeders ?? 0}',
++                      style: const TextStyle(color: Colors.green, fontSize: 12, fontWeight: FontWeight.bold),
++                    ),
++                    onTap: () {
++                      Navigator.pop(sheetContext);
++                      _switchQuality(stream);
++                    },
++                  );
++                },
++              ),
++            ],
++          ),
++        );
++      },
++    ).then((_) => _resetControlsTimer());
++  }
++
+   @override
+   Widget build(BuildContext context) {
++    final size = MediaQuery.of(context).size;
++    final hasNextEpisode = widget.details.type == 'tv' &&
++        _currentEpisode != null &&
++        widget.episodes.isNotEmpty &&
++        widget.episodes.indexWhere((e) => e.episodeNumber == _currentEpisode) < widget.episodes.length - 1;
++
+     return Scaffold(
+       backgroundColor: Colors.black,
+-      body: Center(child: Video(controller: controller)),
++      body: GestureDetector(
++        onTap: _toggleControls,
++        onVerticalDragUpdate: (details) => _handleVerticalDragUpdate(details, size.width),
++        child: Stack(
++          fit: StackFit.expand,
++          children: [
++            // Video Player
++            Center(
++              child: Hero(
++                tag: 'player_hero',
++                child: Video(
++                  controller: controller,
++                  controls: NoVideoControls, // Pure custom controls overlay
++                ),
++              ),
++            ),
++
++            // Gestures HUD Indicators
++            if (_showVolumeIndicator)
++              Positioned(
++                right: 40,
++                top: size.height / 2 - 60,
++                child: _buildGestureHUD(
++                  Icons.volume_up_rounded,
++                  'Volume',
++                  _volumeGestureValue ?? (player.state.volume / 100),
++                ),
++              ),
++            if (_showBrightnessIndicator)
++              Positioned(
++                left: 40,
++                top: size.height / 2 - 60,
++                child: _buildGestureHUD(
++                  Icons.brightness_5_rounded,
++                  'Brightness',
++                  _brightnessGestureValue ?? 0.5,
++                ),
++              ),
++
++            // Switching Quality Spinner
++            if (_switchingQuality)
++              Container(
++                color: Colors.black87,
++                child: Center(
++                  child: Column(
++                    mainAxisAlignment: MainAxisAlignment.center,
++                    children: [
++                      const CircularProgressIndicator(
++                        valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
++                      ),
++                      const SizedBox(height: 16),
++                      Text(
++                        _switchingMessage ?? 'Switching quality...',
++                        style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
++                      ),
++                    ],
++                  ),
++                ),
++              ),
++
++            // Direct Torrent Initial Buffer Indicator
++            if (!_switchingQuality && player.state.buffering)
++              Container(
++                color: Colors.black38,
++                child: Center(
++                  child: Column(
++                    mainAxisAlignment: MainAxisAlignment.center,
++                    children: [
++                      const CircularProgressIndicator(
++                        valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
++                      ),
++                      const SizedBox(height: 16),
++                      Text(
++                        'Buffering direct stream (↓ ${(_downloadSpeed).toStringAsFixed(1)} MB/s)...',
++                        style: const TextStyle(color: Colors.white70, fontSize: 14),
++                      ),
++                    ],
++                  ),
++                ),
++              ),
++
++            // Netflix-Style Interface Overlay
++            AnimatedOpacity(
++              opacity: _controlsVisible ? 1.0 : 0.0,
++              duration: const Duration(milliseconds: 300),
++              child: IgnorePointer(
++                ignoring: !_controlsVisible,
++                child: Stack(
++                  fit: StackFit.expand,
++                  children: [
++                    // Cinematic gradient — heavier on bottom for the seek bar
++                    Container(
++                      decoration: BoxDecoration(
++                        gradient: LinearGradient(
++                          begin: Alignment.topCenter,
++                          end: Alignment.bottomCenter,
++                          colors: [
++                            Colors.black.withOpacity(0.7),
++                            Colors.transparent,
++                            Colors.transparent,
++                            Colors.black.withOpacity(player.state.playing ? 0.8 : 0.92),
++                          ],
++                          stops: const [0.0, 0.18, 0.6, 1.0],
++                        ),
++                      ),
++                    ),
++
++                    // When paused: left-side cinematic gradient for metadata
++                    if (!player.state.playing)
++                      Positioned.fill(
++                        child: IgnorePointer(
++                          child: Container(
++                            decoration: BoxDecoration(
++                              gradient: LinearGradient(
++                                begin: Alignment.centerLeft,
++                                end: Alignment.centerRight,
++                                colors: [
++                                  Colors.black.withOpacity(0.85),
++                                  Colors.black.withOpacity(0.4),
++                                  Colors.transparent,
++                                ],
++                                stops: const [0.0, 0.35, 0.65],
++                              ),
++                            ),
++                          ),
++                        ),
++                      ),
++
++                    // ─── TOP BAR ───
++                    Positioned(
++                      top: 8 + MediaQuery.of(context).padding.top,
++                      left: 16,
++                      right: 16,
++                      child: Row(
++                        children: [
++                          IconButton(
++                            icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 22),
++                            onPressed: () => Navigator.pop(context),
++                          ),
++                          const SizedBox(width: 8),
++                          // Title (visible when playing)
++                          if (player.state.playing)
++                            Expanded(
++                              child: Text(
++                                widget.movie.title,
++                                maxLines: 1,
++                                overflow: TextOverflow.ellipsis,
++                                style: const TextStyle(
++                                  color: Colors.white,
++                                  fontSize: 15,
++                                  fontWeight: FontWeight.w600,
++                                ),
++                              ),
++                            )
++                          else
++                            const Spacer(),
++                          // Torrent stats pill
++                          Container(
++                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
++                            margin: const EdgeInsets.only(right: 12),
++                            decoration: BoxDecoration(
++                              color: Colors.white.withOpacity(0.08),
++                              borderRadius: BorderRadius.circular(20),
++                            ),
++                            child: Row(
++                              mainAxisSize: MainAxisSize.min,
++                              children: [
++                                Icon(Icons.arrow_downward_rounded, color: Colors.greenAccent.shade400, size: 12),
++                                const SizedBox(width: 4),
++                                Text(
++                                  '${_downloadSpeed.toStringAsFixed(1)} MB/s',
++                                  style: TextStyle(color: Colors.greenAccent.shade400, fontWeight: FontWeight.w600, fontSize: 11),
++                                ),
++                                Container(
++                                  width: 1, height: 12,
++                                  margin: const EdgeInsets.symmetric(horizontal: 8),
++                                  color: Colors.white12,
++                                ),
++                                const Icon(Icons.people_alt_outlined, color: Colors.white54, size: 12),
++                                const SizedBox(width: 4),
++                                Text('$_peers', style: const TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.w600)),
++                              ],
++                            ),
++                          ),
++                          // Quality badge
++                          InkWell(
++                            onTap: _showQualityPicker,
++                            borderRadius: BorderRadius.circular(6),
++                            child: Container(
++                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
++                              decoration: BoxDecoration(
++                                border: Border.all(color: Colors.white24, width: 1),
++                                borderRadius: BorderRadius.circular(6),
++                              ),
++                              child: Row(
++                                mainAxisSize: MainAxisSize.min,
++                                children: [
++                                  Text(
++                                    _currentStream.quality ?? '1080p',
++                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 11),
++                                  ),
++                                  const SizedBox(width: 2),
++                                  const Icon(Icons.unfold_more_rounded, color: Colors.white54, size: 14),
++                                ],
++                              ),
++                            ),
++                          ),
++                        ],
++                      ),
++                    ),
++
++                    // ─── CENTER PLAY CONTROLS ───
++                    Center(
++                      child: Row(
++                        mainAxisSize: MainAxisSize.min,
++                        crossAxisAlignment: CrossAxisAlignment.center,
++                        children: [
++                          Material(
++                            color: Colors.transparent,
++                            child: InkWell(
++                              onTap: _skipBackward,
++                              borderRadius: BorderRadius.circular(40),
++                              child: const Padding(
++                                padding: EdgeInsets.all(12),
++                                child: Icon(Icons.replay_10_rounded, color: Colors.white, size: 36),
++                              ),
++                            ),
++                          ),
++                          const SizedBox(width: 40),
++                          // Big play/pause — slightly elevated with a subtle glow
++                          Container(
++                            decoration: BoxDecoration(
++                              shape: BoxShape.circle,
++                              boxShadow: [
++                                BoxShadow(
++                                  color: Colors.white.withOpacity(0.08),
++                                  blurRadius: 30,
++                                  spreadRadius: 4,
++                                ),
++                              ],
++                            ),
++                            child: Material(
++                              color: Colors.transparent,
++                              child: InkWell(
++                                onTap: _playPause,
++                                borderRadius: BorderRadius.circular(40),
++                                child: Icon(
++                                  player.state.playing ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded,
++                                  color: Colors.white,
++                                  size: 72,
++                                ),
++                              ),
++                            ),
++                          ),
++                          const SizedBox(width: 40),
++                          Material(
++                            color: Colors.transparent,
++                            child: InkWell(
++                              onTap: _skipForward,
++                              borderRadius: BorderRadius.circular(40),
++                              child: const Padding(
++                                padding: EdgeInsets.all(12),
++                                child: Icon(Icons.forward_10_rounded, color: Colors.white, size: 36),
++                              ),
++                            ),
++                          ),
++                        ],
++                      ),
++                    ),
++
++                    // ─── LEFT METADATA PANEL (pause only) ───
++                    if (!player.state.playing)
++                      Positioned(
++                        left: 32,
++                        bottom: 100,
++                        width: size.width * 0.38,
++                        child: AnimatedSlide(
++                          offset: Offset.zero,
++                          duration: const Duration(milliseconds: 400),
++                          curve: Curves.easeOutCubic,
++                          child: Column(
++                            crossAxisAlignment: CrossAxisAlignment.start,
++                            children: [
++                              // "NOW PLAYING" label
++                              Container(
++                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
++                                decoration: BoxDecoration(
++                                  color: AppTheme.primaryColor.withOpacity(0.15),
++                                  borderRadius: BorderRadius.circular(4),
++                                ),
++                                child: Text(
++                                  'NOW PLAYING',
++                                  style: TextStyle(
++                                    color: AppTheme.primaryColor,
++                                    fontSize: 9,
++                                    fontWeight: FontWeight.w800,
++                                    letterSpacing: 2.0,
++                                  ),
++                                ),
++                              ),
++                              const SizedBox(height: 10),
++                              // Title
++                              Text(
++                                widget.movie.title,
++                                maxLines: 2,
++                                overflow: TextOverflow.ellipsis,
++                                style: const TextStyle(
++                                  color: Colors.white,
++                                  fontSize: 22,
++                                  fontWeight: FontWeight.w800,
++                                  height: 1.2,
++                                ),
++                              ),
++                              // TV episode info
++                              if (widget.details.type == 'tv' && _currentEpisode != null) ...[
++                                const SizedBox(height: 8),
++                                Row(
++                                  children: [
++                                    Container(
++                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
++                                      decoration: BoxDecoration(
++                                        color: Colors.white.withOpacity(0.1),
++                                        borderRadius: BorderRadius.circular(4),
++                                      ),
++                                      child: Text(
++                                        'S${widget.season} E$_currentEpisode',
++                                        style: const TextStyle(
++                                          color: Colors.white,
++                                          fontWeight: FontWeight.w700,
++                                          fontSize: 11,
++                                        ),
++                                      ),
++                                    ),
++                                    const SizedBox(width: 8),
++                                    Expanded(
++                                      child: () {
++                                        final currentEp = widget.episodes.firstWhere(
++                                          (ep) => ep.episodeNumber == _currentEpisode,
++                                          orElse: () => Episode(
++                                            id: 0, episodeNumber: _currentEpisode!,
++                                            name: '', overview: '', voteAverage: 0.0,
++                                          ),
++                                        );
++                                        return Text(
++                                          currentEp.name,
++                                          maxLines: 1,
++                                          overflow: TextOverflow.ellipsis,
++                                          style: const TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.w500),
++                                        );
++                                      }(),
++                                    ),
++                                  ],
++                                ),
++                              ],
++                              const SizedBox(height: 10),
++                              // Description
++                              Text(
++                                widget.movie.description,
++                                maxLines: 3,
++                                overflow: TextOverflow.ellipsis,
++                                style: TextStyle(
++                                  color: Colors.white.withOpacity(0.5),
++                                  fontSize: 11,
++                                  height: 1.5,
++                                ),
++                              ),
++                            ],
++                          ),
++                        ),
++                      ),
++
++                    // ─── BOTTOM BAR ───
++                    Positioned(
++                      bottom: 16 + MediaQuery.of(context).padding.bottom,
++                      left: 24,
++                      right: 24,
++                      child: Column(
++                        mainAxisSize: MainAxisSize.min,
++                        children: [
++                          // Seek slider
++                          SliderTheme(
++                            data: SliderThemeData(
++                              trackHeight: 3,
++                              activeTrackColor: AppTheme.primaryColor,
++                              inactiveTrackColor: Colors.white.withOpacity(0.15),
++                              thumbColor: AppTheme.primaryColor,
++                              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
++                              overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
++                              overlayColor: AppTheme.primaryColor.withOpacity(0.12),
++                            ),
++                            child: Slider(
++                              value: _currentPosition.inSeconds.toDouble().clamp(0.0, _duration.inSeconds.toDouble()),
++                              min: 0.0,
++                              max: _duration.inSeconds.toDouble() > 0 ? _duration.inSeconds.toDouble() : 1.0,
++                              onChanged: (val) {
++                                player.seek(Duration(seconds: val.toInt()));
++                              },
++                            ),
++                          ),
++                          // Timestamps + next episode row
++                          Padding(
++                            padding: const EdgeInsets.symmetric(horizontal: 8),
++                            child: Row(
++                              children: [
++                                Text(
++                                  _formatDuration(_currentPosition),
++                                  style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
++                                ),
++                                const SizedBox(width: 4),
++                                Text(
++                                  '/ ${_formatDuration(_duration)}',
++                                  style: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 12),
++                                ),
++                                const Spacer(),
++                                if (hasNextEpisode)
++                                  TextButton.icon(
++                                    style: TextButton.styleFrom(
++                                      backgroundColor: Colors.white.withOpacity(0.08),
++                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
++                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
++                                    ),
++                                    icon: const Icon(Icons.skip_next_rounded, color: Colors.white, size: 18),
++                                    label: const Text(
++                                      'Next Episode',
++                                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 11),
++                                    ),
++                                    onPressed: _playNextEpisode,
++                                  ),
++                              ],
++                            ),
++                          ),
++                        ],
++                      ),
++                    ),
++                  ],
++                ),
++              ),
++            ),
++          ],
++        ),
++      ),
++    );
++  }
++
++  Widget _buildGestureHUD(IconData icon, String label, double value) {
++    return Container(
++      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
++      decoration: BoxDecoration(
++        color: Colors.black87,
++        borderRadius: BorderRadius.circular(16),
++        border: Border.all(color: Colors.white10, width: 0.5),
++      ),
++      child: Column(
++        mainAxisSize: MainAxisSize.min,
++        children: [
++          Icon(icon, color: Colors.white, size: 28),
++          const SizedBox(height: 6),
++          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
++          const SizedBox(height: 8),
++          Container(
++            width: 80,
++            height: 4,
++            decoration: BoxDecoration(
++              color: Colors.white24,
++              borderRadius: BorderRadius.circular(2),
++            ),
++            alignment: Alignment.centerLeft,
++            child: FractionallySizedBox(
++              widthFactor: value,
++              child: Container(
++                decoration: BoxDecoration(
++                  color: AppTheme.primaryColor,
++                  borderRadius: BorderRadius.circular(2),
++                ),
++              ),
++            ),
++          ),
++        ],
++      ),
+     );
+   }
+ }

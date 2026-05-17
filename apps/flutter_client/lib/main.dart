@@ -21,6 +21,7 @@ import 'theme/app_theme.dart';
 import 'services/app_mode_service.dart';
 import 'services/saved_movies_service.dart';
 import 'services/deep_link_service.dart';
+import 'services/torrent/torrent_engine_service.dart';
 import 'widgets/custom_loader.dart';
 
 void main() async {
@@ -50,6 +51,7 @@ void main() async {
   MediaKit.ensureInitialized();
   await SavedMoviesService().init();
   await AppModeService().init();
+  await TorrentEngineService.instance.init();
 
   try {
     await dotenv.load(fileName: ".env");

@@ -71,14 +71,33 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
   }
 
+  double _getListHeight(BuildContext context) {
+    final double screenHeight = MediaQuery.of(context).size.height;
+    final double paddingTop = MediaQuery.of(context).padding.top;
+    final double paddingBottom = MediaQuery.of(context).padding.bottom;
+    final double availableHeight = screenHeight - paddingTop - paddingBottom;
+    return (availableHeight - 110).clamp(160.0, 280.0);
+  }
+
+  double _getImageHeight(double listHeight) {
+    return (listHeight - 80).clamp(90.0, 180.0);
+  }
+
+  double _getCardWidth(double imageHeight) {
+    return imageHeight * (16 / 9);
+  }
+
   void _scrollToCurrent() {
     // Only scroll to the playing episode if we're browsing the same season
     if (widget.currentSeason != widget.playingSeason) return;
     final index = widget.episodes
         .indexWhere((e) => e.episodeNumber == widget.playingEpisode);
     if (index != -1 && _scrollController.hasClients) {
+      final double listHeight = _getListHeight(context);
+      final double imageHeight = _getImageHeight(listHeight);
+      final double cardWidth = _getCardWidth(imageHeight);
       _scrollController.animateTo(
-        index * 340.0, // card width (320) + margin (20)
+        index * (cardWidth + 20.0), // card width + margin (20)
         duration: const Duration(milliseconds: 500),
         curve: Curves.easeInOut,
       );
@@ -187,18 +206,28 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                       const Spacer(),
 
                       // Large Horizontal Episode List
-                      SizedBox(
-                        height: 280, // Optimized height for landscape mobile screens
-                        child: ListView.builder(
-                          controller: _scrollController,
-                          padding: const EdgeInsets.symmetric(horizontal: 24),
-                          scrollDirection: Axis.horizontal,
-                          itemCount: widget.episodes.length,
-                          itemBuilder: (context, index) {
-                            return _buildEpisodeCard(widget.episodes[index]);
-                          },
-                        ),
-                      ),
+                      (() {
+                        final double listHeight = _getListHeight(context);
+                        final double imageHeight = _getImageHeight(listHeight);
+                        final double cardWidth = _getCardWidth(imageHeight);
+                        return SizedBox(
+                          height: listHeight,
+                          child: ListView.builder(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            scrollDirection: Axis.horizontal,
+                            itemCount: widget.episodes.length,
+                            itemBuilder: (context, index) {
+                              return _buildEpisodeCard(
+                                widget.episodes[index],
+                                listHeight,
+                                cardWidth,
+                                imageHeight,
+                              );
+                            },
+                          ),
+                        );
+                      }()),
 
                       const Spacer(),
                     ],
@@ -247,7 +276,7 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
     );
   }
 
-  Widget _buildEpisodeCard(Episode ep) {
+  Widget _buildEpisodeCard(Episode ep, double listHeight, double cardWidth, double imageHeight) {
     // Only highlight as "current" if this season is the one actually playing
     final bool isCurrent = widget.currentSeason == widget.playingSeason &&
         ep.episodeNumber == widget.playingEpisode;
@@ -276,14 +305,15 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
           ? null
           : () => widget.onEpisodeTap(ep.episodeNumber),
       child: Container(
-        width: 320,
+        width: cardWidth,
         margin: const EdgeInsets.only(right: 20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Main Card Image (Episode Thumbnail)
-            AspectRatio(
-              aspectRatio: 16 / 9,
+            SizedBox(
+              width: cardWidth,
+              height: imageHeight,
               child: Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(16),
@@ -305,57 +335,60 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                     ),
                   ],
                 ),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    if (isFuture)
-                      const Center(
-                          child: Icon(Icons.lock_outline,
-                              color: Colors.white54, size: 32))
-                    else if (isWatched)
-                      const Center(
-                          child: Icon(Icons.check_circle_outline,
-                              color: Colors.white54, size: 32))
-                    else if (!isCurrent)
-                      Center(
-                        child: Container(
-                          width: 46,
-                          height: 46,
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.6),
-                            shape: BoxShape.circle,
+                child: Padding(
+                  padding: EdgeInsets.all(isCurrent ? 3.0 : 1.0),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (isFuture)
+                        const Center(
+                            child: Icon(Icons.lock_outline,
+                                color: Colors.white54, size: 32))
+                      else if (isWatched)
+                        const Center(
+                            child: Icon(Icons.check_circle_outline,
+                                color: Colors.white54, size: 32))
+                      else if (!isCurrent)
+                        Center(
+                          child: Container(
+                            width: 46,
+                            height: 46,
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.6),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.play_arrow_rounded,
+                                color: Colors.white, size: 32),
                           ),
-                          child: const Icon(Icons.play_arrow_rounded,
-                              color: Colors.white, size: 32),
                         ),
-                      ),
 
-                    // Progress Bar
-                    if (progress != null && progress > 0)
-                      Positioned(
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        child: Container(
-                          height: 5,
-                          decoration: const BoxDecoration(
-                            color: Colors.black45,
-                            borderRadius: BorderRadius.vertical(bottom: Radius.circular(16)),
-                          ),
-                          child: ClipRRect(
-                            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
-                            child: FractionallySizedBox(
-                              alignment: Alignment.centerLeft,
-                              widthFactor: progress.clamp(0.0, 1.0),
-                              child: Container(
-                                  color: isCurrent
-                                      ? AppTheme.primaryColor
-                                      : Colors.white70),
+                      // Progress Bar
+                      if (progress != null && progress > 0)
+                        Positioned(
+                          bottom: 6,
+                          left: 12,
+                          right: 12,
+                          child: Container(
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: FractionallySizedBox(
+                                alignment: Alignment.centerLeft,
+                                widthFactor: progress.clamp(0.0, 1.0),
+                                child: Container(
+                                    color: isCurrent
+                                        ? AppTheme.primaryColor
+                                        : Colors.white70),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

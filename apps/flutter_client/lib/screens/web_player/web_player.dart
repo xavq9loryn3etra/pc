@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_client/screens/web_player/web_player_io.dart';
-import 'dart:io' show Platform;
 
 import 'web_player_platform_interface.dart';
 

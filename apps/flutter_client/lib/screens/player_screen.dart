@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:media_kit/media_kit.dart' hide WebPlayer;
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:libtorrent_flutter/libtorrent_flutter.dart';
+import 'package:flutter_media_session/flutter_media_session.dart';
 import '../services/saved_movies_service.dart';
 import '../services/torrent/torrent_index_service.dart';
 import '../services/torrent/stream_resolver.dart';
@@ -97,6 +99,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   DateTime? _lastSaveTime;
 
   final _resolver = StreamResolver();
+  final _mediaSession = FlutterMediaSession();
+  StreamSubscription? _mediaActionSub;
 
   @override
   void initState() {
@@ -109,12 +113,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _browsingSeason = widget.season;
     _episodes = widget.episodes;
 
-    // Enable auto-rotation for the player (allow all orientations)
+    // Enable auto-rotation for the player (landscape only)
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
     ]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
@@ -125,6 +127,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _initPlayer();
     _subscribeToTorrent(_torrentId);
     _resetControlsTimer();
+    _initMediaSession();
   }
 
   Future<void> _initPlayer() async {
@@ -159,10 +162,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
 
     // Listen to total duration
-    // Listen to total duration
     _durationSub = player.stream.duration.listen((dur) {
       if (mounted) {
         setState(() => _duration = dur);
+        _updateMediaSessionMetadata();
 
         if (_pendingResumeSnackbarProgress != null && dur.inSeconds > 0) {
           final targetSeconds = (dur.inSeconds * _pendingResumeSnackbarProgress!).round();
@@ -202,6 +205,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _isPlaying = val;
           if (val) _isMediaOpening = false; // playback started, hide initial spinner
         });
+        // Sync play/pause to notification
+        _syncMediaSessionPlaybackState();
         if (val) {
           _resetControlsTimer();
         } else {
@@ -225,6 +230,97 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     });
   }
+
+  Future<void> _initMediaSession() async {
+    // Only run on Android/iOS
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+
+    try {
+      await _mediaSession.requestNotificationPermission();
+      await _mediaSession.activate();
+
+      // Only show play/pause (no skip buttons)
+      await _mediaSession.updateAvailableActions({
+        MediaAction.play,
+        MediaAction.pause,
+        MediaAction.seekTo,
+      });
+
+      // Set initial metadata
+      await _updateMediaSessionMetadata();
+
+      // Listen for play/pause commands from the notification
+      _mediaActionSub = _mediaSession.onMediaAction.listen((action) {
+        switch (action) {
+          case MediaAction.play:
+            player.play();
+            break;
+          case MediaAction.pause:
+            player.pause();
+            break;
+          case MediaAction.seekTo:
+            if (action.seekPosition != null) {
+              player.seek(action.seekPosition!);
+              _syncMediaSessionPlaybackState();
+            }
+            break;
+          default:
+            break;
+        }
+      });
+    } catch (_) {
+      // Silently fail — media session is an enhancement, not critical
+    }
+  }
+
+  void _syncMediaSessionPlaybackState() {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    _mediaSession.updatePlaybackState(PlaybackState(
+      status: _isPlaying ? PlaybackStatus.playing : PlaybackStatus.paused,
+      position: _currentPosition,
+      speed: 1.0,
+    ));
+  }
+
+  Future<void> _updateMediaSessionMetadata() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    try {
+      String title = widget.movie.title;
+      String artist = 'Popcorn';
+
+      if (widget.details.type == 'tv' && _currentEpisode != null) {
+        final ep = _episodes.firstWhere(
+          (e) => e.episodeNumber == _currentEpisode,
+          orElse: () => Episode(
+            id: 0,
+            episodeNumber: _currentEpisode!,
+            name: '',
+            overview: '',
+            voteAverage: 0.0,
+          ),
+        );
+        if (ep.name.isNotEmpty) {
+          artist = widget.movie.title;
+          title = 'S${_currentSeason}E${_currentEpisode} · ${ep.name}';
+        }
+      }
+
+      final artwork = widget.details.backdrop ??
+          widget.movie.backdrop ??
+          widget.details.posterUrl ??
+          widget.movie.posterUrl ??
+          '';
+
+      await _mediaSession.updateMetadata(MediaMetadata(
+        title: title,
+        artist: artist,
+        album: 'Popcorn',
+        artworkUri: artwork,
+        duration: _duration,
+      ));
+    } catch (_) {}
+  }
+
 
   Future<void> _openMediaWithResume(
     String url, {
@@ -355,12 +451,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _skipBackward() {
     final newPos = _currentPosition - const Duration(seconds: 10);
     player.seek(newPos < Duration.zero ? Duration.zero : newPos);
+    _syncMediaSessionPlaybackState();
     _resetControlsTimer();
   }
 
   void _skipForward() {
     final newPos = _currentPosition + const Duration(seconds: 10);
     player.seek(newPos > _duration ? _duration : newPos);
+    _syncMediaSessionPlaybackState();
     _resetControlsTimer();
   }
 
@@ -550,6 +648,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         });
         _subscribeToTorrent(_torrentId);
         _loadSubtitles();
+        _updateMediaSessionMetadata();
       }
     } catch (e) {
       if (mounted) {
@@ -631,6 +730,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _bufferSub?.cancel();
     _torrentSub?.cancel();
     _controlsTimer?.cancel();
+    _mediaActionSub?.cancel();
+    _mediaSession.deactivate();
 
     // 4. Dispose players and clean up active FFI torrent process
     player.dispose();
@@ -959,11 +1060,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
-    final hasNextEpisode = widget.details.type == 'tv' &&
-        _currentEpisode != null &&
-        _episodes.isNotEmpty &&
-        _episodes.indexWhere((e) => e.episodeNumber == _currentEpisode) <
-            _episodes.length - 1;
+    bool nextEpisodePlayable = false;
+    if (widget.details.type == 'tv' && _currentEpisode != null && _episodes.isNotEmpty) {
+      final currentIndex = _episodes.indexWhere((e) => e.episodeNumber == _currentEpisode);
+      if (currentIndex >= 0 && currentIndex < _episodes.length - 1) {
+        final nextEp = _episodes[currentIndex + 1];
+        nextEpisodePlayable = true;
+        if (nextEp.airDate != null) {
+          try {
+            final date = DateTime.parse(nextEp.airDate!);
+            if (date.isAfter(DateTime.now())) {
+              nextEpisodePlayable = false;
+            }
+          } catch (_) {}
+        }
+      }
+    }
 
     return PopScope(
       canPop: !_showEpisodeDrawer && !_showSettingsPanel,
@@ -1360,7 +1472,24 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                   const SizedBox(height: 10),
                                   // Description
                                   Text(
-                                    widget.movie.description,
+                                    () {
+                                      if (widget.details.type == 'tv' && _currentEpisode != null) {
+                                        final currentEp = _episodes.firstWhere(
+                                          (ep) => ep.episodeNumber == _currentEpisode,
+                                          orElse: () => Episode(
+                                            id: 0,
+                                            episodeNumber: _currentEpisode!,
+                                            name: '',
+                                            overview: '',
+                                            voteAverage: 0.0,
+                                          ),
+                                        );
+                                        if (currentEp.overview.isNotEmpty) {
+                                          return currentEp.overview;
+                                        }
+                                      }
+                                      return widget.movie.description;
+                                    }(),
                                     maxLines: 3,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
@@ -1429,6 +1558,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                       });
                                       player
                                           .seek(Duration(seconds: val.toInt()));
+                                      _syncMediaSessionPlaybackState();
                                     },
                                   ),
                                 ),
@@ -1555,7 +1685,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                           },
                                         ),
                                       ],
-                                      if (hasNextEpisode) ...[
+                                      if (widget.details.type == 'tv') ...[
                                         const SizedBox(width: 12),
                                         TextButton.icon(
                                           style: TextButton.styleFrom(
@@ -1567,18 +1697,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                             padding: const EdgeInsets.symmetric(
                                                 horizontal: 12, vertical: 6),
                                           ),
-                                          icon: const Icon(
+                                          icon: Icon(
                                               Icons.skip_next_rounded,
-                                              color: Colors.white,
+                                              color: nextEpisodePlayable ? Colors.white : Colors.white38,
                                               size: 18),
-                                          label: const Text(
+                                          label: Text(
                                             'Next Episode',
                                             style: TextStyle(
-                                                color: Colors.white,
+                                                color: nextEpisodePlayable ? Colors.white : Colors.white38,
                                                 fontWeight: FontWeight.w600,
                                                 fontSize: 11),
                                           ),
-                                          onPressed: _playNextEpisode,
+                                          onPressed: nextEpisodePlayable ? _playNextEpisode : null,
                                         ),
                                       ],
                                     ],

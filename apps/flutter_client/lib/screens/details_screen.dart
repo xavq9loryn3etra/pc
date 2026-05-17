@@ -826,63 +826,85 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                       ),
                                     ),
                                     // Minimalist Netflix-style Season Selector
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        border:
-                                            Border.all(color: Colors.white24),
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                      child: DropdownButtonHideUnderline(
-                                        child: DropdownButton<int>(
-                                          value: _selectedSeason?.seasonNumber,
-                                          dropdownColor: Colors.grey[900],
-                                          icon: const Icon(
-                                            Icons.arrow_drop_down,
-                                            color: Colors.white,
+                                    Builder(
+                                      builder: (btnContext) {
+                                        return TextButton.icon(
+                                          style: TextButton.styleFrom(
+                                            backgroundColor: Colors.white.withOpacity(0.08),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(6),
+                                            ),
+                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                                           ),
-                                          isDense: true,
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                          items: m.seasons!
-                                              .where(
-                                                (s) =>
-                                                    s.seasonNumber > 0 ||
-                                                    s.seasonNumber ==
-                                                        _selectedSeason
-                                                            ?.seasonNumber,
-                                              )
-                                              .map(
-                                                (s) => DropdownMenuItem(
-                                                  value: s.seasonNumber,
-                                                  child: Text(
-                                                    s.seasonNumber == 0
-                                                        ? 'Specials'
-                                                        : 'Season ${s.seasonNumber}',
-                                                  ),
+                                          icon: const Icon(Icons.layers_rounded, color: Colors.white, size: 16),
+                                          label: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                _selectedSeason?.seasonNumber == 0
+                                                    ? 'Specials'
+                                                    : 'Season ${_selectedSeason?.seasonNumber ?? 1}',
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 11,
                                                 ),
-                                              )
-                                              .toList(),
-                                          onChanged: (val) {
+                                              ),
+                                              const SizedBox(width: 4),
+                                              const Icon(Icons.keyboard_arrow_down, color: Colors.white54, size: 14),
+                                            ],
+                                          ),
+                                          onPressed: () async {
+                                            final RenderBox renderBox = btnContext.findRenderObject() as RenderBox;
+                                            final offset = renderBox.localToGlobal(Offset.zero);
+                                            final val = await showMenu<int>(
+                                              context: context,
+                                              position: RelativeRect.fromLTRB(
+                                                offset.dx,
+                                                offset.dy + renderBox.size.height + 4,
+                                                offset.dx + renderBox.size.width,
+                                                0,
+                                              ),
+                                              color: Colors.grey[900],
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                              items: m.seasons!
+                                                  .where(
+                                                    (s) =>
+                                                        s.seasonNumber > 0 ||
+                                                        s.seasonNumber == _selectedSeason?.seasonNumber,
+                                                  )
+                                                  .map((s) => PopupMenuItem(
+                                                        value: s.seasonNumber,
+                                                        height: 40,
+                                                        child: Text(
+                                                          s.seasonNumber == 0
+                                                              ? 'Specials'
+                                                              : 'Season ${s.seasonNumber}',
+                                                          style: TextStyle(
+                                                            color: s.seasonNumber == _selectedSeason?.seasonNumber
+                                                                ? AppTheme.primaryColor
+                                                                : Colors.white,
+                                                            fontSize: 13,
+                                                            fontWeight: s.seasonNumber == _selectedSeason?.seasonNumber
+                                                                ? FontWeight.bold
+                                                                : FontWeight.w500,
+                                                          ),
+                                                        ),
+                                                      ))
+                                                  .toList(),
+                                            );
                                             if (val != null) {
                                               setState(() {
-                                                _selectedSeason =
-                                                    m.seasons!.firstWhere(
+                                                _selectedSeason = m.seasons!.firstWhere(
                                                   (s) => s.seasonNumber == val,
                                                 );
-                                                _selectedEpisode =
-                                                    null; // Reset episode
+                                                _selectedEpisode = null; // Reset episode
                                               });
                                               _loadSeasonDetails(val);
                                             }
                                           },
-                                        ),
-                                      ),
+                                        );
+                                      },
                                     ),
                                   ],
                                 ),
@@ -904,6 +926,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                   itemCount: _episodes.length,
                                   itemBuilder: (context, index) {
                                     final ep = _episodes[index];
+                                    final currentProgress = SavedMoviesService().getEpisodeProgress(
+                                      widget.movie.id,
+                                      _selectedSeason?.seasonNumber ?? 1,
+                                      ep.episodeNumber,
+                                    ) ?? ep.progress;
+
                                     bool isFuture = false;
                                     String? formattedDate;
 
@@ -988,23 +1016,26 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                           ),
                                                         ),
                                                   // Progress Bar
-                                                  if (ep.progress != null &&
-                                                      ep.progress! > 0)
+                                                  if (currentProgress != null &&
+                                                      currentProgress > 0)
                                                     Positioned(
-                                                      bottom: 0,
-                                                      left: 0,
-                                                      right: 0,
-                                                      child:
-                                                          LinearProgressIndicator(
-                                                        value: ep.progress,
-                                                        backgroundColor:
-                                                            Colors.white10,
-                                                        valueColor:
-                                                            const AlwaysStoppedAnimation<
-                                                                Color>(
-                                                          AppTheme.primaryColor,
+                                                      bottom: 4,
+                                                      left: 6,
+                                                      right: 6,
+                                                      child: Container(
+                                                        height: 4,
+                                                        decoration: BoxDecoration(
+                                                          color: Colors.black54,
+                                                          borderRadius: BorderRadius.circular(4),
                                                         ),
-                                                        minHeight: 3,
+                                                        child: ClipRRect(
+                                                          borderRadius: BorderRadius.circular(4),
+                                                          child: FractionallySizedBox(
+                                                            alignment: Alignment.centerLeft,
+                                                            widthFactor: currentProgress.clamp(0.0, 1.0),
+                                                            child: Container(color: AppTheme.primaryColor),
+                                                          ),
+                                                        ),
                                                       ),
                                                     ),
                                                 ],

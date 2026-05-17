@@ -242,37 +242,69 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
   }
 
   Widget _buildSeasonSelector() {
-    return Container(
-      height: 36,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<int>(
-          value: widget.currentSeason,
-          dropdownColor: Colors.grey[900],
-          icon: const Icon(Icons.keyboard_arrow_down,
-              color: Colors.white, size: 18),
-          isDense: true,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 15,
-            fontWeight: FontWeight.bold,
+    return Builder(
+      builder: (btnContext) {
+        return TextButton.icon(
+          style: TextButton.styleFrom(
+            backgroundColor: Colors.white.withOpacity(0.08),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(6),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           ),
-          items: widget.seasons!
-              .where((s) => s.seasonNumber > 0)
-              .map((s) => DropdownMenuItem(
-                    value: s.seasonNumber,
-                    child: Text("Season ${s.seasonNumber}"),
-                  ))
-              .toList(),
-          onChanged: (val) {
+          icon: const Icon(Icons.layers_rounded, color: Colors.white, size: 16),
+          label: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                "Season ${widget.currentSeason}",
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 11,
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.keyboard_arrow_down, color: Colors.white54, size: 14),
+            ],
+          ),
+          onPressed: () async {
+            final RenderBox renderBox = btnContext.findRenderObject() as RenderBox;
+            final offset = renderBox.localToGlobal(Offset.zero);
+            final val = await showMenu<int>(
+              context: context,
+              position: RelativeRect.fromLTRB(
+                offset.dx,
+                offset.dy + renderBox.size.height + 4,
+                offset.dx + renderBox.size.width,
+                0,
+              ),
+              color: Colors.grey[900],
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              items: widget.seasons!
+                  .where((s) => s.seasonNumber > 0)
+                  .map((s) => PopupMenuItem(
+                        value: s.seasonNumber,
+                        height: 40,
+                        child: Text(
+                          "Season ${s.seasonNumber}",
+                          style: TextStyle(
+                            color: s.seasonNumber == widget.currentSeason
+                                ? AppTheme.primaryColor
+                                : Colors.white,
+                            fontSize: 13,
+                            fontWeight: s.seasonNumber == widget.currentSeason
+                                ? FontWeight.bold
+                                : FontWeight.w500,
+                          ),
+                        ),
+                      ))
+                  .toList(),
+            );
             if (val != null) widget.onSeasonChanged(val);
           },
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -291,11 +323,13 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
 
     // Check if episode is in the future
     bool isFuture = false;
+    String? formattedDate;
     if (ep.airDate != null) {
       try {
         final date = DateTime.parse(ep.airDate!);
         if (date.isAfter(DateTime.now())) {
           isFuture = true;
+          formattedDate = "${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}";
         }
       } catch (_) {}
     }
@@ -320,13 +354,19 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                   border: isCurrent
                       ? Border.all(color: AppTheme.primaryColor, width: 3)
                       : Border.all(color: Colors.white.withOpacity(0.1), width: 1),
-                  image: ep.stillPath != null
+                  image: (isFuture && (widget.movie.backdrop != null || widget.movie.posterUrl != null))
                       ? DecorationImage(
-                          image: CachedNetworkImageProvider(ep.stillPath!),
+                          image: CachedNetworkImageProvider((widget.movie.backdrop ?? widget.movie.posterUrl)!),
                           fit: BoxFit.cover,
-                          opacity: (isWatched || isFuture) ? 0.4 : 1.0,
+                          opacity: 0.4,
                         )
-                      : null,
+                      : ep.stillPath != null
+                          ? DecorationImage(
+                              image: CachedNetworkImageProvider(ep.stillPath!),
+                              fit: BoxFit.cover,
+                              opacity: isWatched ? 0.4 : 1.0,
+                            )
+                          : null,
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withOpacity(0.3),
@@ -415,13 +455,31 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                   children: [
                     const Icon(Icons.equalizer, color: AppTheme.primaryColor, size: 14),
                     const SizedBox(width: 6),
-                    Text(
+                    const Text(
                       "NOW PLAYING",
                       style: TextStyle(
                         color: AppTheme.primaryColor,
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
                         letterSpacing: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else if (isFuture && formattedDate != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(
+                  children: [
+                    const Icon(Icons.calendar_today, color: Colors.white54, size: 12),
+                    const SizedBox(width: 6),
+                    Text(
+                      "Available on: $formattedDate",
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ],

@@ -13,7 +13,7 @@ const MaintenanceOverlay: React.FC<MaintenanceOverlayProps> = ({ message }) => {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: '#141414',
+            backgroundColor: '#000000',
             zIndex: 9999,
             display: 'flex',
             flexDirection: 'column',

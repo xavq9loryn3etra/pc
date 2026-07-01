@@ -17,7 +17,7 @@ const UpdateOverlay: React.FC<UpdateOverlayProps> = ({ message }) => {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: '#141414', // Changed to match MaintenanceOverlay opaque background
+            backgroundColor: '#000000', // Changed to match MaintenanceOverlay opaque background
             zIndex: 9999,
             display: 'flex',
             flexDirection: 'column',

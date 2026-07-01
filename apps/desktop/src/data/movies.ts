@@ -12,6 +12,8 @@ export interface Movie {
     inCinemas?: boolean;
     logoUrl?: string; // High-res PNG logo
     type?: 'movie' | 'tv';
+    season?: number;
+    episode?: number;
 }
 
 // Fallback data

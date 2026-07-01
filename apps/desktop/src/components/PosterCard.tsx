@@ -18,7 +18,7 @@ const PosterCard: React.FC<PosterCardProps> = ({ movie, onPlay, onRemove, progre
                 position: 'relative',
                 minWidth: '200px',
                 height: '300px',
-                borderRadius: '4px',
+                borderRadius: '8px',
                 overflow: 'hidden',
                 cursor: 'pointer',
                 transition: 'transform 0.3s ease',
@@ -32,16 +32,38 @@ const PosterCard: React.FC<PosterCardProps> = ({ movie, onPlay, onRemove, progre
                 loading="lazy"
             />
 
-            {/* Progress Bar */}
+            {/* Floating Progress Bar Pill */}
             {progress !== undefined && progress > 0 && (
                 <div style={{
-                    position: 'absolute', bottom: 0, left: 0, right: 0,
-                    height: '4px', background: 'rgba(255,255,255,0.3)', zIndex: 15
+                    position: 'absolute', bottom: '8px', left: '12px', right: '12px',
+                    height: '6px', background: 'rgba(0,0,0,0.6)', borderRadius: '4px',
+                    zIndex: 15, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)'
                 }}>
                     <div style={{
                         height: '100%', width: `${progress}%`,
-                        background: 'var(--primary-color)'
+                        background: 'var(--primary-color)', borderRadius: '4px'
                     }} />
+                </div>
+            )}
+
+            {/* Episode Badge Floating Pill (S1 E1) */}
+            {movie.type === 'tv' && movie.season !== undefined && movie.episode !== undefined && (
+                <div style={{
+                    position: 'absolute',
+                    bottom: (progress !== undefined && progress > 0) ? '20px' : '8px',
+                    right: '12px',
+                    background: 'rgba(0,0,0,0.85)',
+                    color: 'white',
+                    fontSize: '0.65rem',
+                    fontWeight: 'bold',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    zIndex: 16,
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.5)',
+                    pointerEvents: 'none'
+                }}>
+                    S{movie.season} E{movie.episode}
                 </div>
             )}
 
@@ -50,7 +72,7 @@ const PosterCard: React.FC<PosterCardProps> = ({ movie, onPlay, onRemove, progre
                 <div style={{
                     position: 'absolute', top: '10px', right: '10px',
                     background: 'var(--primary-color)', color: 'black', fontSize: '0.65rem', fontWeight: 'bold',
-                    padding: '3px 6px', borderRadius: '3px', textTransform: 'uppercase',
+                    padding: '3px 6px', borderRadius: '4px', textTransform: 'uppercase',
                     zIndex: 20, boxShadow: '0 2px 4px rgba(0,0,0,0.5)'
                 }}>
                     In Cinemas

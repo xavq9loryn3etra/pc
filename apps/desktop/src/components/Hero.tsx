@@ -1,23 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import type { Movie } from '../data/movies';
 
-const RATING_DESCRIPTIONS: Record<string, string> = {
-    // MPAA (Movies)
-    'G': 'General Audiences. All ages admitted.',
-    'PG': 'Parental Guidance Suggested. Some material may not be suitable for children.',
-    'PG-13': 'Parents Strongly Cautioned. Some material may be inappropriate for children under 13.',
-    'R': 'Restricted. Under 17 requires accompanying parent or adult guardian.',
-    'NC-17': 'Adults Only. No One 17 and Under Admitted.',
-    'NR': 'Not Rated.',
-
-    // TV Parental Guidelines
-    'TV-Y': 'All Children. Intended for children ages 2 to 6.',
-    'TV-Y7': 'Directed to Older Children. Intended for children age 7 and above.',
-    'TV-G': 'General Audience. Suitable for all ages.',
-    'TV-PG': 'Parental Guidance Suggested.',
-    'TV-14': 'Parents Strongly Cautioned. Intended for children over 14 years of age.',
-    'TV-MA': 'Mature Audience Only. Intended for adults and may be unsuitable for children under 17.',
-};
+// Module-level cache so navigating away from and back to Home doesn't
+// re-fetch & re-animate metadata for a movie we've already loaded.
+const heroDetailsCache = new Map<string, any>();
 
 interface HeroProps {
     movies: Movie[];
@@ -48,13 +34,26 @@ const Hero: React.FC<HeroProps> = ({ movies, onMoreInfo }) => {
     // Fetch trailer and logo for the top trending movie
     // Fetch Data (Only when movie changes)
     useEffect(() => {
+        if (!movie) {
+            setIsLoading(false);
+            return;
+        }
+
+        const cacheKey = `${movie.type}-${movie.id}`;
+        const cached = heroDetailsCache.get(cacheKey);
+        if (cached) {
+            setHeroDetails(cached);
+            setIsLoading(false);
+            return;
+        }
+
         let active = true;
         setHeroDetails(null);
         setIsLoading(true);
 
         async function fetchData() {
-            if (!window.electronAPI || !movie) {
-                if (active) setIsLoading(false); // If no movie or API, stop loading
+            if (!window.electronAPI) {
+                if (active) setIsLoading(false); // If no API, stop loading
                 return;
             }
             try {
@@ -66,8 +65,9 @@ const Hero: React.FC<HeroProps> = ({ movies, onMoreInfo }) => {
                 // Fetch Details (for Logo & Description)
                 const details = await (window.electronAPI as any).getMovieDetails(movie.id, movie.type);
 
-                if (active) {
-                    if (details) setHeroDetails(details);
+                if (active && details) {
+                    heroDetailsCache.set(cacheKey, details);
+                    setHeroDetails(details);
                 }
             } catch (e) {
                 console.error("Hero data fetch failed", e);
@@ -99,7 +99,7 @@ const Hero: React.FC<HeroProps> = ({ movies, onMoreInfo }) => {
                 overflow: 'hidden',
                 left: '50%',
                 marginLeft: '-50vw',
-                backgroundColor: '#141414' // Ensure background is black to hide parallax gap
+                backgroundColor: '#000000' // Ensure background is black to hide parallax gap
             }}
         >
             {/* Parallax Container (Image + Trailer) */}
@@ -119,7 +119,7 @@ const Hero: React.FC<HeroProps> = ({ movies, onMoreInfo }) => {
             {/* Dark Overlay Gradient (Lighter, Netflix-style) - Fixed, not parallaxed */}
             <div style={{
                 position: 'absolute', inset: 0, zIndex: 2,
-                background: 'linear-gradient(to top, #141414 0%, transparent 40%), linear-gradient(to right, rgba(0,0,0,0.8) 0%, transparent 50%)'
+                background: 'linear-gradient(to top, #000000 0%, transparent 40%), linear-gradient(to right, rgba(0,0,0,0.8) 0%, transparent 50%)'
             }} />
 
             <div style={{ marginLeft: '4rem', maxWidth: '40%', zIndex: 10, marginTop: '10vh' }}>
@@ -139,8 +139,8 @@ const Hero: React.FC<HeroProps> = ({ movies, onMoreInfo }) => {
                                 src={heroDetails.logoUrl}
                                 alt={movie.title}
                                 style={{
-                                    maxWidth: '500px', // Slightly larger again
-                                    maxHeight: '200px',
+                                    maxWidth: '350px',
+                                    maxHeight: '120px',
                                     objectFit: 'contain',
                                     marginBottom: '1.5rem',
                                     display: 'block',
@@ -180,22 +180,31 @@ const Hero: React.FC<HeroProps> = ({ movies, onMoreInfo }) => {
                             <button
                                 onClick={() => onMoreInfo(movie)}
                                 style={{
-                                    padding: '0.8rem 2.0rem',
-                                    fontSize: '1.4rem',
+                                    padding: '10px 24px',
+                                    fontSize: '1rem',
                                     fontWeight: 'bold',
-                                    backgroundColor: 'rgba(109, 109, 109, 0.7)',
+                                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                                    border: '1px solid rgba(255, 255, 255, 0.2)',
                                     color: 'white',
-                                    borderRadius: '4px',
+                                    borderRadius: '30px',
                                     display: 'flex',
                                     alignItems: 'center',
-                                    gap: '0.8rem',
-                                    border: 'none',
+                                    gap: '0.6rem',
                                     zIndex: 20,
-                                    cursor: 'pointer'
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s ease'
+                                }}
+                                onMouseEnter={e => {
+                                    e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
+                                    e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+                                }}
+                                onMouseLeave={e => {
+                                    e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)';
+                                    e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.2)';
                                 }}
                             >
                                 {/* Info Icon SVG */}
-                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
                                     <circle cx="12" cy="12" r="10" />
                                     <path d="M12 16v-4" />
                                     <path d="M12 8h.01" />
@@ -205,31 +214,6 @@ const Hero: React.FC<HeroProps> = ({ movies, onMoreInfo }) => {
                         </div>
                     </>
                 )}
-            </div>
-
-            {/* Right Side Interaction (Mute & Age) */}
-            <div style={{
-                position: 'absolute',
-                right: 0,
-                bottom: '35%', // Approx height based on image
-                display: 'flex',
-                alignItems: 'center',
-                zIndex: 20
-            }}>
-
-                <div style={{
-                    borderLeft: '3px solid #dcdcdc',
-                    background: 'rgba(0,0,0,0.4)',
-                    padding: '0.4rem 1rem',
-                    color: 'white',
-                    fontSize: '1rem',
-                    fontWeight: 'bold',
-                    cursor: 'help'
-                }}
-                    title={RATING_DESCRIPTIONS[heroDetails?.certification || heroDetails?.mpaa || ''] || "Rating"}
-                >
-                    {heroDetails?.certification || heroDetails?.mpaa || 'PG-13'}
-                </div>
             </div>
         </div>
     );

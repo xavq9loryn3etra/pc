@@ -1,0 +1,106 @@
+workflows:
+  android-workflow:
+    name: Android Release
+    max_build_duration: 120
+    instance_type: mac_mini_m1
+    environment:
+      flutter: 3.38.9
+      groups:
+        - google_play # Ensure these credentials are in Codemagic UI
+    scripts:
+      - name: Get dependencies
+        script: |
+          cd apps/flutter_client
+          flutter pub get
+      - name: Build Android Release
+        script: |
+          cd apps/flutter_client
+          flutter build apk --release
+    artifacts:
+      - apps/flutter_client/build/app/outputs/flutter-apk/*.apk
+      - apps/flutter_client/build/app/outputs/bundle/release/*.aab
+
+  windows-workflow:
+    name: Windows Release
+    max_build_duration: 120
+    instance_type: windows_x2
+    environment:
+      flutter: 3.38.9
+    scripts:
+      - name: Get dependencies
+        script: |
+          cd apps/flutter_client
+          flutter pub get
+      - name: Build Windows Release
+        script: |
+          cd apps/flutter_client
+          flutter build windows --release
+    artifacts:
+      - apps/flutter_client/build/windows/runner/Release/*.exe
+
+  ios-workflow:
+    name: iOS TestFlight Release
+    max_build_duration: 120
+    instance_type: mac_mini_m1
+    integrations:
+      app_store_connect: "popcorn"
+    environment:
+      flutter: 3.38.9
+      xcode: latest
+      cocoapods: default
+      groups:
+        - ios_signing
+      vars:
+        BUNDLE_ID: "com.popcorn.flutterClient"
+    scripts:
+      - name: Set up Keychain & Fetch Signing Files
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create \
+            --certificate-key=@env:CERTIFICATE_PRIVATE_KEY
+          keychain add-certificates
+          xcode-project use-profiles
+      - name: Get dependencies
+        script: |
+          cd apps/flutter_client
+          flutter pub get
+      - name: Install Pods
+        script: |
+          cd apps/flutter_client/ios
+          pod install
+      - name: Build IPA for TestFlight
+        script: |
+          cd apps/flutter_client
+          # This command now has the certificates it needs in the keychain
+          flutter build ipa --release --export-options-plist=$HOME/export_options.plist
+    artifacts:
+      - apps/flutter_client/build/ios/ipa/*.ipa
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: false
+
+  macos-workflow:
+    name: macOS Release
+    max_build_duration: 120
+    instance_type: mac_mini_m1
+    environment:
+      flutter: 3.38.9
+      cocoapods: default
+    scripts:
+      - name: Get dependencies
+        script: |
+          cd apps/flutter_client
+          flutter pub get
+      - name: Install Pods
+        script: |
+          cd apps/flutter_client/macos
+          pod install
+      - name: Build macOS Release
+        script: |
+          cd apps/flutter_client
+          flutter build macos --release
+    artifacts:
+      - apps/flutter_client/build/macos/Build/Products/Release/*.app

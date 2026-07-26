@@ -56,7 +56,7 @@ const Top10Card: React.FC<Top10CardProps> = ({ movie, rank, onPlay }) => {
             <div style={{
                 minWidth: '200px', // Match standard card width
                 height: '300px', // Match standard card height
-                borderRadius: '6px',
+                borderRadius: '8px',
                 overflow: 'hidden',
                 zIndex: 1,
                 boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
@@ -73,7 +73,7 @@ const Top10Card: React.FC<Top10CardProps> = ({ movie, rank, onPlay }) => {
                     <div style={{
                         position: 'absolute', top: '10px', right: '10px',
                         background: 'var(--primary-color)', color: 'black', fontSize: '0.65rem', fontWeight: 'bold',
-                        padding: '3px 6px', borderRadius: '3px', textTransform: 'uppercase',
+                        padding: '3px 6px', borderRadius: '4px', textTransform: 'uppercase',
                         zIndex: 5, boxShadow: '0 2px 4px rgba(0,0,0,0.5)'
                     }}>
                         In Cinemas

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { fetchAndActivate, getValue } from "firebase/remote-config";
 import { logEvent } from "firebase/analytics";
 import semver from "semver";
@@ -10,36 +10,98 @@ import MaintenanceOverlay from "./components/MaintenanceOverlay";
 
 import Hero from './components/Hero';
 import VideoPlayer from './components/VideoPlayer';
-import WebPlayer from './components/WebPlayer';
+import WebPlayer, { type WebProvider } from './components/WebPlayer';
 import PosterCard from './components/PosterCard';
+import SearchScreen from './components/SearchScreen';
 import type { Movie } from './data/movies';
+import type { PlayStreamOptions, StreamOption } from './types/stream';
 import logo from './assets/logo.svg';
-import meghaLogo from './assets/megha.svg';
 import './index.css';
 
-interface CategorySection {
-  title: string;
-  movies: Movie[];
-}
 
 // ... (imports remain similar, will need DetailsPanel)
 import DetailsPanel from './components/DetailsPanel';
-import Top10Card from './components/Top10Card';
 import SplashScreen from './components/SplashScreen';
+// Custom hook for drag-to-scroll behavior
+function useDragScroll() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [isDown, setIsDown] = useState(false);
+  const [startX, setStartX] = useState(0);
+  const [scrollLeft, setScrollLeft] = useState(0);
+  const [hasDragged, setHasDragged] = useState(false);
+
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return; // only left click
+    const el = ref.current;
+    if (!el) return;
+    setIsDown(true);
+    setHasDragged(false);
+    setStartX(e.pageX - el.offsetLeft);
+    setScrollLeft(el.scrollLeft);
+  };
+
+  const onMouseLeave = () => {
+    setIsDown(false);
+  };
+
+  const onMouseUp = () => {
+    setIsDown(false);
+  };
+
+  const onMouseMove = (e: React.MouseEvent) => {
+    if (!isDown) return;
+    const el = ref.current;
+    if (!el) return;
+    e.preventDefault();
+    const x = e.pageX - el.offsetLeft;
+    const walk = (x - startX) * 1.5;
+    if (Math.abs(x - startX) > 5) {
+      setHasDragged(true);
+    }
+    el.scrollLeft = scrollLeft - walk;
+  };
+
+  const onClickCapture = (e: React.MouseEvent) => {
+    if (hasDragged) {
+      e.stopPropagation();
+      e.preventDefault();
+      setHasDragged(false);
+    }
+  };
+
+  return {
+    ref,
+    props: {
+      onMouseDown,
+      onMouseLeave,
+      onMouseUp,
+      onMouseMove,
+      onClickCapture,
+      style: {
+        cursor: isDown ? 'grabbing' : 'grab',
+        userSelect: 'none' as const,
+        scrollBehavior: isDown ? ('auto' as const) : ('smooth' as const)
+      }
+    }
+  };
+}
 
 function App() {
+  const trendingScroll = useDragScroll();
+  const continueScroll = useDragScroll();
+  const topRatedScroll = useDragScroll();
   // Remote Config State
   const [isUpdateRequired, setIsUpdateRequired] = useState(false);
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
   const [maintenanceMessage, setMaintenanceMessage] = useState("");
   const [updateMessage, setUpdateMessage] = useState("");
 
-  const [categories, setCategories] = useState<CategorySection[]>([]);
+  const [trendingMovies, setTrendingMovies] = useState<Movie[]>([]);
+  const [continueWatching, setContinueWatching] = useState<Movie[]>([]);
+  const [topRatedMovies, setTopRatedMovies] = useState<Movie[]>([]);
   const [heroMovies, setHeroMovies] = useState<Movie[]>([]);
 
-  const [searchResults, setSearchResults] = useState<Movie[]>([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isSearching, setIsSearching] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
 
   // Favorites State
   const [showFavorites, setShowFavorites] = useState(false);
@@ -50,11 +112,11 @@ function App() {
   const [dataLoaded, setDataLoaded] = useState(false);
 
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
-  const [webStreamParams, setWebStreamParams] = useState<{ tmdbId: string, season?: number, episode?: number, provider?: 'vidking' | 'vidsrc' } | null>(null);
-  const [playbackParams, setPlaybackParams] = useState<{ tmdbId: string, season?: number, episode?: number, magnet?: string } | null>(null);
+  const [webStreamParams, setWebStreamParams] = useState<{ tmdbId: string, season?: number, episode?: number, provider?: WebProvider } | null>(null);
+  const [playbackParams, setPlaybackParams] = useState<{ tmdbId: string, season?: number, episode?: number, magnet?: string, imdbId?: string, quality?: string, availableStreams?: StreamOption[], seasons?: any[], logoUrl?: string, description?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
-
+  const [showBackupModal, setShowBackupModal] = useState(false);
 
 
   // Side Panel State
@@ -107,45 +169,26 @@ function App() {
       if (!window.electronAPI) return;
 
       try {
-        // 1. Fetch Trending FIRST (Hero + First Row)
+        // 1. Fetch Trending FIRST (Hero + Rows)
         const trendingRaw = await window.electronAPI.getTrending();
         const trendingMovies = mapMovies(trendingRaw);
 
         if (trendingMovies.length > 0) {
-          // Hero Slideshow gets top 5 TRENDING
-          setHeroMovies(trendingMovies.slice(0, 5));
+          // Pick a random featured movie from the top 10 trending (same as Flutter client),
+          // so the hero changes each time the app is opened instead of always being #1.
+          const randomIndex = Math.floor(Math.random() * Math.min(trendingMovies.length, 10));
+          const featured = trendingMovies[randomIndex];
+          const rest = trendingMovies.filter((_, i) => i !== randomIndex);
+          setHeroMovies([featured, ...rest].slice(0, 5));
 
-          // Add "Trending Now" Row FIRST
-          setCategories(prev => {
-            // Filter out any existing to avoid dupes/reordering issues if re-run
-            const next = prev.filter(p => p.title !== "Trending Now");
-            return [{ title: "Trending Now", movies: trendingMovies }, ...next];
-          });
+          // Top Rated is trending reversed (same as Flutter client)
+          const topRated = trendingMovies.slice().reverse();
+
+          setTrendingMovies(trendingMovies);
+          setTopRatedMovies(topRated);
         }
 
-        // 2. Fetch Top 10 This Week
-        const favoritesRaw = await (window.electronAPI as any).getTop10();
-        const favMovies = mapMovies(favoritesRaw);
-
-        if (favMovies.length > 0) {
-          setCategories(prev => {
-            if (prev.find(p => p.title === "Top 10 This Week")) return prev;
-            return [...prev, { title: "Top 10 This Week", movies: favMovies }];
-          });
-        }
-
-        // 3. Fetch Latest Releases
-        const latestRaw = await window.electronAPI.getLatest();
-        const latestMovies = mapMovies(latestRaw);
-
-        if (latestMovies.length > 0) {
-          setCategories(prev => {
-            if (prev.find(p => p.title === "Latest Releases")) return prev;
-            return [...prev, { title: "Latest Releases", movies: latestMovies }];
-          });
-        }
-
-        // 0. Fetch History
+        // 2. Fetch History
         const history = await (window.electronAPI as any).getWatchHistory();
         console.log("Loaded Watch History:", history);
         setWatchHistory(history);
@@ -177,11 +220,7 @@ function App() {
       // Movies
       if (watchHistory.movies) {
         Object.entries(watchHistory.movies).forEach(([id, data]: [string, any]) => {
-          const pct = (data.progress / data.duration) * 100;
-          // Show if watched > 1 second and not finished (> 95%)
-          if (data.progress > 1 && pct < 95) {
-            candidates.push({ id, ...data, type: 'movie' });
-          }
+          candidates.push({ id, ...data, type: 'movie' });
         });
       }
 
@@ -190,29 +229,36 @@ function App() {
         Object.entries(watchHistory.shows).forEach(([id, eps]: [string, any]) => {
           // Find latest watched ep
           let latestVal = 0;
+          let latestEpKey: string | null = null;
           let latestEp: any = null;
-          Object.values(eps).forEach((ep: any) => {
-            if (ep.lastWatched > latestVal) {
-              latestVal = ep.lastWatched;
-              latestEp = ep;
+          Object.entries(eps || {}).forEach(([epKey, progress]: [string, any]) => {
+            if (progress.lastWatched > latestVal) {
+              latestVal = progress.lastWatched;
+              latestEpKey = epKey;
+              latestEp = progress;
             }
           });
 
-          if (latestEp) {
-            const pct = (latestEp.progress / latestEp.duration) * 100;
-            // Show if watched > 1 second and not finished
-            if (latestEp.progress > 1 && pct < 95) {
-              candidates.push({ id, ...latestEp, type: 'tv' });
-            }
+          if (latestEp && latestEpKey) {
+            const match = (latestEpKey as string).match(/s(\d+)e(\d+)/i);
+            const season = match ? parseInt(match[1]) : undefined;
+            const episode = match ? parseInt(match[2]) : undefined;
+            candidates.push({ 
+              id, 
+              ...latestEp, 
+              type: 'tv',
+              season,
+              episode
+            });
           }
         });
       }
 
       candidates.sort((a, b) => b.lastWatched - a.lastWatched);
-      const top = candidates.slice(0, 10);
+      const top = candidates;
 
       if (top.length === 0) {
-        setCategories(prev => prev.filter(c => c.title !== "Continue Watching"));
+        setContinueWatching([]);
         return;
       }
 
@@ -230,7 +276,9 @@ function App() {
             backdropUrl: d.backdrop,
             description: d.description,
             inCinemas: d.inCinemas,
-            voteCount: d.voteCount || 0
+            voteCount: d.voteCount || 0,
+            season: c.season,
+            episode: c.episode
           } as Movie;
         } catch (e) { return null; }
       }));
@@ -238,18 +286,9 @@ function App() {
       const validMovies = movies.filter(Boolean) as Movie[];
 
       if (validMovies.length > 0) {
-        setCategories(prev => {
-          const filtered = prev.filter(c => c.title !== "Continue Watching");
-          // Insert after Trending (index 0)
-          const trending = filtered.find(c => c.title === "Trending Now");
-          if (trending) {
-            const others = filtered.filter(c => c.title !== "Trending Now");
-            return [trending, { title: "Continue Watching", movies: validMovies }, ...others];
-          }
-          return [{ title: "Continue Watching", movies: validMovies }, ...filtered];
-        });
+        setContinueWatching(validMovies);
       } else {
-        setCategories(prev => prev.filter(c => c.title !== "Continue Watching"));
+        setContinueWatching([]);
       }
     }
     loadContinueWatching();
@@ -305,25 +344,8 @@ function App() {
     return 0;
   };
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!searchQuery.trim() || !window.electronAPI) return;
 
-    setIsSearching(true);
-    setLoading(true);
-    setLoadingMessage(`Searching IMDb for "${searchQuery}"...`);
 
-    try {
-      const results = await window.electronAPI.searchMovies(searchQuery);
-      setSearchResults(mapMovies(results));
-    } catch (err) {
-      console.error("Search failed:", err);
-      alert("Search failed. Please try again.");
-    } finally {
-      setLoading(false);
-      setLoadingMessage("");
-    }
-  };
 
   // OPEN PANEL on Poster Click instead of immediate play (optional, or separate button?)
   // User said "When an movie item is clicked ... it should open a side panel"
@@ -337,14 +359,14 @@ function App() {
     setIsPanelOpen(true);
   };
 
-  const startStream = async (magnet: string, season?: number, episode?: number) => {
+  const startStream = async ({ magnet, season, episode, imdbId, quality, availableStreams, seasons, logoUrl, description }: PlayStreamOptions) => {
     setLoading(true);
     setLoadingMessage("Buffering stream... (this may take a few seconds)");
 
     // Set ID for history tracking
     const targetMovie = selectedMovie;
     if (targetMovie) {
-      setPlaybackParams({ tmdbId: targetMovie.id.toString(), season, episode, magnet });
+      setPlaybackParams({ tmdbId: targetMovie.id.toString(), season, episode, magnet, imdbId, quality, availableStreams, seasons, logoUrl, description });
     }
 
     try {
@@ -371,7 +393,7 @@ function App() {
     }
   };
 
-  const handleWebStream = (tmdbId: string, season?: number, episode?: number, provider: 'vidking' | 'vidsrc' = 'vidking') => {
+  const handleWebStream = (tmdbId: string, season?: number, episode?: number, provider: WebProvider = 'vidking') => {
     setWebStreamParams({ tmdbId, season, episode, provider });
     // Keep panel open underneath
   };
@@ -448,6 +470,14 @@ function App() {
           season={playbackParams?.season}
           episode={playbackParams?.episode}
           magnet={playbackParams?.magnet}
+          imdbId={playbackParams?.imdbId}
+          title={selectedMovie?.title}
+          movieType={selectedMovie?.type}
+          logoUrl={playbackParams?.logoUrl || selectedMovie?.logoUrl}
+          description={playbackParams?.description || selectedMovie?.description}
+          quality={playbackParams?.quality}
+          availableStreams={playbackParams?.availableStreams}
+          seasons={playbackParams?.seasons}
         />
       )}
 
@@ -463,59 +493,48 @@ function App() {
 
       <div style={{ display: (streamUrl || webStreamParams) ? 'none' : 'block' }}>
         {/* ... Nav Bar ... */}
-        <div style={{
-          position: 'fixed', top: 0, width: '100%', padding: '20px 4rem',
-          background: 'linear-gradient(to bottom, rgba(0,0,0,0.9) 10%, transparent)',
-          zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxSizing: 'border-box'
-        }}>
+        {!showSearch && !showFavorites && (
+          <div style={{
+            position: 'fixed', top: 0, width: '100%', padding: '20px 4rem',
+            background: 'linear-gradient(to bottom, rgba(0,0,0,0.9) 10%, transparent)',
+            zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxSizing: 'border-box'
+          }}>
           <div style={{ display: 'flex', alignItems: 'center' }}>
-            {/* Click Logo to reset */}
-            <div style={{ marginRight: '2rem', cursor: 'pointer' }} onClick={() => { setIsSearching(false); setShowFavorites(false); setSearchQuery(""); setIsPanelOpen(false); }}>
+            {/* Click Logo to reset view */}
+            <div style={{ marginRight: '2rem', cursor: 'pointer' }} 
+              onClick={() => { setShowSearch(false); setShowFavorites(false); setIsPanelOpen(false); }}
+            >
               <img src={logo} alt="Popcorn" style={{ height: '40px', objectFit: 'contain' }} />
-            </div>
-            {/* ... Links ... */}
-            <div style={{ display: 'flex', gap: '20px', fontSize: '0.9rem' }}>
-              <span style={{ cursor: 'pointer', opacity: (!isSearching && !showFavorites) ? 1 : 0.7 }} onClick={() => { setIsSearching(false); setShowFavorites(false); }}>Home</span>
-              {/* <span>Movies</span>
-              <span>TV Shows</span> */}
             </div>
           </div>
 
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <form onSubmit={handleSearch} style={{ display: 'flex' }}>
-              <div style={{
-                display: 'flex', alignItems: 'center',
-                background: 'rgba(255, 255, 255, 0.08)',
+            {/* Search Button */}
+            <button
+              onClick={() => { setShowSearch(true); setShowFavorites(false); }}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: showSearch ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.08)',
                 backdropFilter: 'blur(12px)',
                 border: '1px solid rgba(255, 255, 255, 0.1)',
-                borderRadius: '4px',
-                padding: '0 20px',
-                height: '42px',
-                width: '300px',
+                borderRadius: '8px',
+                padding: '0',
+                width: '42px', height: '42px',
+                cursor: 'pointer',
                 transition: 'all 0.3s ease',
                 boxShadow: '0 4px 30px rgba(0, 0, 0, 0.1)',
+                color: showSearch ? 'var(--primary-color)' : 'white',
               }}
-                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.12)'}
-                onMouseLeave={e => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)'}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ opacity: 0.8, marginRight: '12px', color: '#fff' }}>
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                </svg>
-                <input
-                  type="text"
-                  placeholder="Search for Movie"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  style={{
-                    background: 'transparent', border: 'none', color: 'white',
-                    width: '100%', outline: 'none', fontSize: '0.95rem',
-                    fontWeight: 400
-                  }}
-                />
-              </div>
-            </form>
+              onMouseEnter={e => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.12)'}
+              onMouseLeave={e => e.currentTarget.style.background = showSearch ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.08)'}
+              title="Search"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </button>
 
             {/* Favorites Button */}
             <button
@@ -524,8 +543,7 @@ function App() {
                   setShowFavorites(false);
                 } else {
                   setShowFavorites(true);
-                  setIsSearching(false);
-                  setSearchQuery("");
+                  setShowSearch(false);
                   if (window.electronAPI) {
                     try {
                       const favs = await window.electronAPI.getFavorites();
@@ -539,7 +557,7 @@ function App() {
                 background: 'rgba(255, 255, 255, 0.08)',
                 backdropFilter: 'blur(12px)',
                 border: '1px solid rgba(255, 255, 255, 0.1)',
-                borderRadius: '4px',
+                borderRadius: '8px',
                 padding: '0',
                 width: '42px', height: '42px',
                 cursor: 'pointer',
@@ -555,8 +573,34 @@ function App() {
                 <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
               </svg>
             </button>
+
+            {/* Backup & Restore Button */}
+            <button
+              onClick={() => setShowBackupModal(true)}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'rgba(255, 255, 255, 0.08)',
+                backdropFilter: 'blur(12px)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '8px',
+                padding: '0',
+                width: '42px', height: '42px',
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                boxShadow: '0 4px 30px rgba(0, 0, 0, 0.1)',
+                color: 'white',
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.12)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)'}
+              title="Backup & Restore"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+              </svg>
+            </button>
           </div>
         </div>
+      )}
 
         {/* Side Panel */}
         <DetailsPanel
@@ -576,40 +620,58 @@ function App() {
           watchHistory={watchHistory}
         />
 
-        {isSearching ? (
-          <>
-            <div style={{ paddingTop: '100px', paddingLeft: '4rem', paddingRight: '4rem', minHeight: '80vh' }}>
-              <h2>Search Results: "{searchQuery}"</h2>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2rem', marginTop: '2rem', justifyContent: 'flex-start' }}>
-                {searchResults.length > 0 ? searchResults.map(movie => (
-                  <PosterCard key={movie.id} movie={movie} onPlay={() => handlePosterClick(movie)} progress={getProgress(movie)} />
-                )) : (
-                  !loading && <p>No results found.</p>
-                )}
-              </div>
-            </div>
-            {/* Footer */}
-            <div style={{
-              padding: '0.5rem 4rem',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem',
-              opacity: 1, marginTop: '2rem', marginBottom: '2rem'
-            }}>
-              <img src={logo} alt="Popcorn" style={{ height: '24px' }} />
-              <span style={{ fontSize: '0.9rem', color: '#888' }}>powered by</span>
-              <img
-                src={meghaLogo}
-                alt="Megha"
-                style={{ height: '24px', cursor: 'pointer' }}
-                onClick={() => window.electronAPI?.openExternal('https://github.com/MeghaJayalath')}
-              />
-            </div>
-          </>
+        {showSearch ? (
+          <SearchScreen
+            onMovieClick={handlePosterClick}
+            onClose={() => setShowSearch(false)}
+            watchHistory={watchHistory}
+          />
         ) : showFavorites ? (
           <>
-            <div style={{ paddingTop: '100px', paddingLeft: '4rem', paddingRight: '4rem', minHeight: '80vh' }}>
-              <h2 style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                Your Favorites
+            {/* Dedicated Favorites Header */}
+            <div style={{
+              position: 'fixed',
+              top: 0,
+              width: '100%',
+              padding: '20px 4rem',
+              background: 'linear-gradient(to bottom, rgba(0,0,0,0.9) 10%, transparent)',
+              backdropFilter: 'blur(12px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '20px',
+              boxSizing: 'border-box',
+            }}>
+              {/* Back Button */}
+              <button
+                onClick={() => setShowFavorites(false)}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: '50%',
+                  width: '42px', height: '42px',
+                  color: 'white',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.15)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)'}
+                title="Back"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="19" y1="12" x2="5" y2="12"></line>
+                  <polyline points="12 19 5 12 12 5"></polyline>
+                </svg>
+              </button>
+
+              {/* Title 'My List' */}
+              <h2 style={{ fontSize: '1.8rem', fontWeight: 700, margin: 0, color: 'white' }}>
+                My List
               </h2>
+            </div>
+
+            <div style={{ paddingTop: '110px', paddingLeft: '4rem', paddingRight: '4rem', minHeight: '80vh' }}>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2rem', marginTop: '2rem', justifyContent: favorites.length > 0 ? 'flex-start' : 'center', alignItems: favorites.length > 0 ? 'flex-start' : 'center', minHeight: favorites.length > 0 ? 'auto' : '50vh' }}>
                 {favorites.length > 0 ? favorites.map(movie => (
                   <PosterCard key={movie.id} movie={movie} onPlay={() => handlePosterClick(movie)} progress={getProgress(movie)} />
@@ -617,21 +679,6 @@ function App() {
                   <p style={{ color: '#777', fontSize: '1.1rem', marginTop: '2rem' }}>You haven't added any favorites yet.</p>
                 )}
               </div>
-            </div>
-            {/* Footer */}
-            <div style={{
-              padding: '0.5rem 4rem',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem',
-              opacity: 1, marginTop: '2rem', marginBottom: '2rem'
-            }}>
-              <img src={logo} alt="Popcorn" style={{ height: '24px' }} />
-              <span style={{ fontSize: '0.9rem', color: '#888' }}>powered by</span>
-              <img
-                src={meghaLogo}
-                alt="Megha"
-                style={{ height: '24px', cursor: 'pointer' }}
-                onClick={() => window.electronAPI?.openExternal('https://github.com/MeghaJayalath')}
-              />
             </div>
           </>
         ) : (
@@ -645,52 +692,187 @@ function App() {
             )}
 
             <div style={{ padding: '20px 0', marginTop: '-150px', position: 'relative', zIndex: 20 }}>
-              {categories.length > 0 ? categories.map((cat, idx) => (
-                <div key={idx} style={{ padding: '0 4rem', marginBottom: '3rem' }}>
-                  <h3 style={{ marginBottom: '1rem', fontSize: '1.4rem' }}>{cat.title}</h3>
-
-                  <div style={{
-                    display: 'flex', gap: '1rem', overflowX: 'auto', padding: '20px 20px',
-                    scrollBehavior: 'smooth'
-                  }} className="hide-scrollbar">
-                    {cat.movies.map((movie, mIdx) => (
-                      cat.title === "Top 10 This Week" ? (
-                        <Top10Card key={movie.id} movie={movie} rank={mIdx + 1} onPlay={() => handlePosterClick(movie)} />
-                      ) : (
-                        <PosterCard
-                          key={movie.id}
-                          movie={movie}
-                          onPlay={() => handlePosterClick(movie)}
-                          progress={getProgress(movie)}
-                          onRemove={cat.title === "Continue Watching" ? handleRemoveFromHistory : undefined}
-                        />
-                      )
+              {trendingMovies.length > 0 && (
+                <div style={{ padding: '0 4rem', marginBottom: '3rem' }}>
+                  <h3 style={{ marginBottom: '1rem', fontSize: '1.4rem' }}>Trending This Week</h3>
+                  <div 
+                    ref={trendingScroll.ref}
+                    {...trendingScroll.props}
+                    style={{
+                      display: 'flex', gap: '1rem', overflowX: 'auto', padding: '20px 20px',
+                      ...trendingScroll.props.style
+                    }} 
+                    className="hide-scrollbar"
+                  >
+                    {trendingMovies.map((movie) => (
+                      <PosterCard
+                        key={movie.id}
+                        movie={movie}
+                        onPlay={() => handlePosterClick(movie)}
+                        progress={getProgress(movie)}
+                      />
                     ))}
                   </div>
                 </div>
-              )) : (
-                !loading && <div style={{ minHeight: '50vh' }}></div>
               )}
-            </div>
-            {/* Footer */}
-            <div style={{
-              padding: '0.5rem 4rem',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem',
-              opacity: 1, marginTop: '-1.5rem', marginBottom: '2rem'
-            }}>
-              <img src={logo} alt="Popcorn" style={{ height: '24px' }} />
-              <span style={{ fontSize: '0.9rem', color: '#888' }}>powered by</span>
-              <img
-                src={meghaLogo}
-                alt="Megha"
-                style={{ height: '24px', cursor: 'pointer' }}
-                onClick={() => window.electronAPI?.openExternal('https://github.com/MeghaJayalath')}
-              />
+
+              {continueWatching.length > 0 && (
+                <div style={{ padding: '0 4rem', marginBottom: '3rem' }}>
+                  <h3 style={{ marginBottom: '1rem', fontSize: '1.4rem' }}>Continue Watching</h3>
+                  <div 
+                    ref={continueScroll.ref}
+                    {...continueScroll.props}
+                    style={{
+                      display: 'flex', gap: '1rem', overflowX: 'auto', padding: '20px 20px',
+                      ...continueScroll.props.style
+                    }} 
+                    className="hide-scrollbar"
+                  >
+                    {continueWatching.map((movie) => (
+                      <PosterCard
+                        key={movie.id}
+                        movie={movie}
+                        onPlay={() => handlePosterClick(movie)}
+                        progress={getProgress(movie)}
+                        onRemove={handleRemoveFromHistory}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {topRatedMovies.length > 0 && (
+                <div style={{ padding: '0 4rem', marginBottom: '3rem' }}>
+                  <h3 style={{ marginBottom: '1rem', fontSize: '1.4rem' }}>Top Rated</h3>
+                  <div 
+                    ref={topRatedScroll.ref}
+                    {...topRatedScroll.props}
+                    style={{
+                      display: 'flex', gap: '1rem', overflowX: 'auto', padding: '20px 20px',
+                      ...topRatedScroll.props.style
+                    }} 
+                    className="hide-scrollbar"
+                  >
+                    {topRatedMovies.map((movie) => (
+                      <PosterCard
+                        key={movie.id}
+                        movie={movie}
+                        onPlay={() => handlePosterClick(movie)}
+                        progress={getProgress(movie)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </>
         )}
       </div>
-    </div >
+      {showBackupModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)',
+          display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 10000,
+          backdropFilter: 'blur(8px)'
+        }}>
+          <div style={{
+            background: '#000000', border: '1px solid #333', borderRadius: '12px',
+            padding: '2rem', maxWidth: '450px', width: '90%', textAlign: 'center',
+            boxShadow: '0 20px 40px rgba(0,0,0,0.6)', color: 'white',
+            animation: 'modalSlideIn 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) forwards'
+          }}>
+            <h2 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.5rem', fontWeight: 600 }}>Backup & Restore</h2>
+            <p style={{ color: '#aaa', fontSize: '0.95rem', lineHeight: '1.5', marginBottom: '2rem' }}>
+              Export your watch history, resume progress, and favorites to a JSON backup file, or import them from a previously saved backup.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <button
+                onClick={async () => {
+                  setShowBackupModal(false);
+                  setLoading(true);
+                  setLoadingMessage("Exporting backup...");
+                  try {
+                    const success = await window.electronAPI.exportBackup();
+                    if (success) {
+                      alert("Backup exported successfully!");
+                    } else {
+                      alert("Backup export cancelled or failed.");
+                    }
+                  } catch (e) {
+                    console.error(e);
+                    alert("Failed to export backup.");
+                  } finally {
+                    setLoading(false);
+                    setLoadingMessage("");
+                  }
+                }}
+                style={{
+                  background: 'var(--primary-color, #b5966e)', color: '#000',
+                  padding: '12px', border: 'none', borderRadius: '8px', cursor: 'pointer',
+                  fontWeight: 'bold', fontSize: '1rem', transition: 'all 0.2s'
+                }}
+              >
+                Export Backup
+              </button>
+              <button
+                onClick={async () => {
+                  setShowBackupModal(false);
+                  setLoading(true);
+                  setLoadingMessage("Importing backup...");
+                  try {
+                    const success = await window.electronAPI.importBackup();
+                    if (success) {
+                      alert("Backup imported successfully! Reloading history...");
+                      // Fetch watch history and favorites again to update the UI
+                      const history = await window.electronAPI.getWatchHistory();
+                      setWatchHistory(history);
+                      if (showFavorites) {
+                        const favs = await window.electronAPI.getFavorites();
+                        setFavorites(Object.values(favs));
+                      }
+                    } else {
+                      alert("Backup import cancelled or failed.");
+                    }
+                  } catch (e) {
+                    console.error(e);
+                    alert("Failed to import backup.");
+                  } finally {
+                    setLoading(false);
+                    setLoadingMessage("");
+                  }
+                }}
+                style={{
+                  background: '#2a2a2a', color: '#fff',
+                  padding: '12px', border: '1px solid #444', borderRadius: '8px', cursor: 'pointer',
+                  fontWeight: 'bold', fontSize: '1rem', transition: 'all 0.2s'
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = '#333'}
+                onMouseLeave={e => e.currentTarget.style.background = '#2a2a2a'}
+              >
+                Import Backup
+              </button>
+              <button
+                onClick={() => setShowBackupModal(false)}
+                style={{
+                  background: 'transparent', color: '#888',
+                  padding: '8px', border: 'none', cursor: 'pointer',
+                  fontSize: '0.9rem', marginTop: '8px'
+                }}
+                onMouseEnter={e => e.currentTarget.style.color = '#fff'}
+                onMouseLeave={e => e.currentTarget.style.color = '#888'}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+          <style>{`
+            @keyframes modalSlideIn {
+              from { opacity: 0; transform: scale(0.9) translateY(20px); }
+              to { opacity: 1; transform: scale(1) translateY(0); }
+            }
+          `}</style>
+        </div>
+      )}
+    </div>
   );
 }
 

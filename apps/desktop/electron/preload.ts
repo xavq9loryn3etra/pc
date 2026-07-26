@@ -1,19 +1,25 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
+    prewarmTorrent: (magnetLink: string) => ipcRenderer.invoke('prewarm-torrent', magnetLink),
+    cancelPrewarm: () => ipcRenderer.invoke('cancel-prewarm'),
     startStream: (magnetLink: string) => ipcRenderer.invoke('start-stream', magnetLink),
     stopStream: () => ipcRenderer.invoke('stop-stream'),
+    getTorrentStats: () => ipcRenderer.invoke('get-torrent-stats'),
+    probeStream: (url: string) => ipcRenderer.invoke('probe-stream', url),
+    startTranscode: (url: string, startTimeSeconds?: number) => ipcRenderer.invoke('start-transcode', url, startTimeSeconds),
+    stopTranscode: () => ipcRenderer.invoke('stop-transcode'),
     getTrending: () => ipcRenderer.invoke('get-trending'),
     getLatest: () => ipcRenderer.invoke('get-latest'),
     getTop10: () => ipcRenderer.invoke('get-top-10'),
-    getTrailer: (id: string) => ipcRenderer.invoke('get-trailer', id),
+    getTrailer: (id: string, type?: string) => ipcRenderer.invoke('get-trailer', id, type),
     searchMovies: (query: string) => ipcRenderer.invoke('search-movies', query),
     getCategory: (genre: string) => ipcRenderer.invoke('get-category', genre),
-    getTorrents: (title: string, year: number) => ipcRenderer.invoke('get-torrents', title, year),
-    getMagnet: (title: string, year: number) => ipcRenderer.invoke('get-magnet', title, year),
+    getTorrents: (imdbId: string | null | undefined, title: string, year: number) => ipcRenderer.invoke('get-torrents', imdbId, title, year),
+    getMagnet: (imdbId: string | null | undefined, title: string, year: number) => ipcRenderer.invoke('get-magnet', imdbId, title, year),
     getMovieDetails: (id: string, type?: string) => ipcRenderer.invoke('get-movie-details', id, type),
     getSeasonDetails: (tvId: string, seasonNumber: number) => ipcRenderer.invoke('get-season-details', tvId, seasonNumber),
-    getEpisodeTorrents: (title: string, season: number, episode: number) => ipcRenderer.invoke('get-episode-torrents', title, season, episode),
+    getEpisodeTorrents: (imdbId: string | null | undefined, title: string, season: number, episode: number) => ipcRenderer.invoke('get-episode-torrents', imdbId, title, season, episode),
     getWatchProgress: (tmdbId: string, season?: number, episode?: number) => ipcRenderer.invoke('get-watch-progress', tmdbId, season, episode),
     updateWatchProgress: (tmdbId: string, progress: number, duration: number, season?: number, episode?: number, magnet?: string) => ipcRenderer.invoke('update-watch-progress', tmdbId, progress, duration, season, episode, magnet),
     removeWatchProgress: (tmdbId: string) => ipcRenderer.invoke('remove-watch-progress', tmdbId),
@@ -21,5 +27,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     addFavorite: (movie: any) => ipcRenderer.invoke('add-favorite', movie),
     removeFavorite: (tmdbId: string) => ipcRenderer.invoke('remove-favorite', tmdbId),
     getFavorites: () => ipcRenderer.invoke('get-favorites'),
-    openExternal: (url: string) => ipcRenderer.invoke('open-external', url)
+    openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
+    exportBackup: () => ipcRenderer.invoke('export-backup'),
+    importBackup: () => ipcRenderer.invoke('import-backup')
 });

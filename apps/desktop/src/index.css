@@ -1,5 +1,5 @@
 :root {
-  --bg-color: #141414;
+  --bg-color: #000000;
   --text-color: #e5e5e5;
   --primary-color: #FDEDAD;
   --secondary-bg: #181818;
@@ -11,7 +11,7 @@
 body {
   margin: 0;
   padding: 0;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
   background-color: var(--bg-color);
   color: var(--text-color);
   overflow-x: hidden;
@@ -41,7 +41,7 @@ body {
 button {
   cursor: pointer;
   border: none;
-  border-radius: 4px;
+  border-radius: 8px;
   font-weight: bold;
   transition: all 0.2s;
 }

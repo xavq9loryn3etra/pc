@@ -12,6 +12,6 @@
     },
     "include": [
         "electron/**/*",
-        "src/types/**/*"
+        "src/types/**/*.d.ts"
     ]
 }

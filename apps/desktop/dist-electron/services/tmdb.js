@@ -245,6 +245,7 @@ async function getMovieDetailsTMDB(id, type) {
             return {
                 ...formatMovie(m),
                 ...omdbRatings, // Merge OMDB ratings
+                imdbId: m.imdb_id || null,
                 director,
                 cast,
                 genres,
@@ -294,6 +295,7 @@ async function getMovieDetailsTMDB(id, type) {
         return {
             ...formatMovie(m),
             ...omdbRatings,
+            imdbId: m.external_ids?.imdb_id || null,
             cast,
             genres,
             logoUrl,
@@ -338,18 +340,27 @@ async function getSeasonDetailsTMDB(tvId, seasonNumber) {
         return [];
     }
 }
-async function getTrailerTMDB(id) {
+async function getTrailerTMDB(id, type) {
     try {
-        // Try Movie
         let videos = [];
-        try {
+        if (type === 'tv') {
+            const res = await axios_1.default.get(`${BASE_URL}/tv/${id}/videos`, { params: { api_key: TMDB_API_KEY } });
+            videos = res.data.results;
+        }
+        else if (type === 'movie') {
             const res = await axios_1.default.get(`${BASE_URL}/movie/${id}/videos`, { params: { api_key: TMDB_API_KEY } });
             videos = res.data.results;
         }
-        catch {
-            // Try TV
-            const res = await axios_1.default.get(`${BASE_URL}/tv/${id}/videos`, { params: { api_key: TMDB_API_KEY } });
-            videos = res.data.results;
+        else {
+            // Type unknown — fall back to the old guess-and-check behavior
+            try {
+                const res = await axios_1.default.get(`${BASE_URL}/movie/${id}/videos`, { params: { api_key: TMDB_API_KEY } });
+                videos = res.data.results;
+            }
+            catch {
+                const res = await axios_1.default.get(`${BASE_URL}/tv/${id}/videos`, { params: { api_key: TMDB_API_KEY } });
+                videos = res.data.results;
+            }
         }
         // Find "Trailer" type, official from YouTube
         const trailer = videos.find((v) => v.site === 'YouTube' && v.type === 'Trailer' && v.official) || videos.find((v) => v.site === 'YouTube' && v.type === 'Trailer')

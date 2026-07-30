@@ -153,6 +153,9 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                                   imageUrl: widget.movie.logoUrl!,
                                   fit: BoxFit.contain,
                                   alignment: Alignment.centerLeft,
+                                  memCacheHeight:
+                                      (50 * MediaQuery.of(context).devicePixelRatio)
+                                          .toInt(),
                                   placeholder: (context, url) => Container(color: Colors.white10),
                                 ),
                               )
@@ -351,22 +354,6 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
               child: Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(16),
-                  border: isCurrent
-                      ? Border.all(color: AppTheme.primaryColor, width: 3)
-                      : Border.all(color: Colors.white.withOpacity(0.1), width: 1),
-                  image: (isFuture && (widget.movie.backdrop != null || widget.movie.posterUrl != null))
-                      ? DecorationImage(
-                          image: CachedNetworkImageProvider((widget.movie.backdrop ?? widget.movie.posterUrl)!),
-                          fit: BoxFit.cover,
-                          opacity: 0.4,
-                        )
-                      : ep.stillPath != null
-                          ? DecorationImage(
-                              image: CachedNetworkImageProvider(ep.stillPath!),
-                              fit: BoxFit.cover,
-                              opacity: isWatched ? 0.4 : 1.0,
-                            )
-                          : null,
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withOpacity(0.3),
@@ -375,60 +362,95 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                     ),
                   ],
                 ),
-                child: Padding(
-                  padding: EdgeInsets.all(isCurrent ? 3.0 : 1.0),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      if (isFuture)
-                        const Center(
-                            child: Icon(Icons.lock_outline,
-                                color: Colors.white54, size: 32))
-                      else if (isWatched)
-                        const Center(
-                            child: Icon(Icons.check_circle_outline,
-                                color: Colors.white54, size: 32))
-                      else if (!isCurrent)
-                        Center(
-                          child: Container(
-                            width: 46,
-                            height: 46,
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.6),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(Icons.play_arrow_rounded,
-                                color: Colors.white, size: 32),
-                          ),
-                        ),
+                clipBehavior: Clip.antiAlias,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (isFuture && (widget.movie.backdrop != null || widget.movie.posterUrl != null))
+                      CachedNetworkImage(
+                        imageUrl: (widget.movie.backdrop ?? widget.movie.posterUrl)!,
+                        fit: BoxFit.cover,
+                        color: Colors.black.withOpacity(0.6),
+                        colorBlendMode: BlendMode.darken,
+                      )
+                    else if (ep.stillPath != null)
+                      CachedNetworkImage(
+                        imageUrl: ep.stillPath!,
+                        fit: BoxFit.cover,
+                        color: isWatched ? Colors.black.withOpacity(0.6) : null,
+                        colorBlendMode: isWatched ? BlendMode.darken : null,
+                      )
+                    else
+                      Container(color: Colors.grey[900]),
 
-                      // Progress Bar
-                      if (progress != null && progress > 0)
-                        Positioned(
-                          bottom: 6,
-                          left: 12,
-                          right: 12,
-                          child: Container(
-                            height: 6,
-                            decoration: BoxDecoration(
-                              color: Colors.black54,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(4),
-                              child: FractionallySizedBox(
-                                alignment: Alignment.centerLeft,
-                                widthFactor: progress.clamp(0.0, 1.0),
-                                child: Container(
-                                    color: isCurrent
-                                        ? AppTheme.primaryColor
-                                        : Colors.white70),
-                              ),
+                    if (isFuture)
+                      const Center(
+                          child: Icon(Icons.lock_outline,
+                              color: Colors.white54, size: 32))
+                    else if (isWatched)
+                      const Center(
+                          child: Icon(Icons.check_circle_outline,
+                              color: Colors.white54, size: 32))
+                    else if (!isCurrent)
+                      Center(
+                        child: Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.6),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.play_arrow_rounded,
+                              color: Colors.white, size: 32),
+                        ),
+                      ),
+
+                    // Progress Bar
+                    if (progress != null && progress > 0)
+                      Positioned(
+                        bottom: 6,
+                        left: 12,
+                        right: 12,
+                        child: Container(
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: FractionallySizedBox(
+                              alignment: Alignment.centerLeft,
+                              widthFactor: progress.clamp(0.0, 1.0),
+                              child: Container(
+                                  color: isCurrent
+                                      ? AppTheme.primaryColor
+                                      : Colors.white70),
                             ),
                           ),
                         ),
-                    ],
-                  ),
+                      ),
+
+                    // Border ring overlay on top of thumbnail and icons
+                    IgnorePointer(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(16),
+                          border: isCurrent
+                              ? Border.all(
+                                  color: AppTheme.primaryColor,
+                                  width: 3,
+                                  strokeAlign: BorderSide.strokeAlignInside,
+                                )
+                              : Border.all(
+                                  color: Colors.white.withOpacity(0.1),
+                                  width: 1,
+                                  strokeAlign: BorderSide.strokeAlignInside,
+                                ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),

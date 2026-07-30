@@ -7,8 +7,8 @@ import '../theme/app_theme.dart';
 import '../models/movie.dart';
 import '../widgets/movie_poster.dart';
 import '../widgets/desktop_details_panel.dart';
-import 'search_screen.dart';
-import 'favorites_screen.dart';
+import '../widgets/floating_bottom_nav_bar.dart';
+import '../services/movie_tab_service.dart';
 
 class DesktopHomeScreen extends StatefulWidget {
   final Movie featuredMovie;
@@ -132,18 +132,6 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Trending List
-                          _buildSectionList(
-                            context,
-                            title: "Trending This Week",
-                            movies: widget.trendingMovies,
-                            heroPrefix: "desktop_trending",
-                            posterHeight: 300,
-                            posterWidth: 200,
-                            onTap: _onMovieSelect,
-                          ),
-                          const SizedBox(height: 40),
-
                           if (widget.historyMovies.isNotEmpty) ...[
                             _buildSectionList(
                               context,
@@ -157,6 +145,18 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                             ),
                             const SizedBox(height: 40),
                           ],
+
+                          // Trending List
+                          _buildSectionList(
+                            context,
+                            title: "Trending This Week",
+                            movies: widget.trendingMovies,
+                            heroPrefix: "desktop_trending",
+                            posterHeight: 300,
+                            posterWidth: 200,
+                            onTap: _onMovieSelect,
+                          ),
+                          const SizedBox(height: 40),
 
                           _buildSectionList(
                             context,
@@ -230,6 +230,13 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     return CachedNetworkImage(
       imageUrl: image,
       fit: BoxFit.cover,
+      // Cap decode to the actual screen width — this fills the whole
+      // background so without this it decodes at the source image's
+      // native resolution regardless of how big the window actually is.
+      memCacheWidth:
+          (MediaQuery.of(context).size.width *
+                  MediaQuery.of(context).devicePixelRatio)
+              .toInt(),
       placeholder: (context, url) => Container(color: Colors.black),
       errorWidget: (context, url, error) => Container(color: Colors.black),
     ).animate().fadeIn(duration: 800.ms);
@@ -317,12 +324,10 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                 cursor: SystemMouseCursors.click,
                 child: GestureDetector(
                   onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const SearchScreen(),
-                      ),
-                    );
+                    // DesktopHomeScreen is itself the Home tab's content
+                    // inside MovieTabShell, so switch tabs in place rather
+                    // than pushing a second, disconnected SearchScreen route.
+                    MovieTabService().currentTab.value = BottomNavTab.search;
                   },
                   child: Container(
                     width: 40,
@@ -344,12 +349,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                 cursor: SystemMouseCursors.click,
                 child: GestureDetector(
                   onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const FavoritesScreen(),
-                      ),
-                    );
+                    MovieTabService().currentTab.value = BottomNavTab.favorites;
                   },
                   child: Container(
                     width: 40,
@@ -393,6 +393,8 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
           CachedNetworkImage(
             imageUrl: widget.featuredMovie.logoUrl!,
             height: 150,
+            memCacheHeight:
+                (150 * MediaQuery.of(context).devicePixelRatio).toInt(),
             fit: BoxFit.contain,
             alignment: Alignment.centerLeft,
             placeholder: (context, url) => const SizedBox(height: 150),
@@ -462,26 +464,34 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
               ),
             ),
             const SizedBox(width: 16),
-            // Info Button
-            ElevatedButton.icon(
-              onPressed: () => _onMovieSelect(widget.featuredMovie),
-              icon: const Icon(Icons.info_outline, color: Colors.white),
-              label: const Text("More Info"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color.fromRGBO(109, 109, 109, 0.7),
-                foregroundColor: Colors.white,
-                elevation: 0,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32, // Match Play button
-                  vertical: 20,
-                ),
-                fixedSize: const Size.fromHeight(56),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                textStyle: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+            // Info Button — frosted glass, same recipe as the mobile hero
+            // banner's More Info button.
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                child: ElevatedButton.icon(
+                  onPressed: () => _onMovieSelect(widget.featuredMovie),
+                  icon: const Icon(Icons.info_outline, color: Colors.white),
+                  label: const Text("More Info"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor:
+                        const Color.fromRGBO(109, 109, 109, 0.7),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 32, // Match Play button
+                      vertical: 20,
+                    ),
+                    fixedSize: const Size.fromHeight(56),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    textStyle: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
                 ),
               ),
             ),

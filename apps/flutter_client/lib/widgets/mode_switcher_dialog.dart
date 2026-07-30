@@ -5,6 +5,48 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 
+/// Shared trigger for the mode-switcher dropdown, used by both the header's
+/// mode-switch icon (Music/Books, which still show it) and the Settings
+/// screen's "Switch Mode" entry (Popcorn/movies).
+void showModeSwitcherDialog(BuildContext context) {
+  showGeneralDialog(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Dismiss',
+    barrierColor: Colors.black.withOpacity(0.5),
+    transitionDuration: const Duration(milliseconds: 300),
+    pageBuilder: (context, animation, secondaryAnimation) {
+      return Stack(
+        children: [
+          // transparent dismiss layer
+          GestureDetector(
+            onTap: () => Navigator.of(context).pop(),
+            behavior: HitTestBehavior.opaque,
+            child: const SizedBox.expand(),
+          ),
+          // The actual dialog content
+          const Align(
+            alignment: Alignment.topCenter,
+            child: ModeSwitcherDialog(),
+          ),
+        ],
+      );
+    },
+    transitionBuilder: (context, animation, secondaryAnimation, child) {
+      return SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, -1),
+          end: Offset.zero,
+        ).animate(CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        )),
+        child: child,
+      );
+    },
+  );
+}
+
 class ModeSwitcherDialog extends StatelessWidget {
   const ModeSwitcherDialog({super.key});
 

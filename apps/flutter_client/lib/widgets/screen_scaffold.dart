@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../models/movie.dart';
 import 'desktop_details_panel.dart';
 import '../widgets/custom_app_bar.dart';
+import '../widgets/floating_bottom_nav_bar.dart';
 
 typedef BodyBuilder = Widget Function(
     BuildContext context, bool isDesktop, EdgeInsets padding);
@@ -15,6 +16,7 @@ class ScreenScaffold extends StatelessWidget {
   final Movie? selectedMovie;
   final VoidCallback? onCloseSidePanel;
   final bool extendBodyBehindAppBar;
+  final BottomNavTab? bottomNavTab;
 
   const ScreenScaffold({
     super.key,
@@ -25,6 +27,7 @@ class ScreenScaffold extends StatelessWidget {
     this.selectedMovie,
     this.onCloseSidePanel,
     this.extendBodyBehindAppBar = true,
+    this.bottomNavTab,
   });
 
   @override
@@ -43,13 +46,25 @@ class ScreenScaffold extends StatelessWidget {
                 actions: actions,
                 forceOpacity: opacity,
                 showActions: false, // Scaffold users provide their own actions
+                // Its 3 callers (Search/Favorites/Settings) all have the
+                // floating bottom nav bar now — mode-switching lives in
+                // Settings instead of a header icon.
+                showModeSwitch: false,
               ),
               body: body(
                 context,
                 isDesktop,
-                EdgeInsets.only(bottom: bottomSafePadding),
+                // Reserve room for the floating nav bar (~110px including its
+                // own top/bottom padding) so scrollable content doesn't end
+                // up rendering underneath/overlapping its buttons.
+                EdgeInsets.only(
+                  bottom: bottomSafePadding + (bottomNavTab != null ? 110 : 0),
+                ),
               ),
             ),
+
+            if (bottomNavTab != null)
+              FloatingBottomNavBar(activeTab: bottomNavTab!),
 
             // Side panel overlay for desktop
             if (isDesktop && selectedMovie != null)

@@ -49,13 +49,19 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen>
 
   void _selectMode(AppMode mode) {
     AppModeService().setMode(mode);
+    // Get to the destination as fast as possible rather than making the
+    // user sit through a long fade — the destination screen's own skeleton
+    // loaders (TMDB fetch, etc.) already communicate "still loading" once
+    // we're there, so there's nothing to gain from a slow transition on
+    // top of that. Kept brief instead of instant (Duration.zero) purely so
+    // it doesn't read as a rendering glitch.
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
         pageBuilder: (_, __, ___) => const MainScreen(),
         transitionsBuilder: (_, animation, __, child) {
           return FadeTransition(opacity: animation, child: child);
         },
-        transitionDuration: const Duration(milliseconds: 600),
+        transitionDuration: const Duration(milliseconds: 150),
       ),
     );
   }
@@ -74,13 +80,9 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen>
                 const SizedBox(height: 40),
 
                 // App brand
-                SvgPicture.asset(
-                  'assets/logo.svg',
+                Image.asset(
+                  'assets/icon-transparent.png',
                   width: 44,
-                  colorFilter: const ColorFilter.mode(
-                    AppTheme.primaryColor,
-                    BlendMode.srcIn,
-                  ),
                 ),
                 const SizedBox(height: 20),
                 const Text(

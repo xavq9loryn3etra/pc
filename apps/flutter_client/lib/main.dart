@@ -1,5 +1,7 @@
 import 'dart:io' show Platform;
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -22,10 +24,21 @@ import 'services/app_mode_service.dart';
 import 'services/saved_movies_service.dart';
 import 'services/deep_link_service.dart';
 import 'services/torrent/torrent_engine_service.dart';
-import 'widgets/custom_loader.dart';
+import 'widgets/shimmer_loader.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Always start in portrait, regardless of whatever orientation the OS
+  // Activity was left in. PlayerScreen/WebPlayer lock to landscape and only
+  // reset back to portrait in their own dispose() — but if Android kills the
+  // app process outright (common after the screen turns off mid-playback,
+  // to reclaim memory) that dispose() never runs, since the process is
+  // terminated abruptly rather than closed gracefully. The landscape lock
+  // is held at the Activity level and survives the kill, so without this,
+  // reopening from Recents cold-starts fresh into the mode selector screen
+  // while still stuck in landscape.
+  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
   // Firebase C++ SDK on Windows only ships Debug libs, causing linker
   // errors in Release builds. The desktop Electron app handles Firebase
@@ -51,7 +64,12 @@ void main() async {
   MediaKit.ensureInitialized();
   await SavedMoviesService().init();
   await AppModeService().init();
-  await TorrentEngineService.instance.init();
+  // Not awaited: this spins up the native libtorrent engine (DHT bootstrap,
+  // tracker connections), which isn't needed until the user actually starts
+  // streaming something. Awaiting it here delayed the first frame on every
+  // cold start, even for users who just want to browse. streamMagnet()
+  // already awaits init() itself if it hasn't finished by the time it's needed.
+  unawaited(TorrentEngineService.instance.init());
 
   try {
     await dotenv.load(fileName: ".env");
@@ -80,11 +98,11 @@ enum _AppScreen {
   modeSelector,
 }
 
-class _MyAppState extends State<MyApp> {
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   _AppScreen _currentScreen = _AppScreen.checking;
   String _maintenanceMsg = "";
   String _updateMsg = "";
-  
+
   final _navigatorKey = GlobalKey<NavigatorState>();
   late StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
   bool _isOffline = false;
@@ -92,6 +110,7 @@ class _MyAppState extends State<MyApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkConfig();
     _initConnectivity();
     DeepLinkService().init(_navigatorKey);
@@ -107,8 +126,19 @@ class _MyAppState extends State<MyApp> {
     });
   }
 
+  // Best-effort clean shutdown of the native libtorrent engine (DHT, peer
+  // connections) when the OS is tearing the app down, instead of leaving it
+  // running until the process is killed outright.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.detached) {
+      TorrentEngineService.instance.dispose();
+    }
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _connectivitySubscription.cancel();
     DeepLinkService().dispose();
     super.dispose();
@@ -235,8 +265,11 @@ class _MyAppState extends State<MyApp> {
       case _AppScreen.checking:
         homeWidget = const Scaffold(
           backgroundColor: Colors.black87,
-          body: Center(
-            child: CustomLoader(),
+          body: Stack(
+            children: [
+              Center(child: ShimmerLoader()),
+              _ShaderWarmup(),
+            ],
           ),
         );
         break;
@@ -269,6 +302,33 @@ class _MyAppState extends State<MyApp> {
         return child!;
       },
       home: homeWidget,
+    );
+  }
+}
+
+/// Forces the BackdropFilter blur shader used throughout the movies UI
+/// (nav bar, app bar, hero banner, details back button, etc.) to compile
+/// now, during the startup loading screen, instead of the first time a
+/// real blur is actually shown on screen — which otherwise freezes the
+/// raster thread for a multi-second stall the first time it's needed each
+/// app session (classic Flutter shader-compilation jank, most noticeable
+/// switching into movies mode since it's the heaviest user of this
+/// effect). 1x1 so it's imperceptible — the one-time compile cost is the
+/// same regardless of how much screen area actually gets blurred.
+class _ShaderWarmup extends StatelessWidget {
+  const _ShaderWarmup();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 1,
+      height: 1,
+      child: ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: Container(color: Colors.transparent),
+        ),
+      ),
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:libtorrent_flutter/libtorrent_flutter.dart';
+import 'torrent_paths.dart';
 
 class TorrentEngineService {
   static final TorrentEngineService _instance = TorrentEngineService._();
@@ -8,14 +9,46 @@ class TorrentEngineService {
 
   bool _initialized = false;
 
+  static const int _downloadLimitBytesPerSec = 10 * 1024 * 1024; // 10 MB/s
+  static const int _uploadLimitBytesPerSec = 1 * 1024 * 1024; // 1 MB/s
+
+  /// Normal foreground piece-cache size — how far ahead of the read head a
+  /// stream is allowed to buffer. See [setStreamCacheCapacity].
+  static const int defaultStreamCacheBytes = 500 * 1024 * 1024; // 500 MB
+
   Future<void> init() async {
     if (_initialized) return;
     try {
+      // Application-support dir, not the OS temp dir — see TorrentPaths for
+      // why: temp can be purged by the OS independently of app logic, which
+      // would silently undo the "keep downloaded data" behavior below.
+      final savePath = await TorrentPaths.torrentsDir();
+
       await LibtorrentFlutter.init(
-        downloadLimit: 10 * 1024 * 1024,  // 10 MB/s cap
-        uploadLimit: 1 * 1024 * 1024,     // 1 MB/s upload cap
-        fetchTrackers: true,              // Inject public trackers
+        downloadLimit: _downloadLimitBytesPerSec,
+        uploadLimit: _uploadLimitBytesPerSec,
+        fetchTrackers: true, // Inject public trackers
+        defaultSavePath: savePath,
       );
+
+      // Apply explicit session tuning instead of relying on whatever the
+      // native library's own hardcoded defaults happen to be. In particular:
+      // keep DHT/encryption/transports permissive — a smaller compatible-peer
+      // pool makes "fails to stream despite seeds" worse, not better — and
+      // raise the per-reader connection limit + preload share so a stream
+      // fills its buffer faster once peers are actually available.
+      // downloadRateLimit/uploadRateLimit here are in KB/s (vs. bytes/sec
+      // above) — kept in sync so this doesn't silently override the caps
+      // just set via LibtorrentFlutter.init().
+      final defaults = engine.getDefaultConfig();
+      engine.configureSession(defaults.copyWith(
+        connectionsLimit: 50,
+        preloadCache: 70,
+        downloadRateLimit: _downloadLimitBytesPerSec ~/ 1024,
+        uploadRateLimit: _uploadLimitBytesPerSec ~/ 1024,
+        responsiveMode: true,
+      ));
+
       _initialized = true;
     } catch (e) {
       print('Error initializing Torrent Engine: $e');
@@ -46,34 +79,62 @@ class TorrentEngineService {
     }
 
     // Build magnet with tracker list for instant swarm discovery
-    final trackerParams = _trackers.map((t) => '&tr=${Uri.encodeComponent(t)}').join();
+    final trackerParams =
+        _trackers.map((t) => '&tr=${Uri.encodeComponent(t)}').join();
     final magnetUri = 'magnet:?xt=urn:btih:$infoHash$trackerParams';
-    final id = engine.addMagnet(magnetUri);
 
-    // Wait for metadata (poll torrentUpdates until hasMetadata == true)
-    await _waitForMetadata(id);
+    // Deterministic, per-content save path (not the shared default) — one
+    // directory per infoHash means re-streaming the same content later finds
+    // and reuses whatever was already downloaded there (libtorrent hash-checks
+    // existing files against the piece list on add), and it also means the
+    // Storage screen can list/delete cached downloads one directory at a time
+    // without risking touching another torrent's files.
+    final savePath = await TorrentPaths.savePathFor(infoHash);
+    final id = engine.addMagnet(magnetUri, savePath);
 
-    // Get files list
-    final files = engine.getFiles(id);
-    if (files.isEmpty) {
-      throw Exception('No files found in torrent');
+    try {
+      // Wait for metadata (poll torrentUpdates until hasMetadata == true)
+      await _waitForMetadata(id);
+
+      // Get files list
+      final files = engine.getFiles(id);
+      if (files.isEmpty) {
+        throw Exception('No files found in torrent');
+      }
+
+      final videoIdx = fileIndex ?? _findLargestVideoFile(files);
+
+      // Start stream with a sliding-window piece cache
+      final stream = engine.startStream(
+        id,
+        fileIndex: videoIdx,
+        maxCacheBytes: defaultStreamCacheBytes,
+      );
+
+      // Preload head + tail of the file (TorrServer-style) so the player's
+      // initial probe doesn't stall waiting for container index data —
+      // often located at the file's end for MP4 — that hasn't been
+      // prioritized yet. This is a likely cause of "has seeds but still
+      // fails to start" for certain containers/encodes.
+      engine.preloadStream(stream.id);
+
+      return StreamResult(
+        torrentId: id,
+        streamId: stream.id,
+        streamUrl: stream.url,
+        fileName: files
+            .firstWhere((f) => f.index == videoIdx, orElse: () => files.first)
+            .name,
+        fileSize: files
+            .firstWhere((f) => f.index == videoIdx, orElse: () => files.first)
+            .size,
+      );
+    } catch (e) {
+      // Don't leave a dead torrent behind — especially important now that
+      // resolveWithFallback() may try several candidates in sequence.
+      cleanup(id);
+      rethrow;
     }
-
-    final videoIdx = fileIndex ?? _findLargestVideoFile(files);
-
-    // Start stream with 500MB sliding window cache
-    final stream = engine.startStream(
-      id,
-      fileIndex: videoIdx,
-      maxCacheBytes: 500 * 1024 * 1024,
-    );
-
-    return StreamResult(
-      torrentId: id,
-      streamUrl: stream.url,
-      fileName: files.firstWhere((f) => f.index == videoIdx, orElse: () => files.first).name,
-      fileSize: files.firstWhere((f) => f.index == videoIdx, orElse: () => files.first).size,
-    );
   }
 
   Future<void> _waitForMetadata(int id) async {
@@ -97,7 +158,8 @@ class TorrentEngineService {
       const Duration(seconds: 30),
       onTimeout: () {
         subscription?.cancel();
-        throw TimeoutException('Timed out waiting for torrent metadata. Please check your internet connection or peer availability.');
+        throw TimeoutException(
+            'Timed out waiting for torrent metadata. Please check your internet connection or peer availability.');
       },
     );
   }
@@ -114,12 +176,43 @@ class TorrentEngineService {
     return largestIndex;
   }
 
-  /// Clean up after playback
+  /// Clean up after playback — deletes the downloaded data. Only appropriate
+  /// when the content is genuinely being abandoned (e.g. switching quality or
+  /// episode mid-session discards the old stream on purpose), not for a
+  /// normal player close.
   void cleanup(int torrentId) {
     try {
       engine.disposeTorrent(torrentId);
     } catch (e) {
       print('Error cleaning up torrent $torrentId: $e');
+    }
+  }
+
+  /// Stop streaming without deleting downloaded data — used when the player
+  /// closes but playback might resume later. Keeps whatever was already
+  /// fetched (including the read-ahead buffer) on disk instead of the old
+  /// delete-everything behavior, so resuming doesn't re-download it. Only
+  /// releases the HTTP stream/reader resources; the torrent itself stays
+  /// registered in the session and keeps downloading at the same rate as
+  /// before — no separate "finish downloading" mode.
+  void release(int torrentId) {
+    try {
+      engine.stopAllStreamsForTorrent(torrentId);
+    } catch (e) {
+      print('Error releasing torrent $torrentId: $e');
+    }
+  }
+
+  /// Shrinks or restores how far ahead of the current read position a live
+  /// stream is allowed to buffer, without stopping/restarting it. Used to
+  /// stop eagerly pre-fetching the rest of the file while the app is
+  /// backgrounded and playback isn't advancing — see PlayerScreen's
+  /// app-lifecycle handling.
+  void setStreamCacheCapacity(int streamId, int capacityBytes) {
+    try {
+      engine.setCacheSettings(streamId, capacity: capacityBytes);
+    } catch (e) {
+      print('Error adjusting stream cache: $e');
     }
   }
 
@@ -136,12 +229,14 @@ class TorrentEngineService {
 
 class StreamResult {
   final int torrentId;
-  final String streamUrl;    // http://127.0.0.1:PORT/stream/...
+  final int streamId;
+  final String streamUrl; // http://127.0.0.1:PORT/stream/...
   final String fileName;
   final int fileSize;
 
   StreamResult({
     required this.torrentId,
+    required this.streamId,
     required this.streamUrl,
     required this.fileName,
     required this.fileSize,

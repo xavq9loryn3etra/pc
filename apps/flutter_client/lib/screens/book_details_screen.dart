@@ -165,6 +165,11 @@ class _BookDetailsScreenState extends State<BookDetailsScreen> {
                                 'PC_Flutter_Client/1.0 (megha@example.com)',
                           },
                           fit: BoxFit.cover,
+                          // This copy is blurred (BackdropFilter below), so a
+                          // reduced decode resolution costs nothing visually.
+                          memCacheWidth: (MediaQuery.of(context).size.width *
+                                  MediaQuery.of(context).devicePixelRatio)
+                              .toInt(),
                         ),
                         Container(
                           decoration: const BoxDecoration(
@@ -208,6 +213,11 @@ class _BookDetailsScreenState extends State<BookDetailsScreen> {
                             ? CachedNetworkImage(
                                 imageUrl: book.coverUrl!,
                                 fit: BoxFit.cover,
+                                // Only height constrained — see book_card.dart
+                                // for why width isn't also capped here.
+                                memCacheHeight: (270 *
+                                        MediaQuery.of(context).devicePixelRatio)
+                                    .toInt(),
                               )
                             : Container(color: Colors.grey),
                       ),

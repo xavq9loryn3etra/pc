@@ -2,7 +2,7 @@ name: flutter_client
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
-publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+publish_to: "none" # Remove this line if you wish to publish to pub.dev
 
 # The following defines the version and build number for your application.
 # A version number is three numbers separated by dots, like 1.2.43
@@ -16,10 +16,10 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.30+37
+version: 1.0.30+38
 
 environment:
-  sdk: '>=3.1.5 <4.0.0'
+  sdk: ">=3.1.5 <4.0.0"
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -67,6 +67,7 @@ dependencies:
   libtorrent_flutter: ^1.8.5
   flutter_foreground_task: ^8.0.0
   flutter_media_session: ^2.1.3
+  wakelock_plus: ^1.4.0
 
 dev_dependencies:
   flutter_test:
@@ -85,7 +86,6 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
-
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.
@@ -99,6 +99,7 @@ flutter:
     - assets/book-app-logo.png
     - assets/reader.html
     - assets/loader.json
+    - assets/icon-transparent.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
@@ -133,8 +134,8 @@ flutter_icons:
   min_sdk_android: 21
   windows:
     generate: true
-    image_path: "assets/icon-desktop.png"
+    image_path: "assets/icon-transparent.png"
     icon_size: 48
   macos:
     generate: true
-    image_path: "assets/icon-desktop.png"
+    image_path: "assets/icon-transparent.png"

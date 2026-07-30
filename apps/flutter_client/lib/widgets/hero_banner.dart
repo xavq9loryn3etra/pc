@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/material.dart';
@@ -108,6 +109,9 @@ class MovieHeroBanner extends StatelessWidget {
                             : CachedNetworkImage(
                                 imageUrl: movie.logoUrl!,
                                 height: 100,
+                                memCacheHeight:
+                                    (100 * MediaQuery.of(context).devicePixelRatio)
+                                        .toInt(),
                                 fit: BoxFit.contain,
                                 placeholder: (context, url) => const SizedBox(
                                   height: 100,
@@ -196,26 +200,36 @@ class MovieHeroBanner extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 16),
-                      ElevatedButton.icon(
-                        onPressed: onInfo,
-                        icon: const Icon(
-                          Icons.info_outline,
-                          color: Colors.white,
-                          size: 28,
-                        ),
-                        label: const Text('More Info'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white10,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          padding: const EdgeInsets.symmetric(horizontal: 32),
-                          fixedSize: const Size.fromHeight(50),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(30),
-                          ),
-                          textStyle: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
+                      // Frosted glass, same recipe as CustomAppBar/the
+                      // floating nav bar: clip to the button's own rounded
+                      // shape and blur what's behind it.
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(30),
+                        child: BackdropFilter(
+                          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                          child: ElevatedButton.icon(
+                            onPressed: onInfo,
+                            icon: const Icon(
+                              Icons.info_outline,
+                              color: Colors.white,
+                              size: 28,
+                            ),
+                            label: const Text('More Info'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.white10,
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 32),
+                              fixedSize: const Size.fromHeight(50),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                              textStyle: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
                         ),
                       ),

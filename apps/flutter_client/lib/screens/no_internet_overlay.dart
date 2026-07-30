@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+import '../widgets/shimmer_loader.dart';
 
 class NoInternetOverlay extends StatelessWidget {
   const NoInternetOverlay({super.key});
@@ -48,10 +49,7 @@ class NoInternetOverlay extends StatelessWidget {
               ),
               const SizedBox(height: 40),
               // Optional: A subtle retry hint or button
-              const CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
-                strokeWidth: 2,
-              ),
+              const ShimmerLoader(size: 40),
               const SizedBox(height: 16),
               const Text(
                 'Retrying...',

@@ -17,6 +17,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   final VoidCallback? onModeSwitchTap;
   final VoidCallback? onLogoLongPress;
   final bool showActions;
+  final bool showModeSwitch;
   final bool automaticallyImplyLeading;
   final bool centerTitle;
 
@@ -32,6 +33,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.onModeSwitchTap,
     this.onLogoLongPress,
     this.showActions = true,
+    this.showModeSwitch = true,
     this.automaticallyImplyLeading = true,
     this.centerTitle = false,
   });
@@ -71,7 +73,8 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
                   sigmaY: 20 * opacity,
                 ),
                 child: Container(
-                  color: Colors.black.withOpacity(opacity * 0.9), // Increased to 0.9 as requested
+                  color: Colors.black.withOpacity(
+                      opacity * 0.9), // Increased to 0.9 as requested
                 ),
               ),
             )
@@ -95,55 +98,19 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
                     () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (_) => const FavoritesScreen()),
+                        MaterialPageRoute(
+                            builder: (_) => const FavoritesScreen()),
                       );
                     },
               ),
             ],
             // App Mode Switcher (Mobile Only)
-            IconButton(
-              icon: const Icon(Icons.grid_view, size: 28),
-              onPressed: onModeSwitchTap ??
-                  () {
-                    showGeneralDialog(
-                      context: context,
-                      barrierDismissible: true,
-                      barrierLabel: 'Dismiss',
-                      barrierColor: Colors.black.withOpacity(0.5),
-                      transitionDuration: const Duration(milliseconds: 300),
-                      pageBuilder: (context, animation, secondaryAnimation) {
-                        return Stack(
-                          children: [
-                            // transparent dismiss layer
-                            GestureDetector(
-                              onTap: () => Navigator.of(context).pop(),
-                              behavior: HitTestBehavior.opaque,
-                              child: const SizedBox.expand(),
-                            ),
-                            // The actual dialog content
-                            const Align(
-                              alignment: Alignment.topCenter,
-                              child: ModeSwitcherDialog(),
-                            ),
-                          ],
-                        );
-                      },
-                      transitionBuilder:
-                          (context, animation, secondaryAnimation, child) {
-                        return SlideTransition(
-                          position: Tween<Offset>(
-                            begin: const Offset(0, -1),
-                            end: Offset.zero,
-                          ).animate(CurvedAnimation(
-                            parent: animation,
-                            curve: Curves.easeOutCubic,
-                          )),
-                          child: child,
-                        );
-                      },
-                    );
-                  },
-            ),
+            if (showModeSwitch)
+              IconButton(
+                icon: const Icon(Icons.grid_view, size: 28),
+                onPressed:
+                    onModeSwitchTap ?? () => showModeSwitcherDialog(context),
+              ),
             const SizedBox(width: 16),
           ],
     );

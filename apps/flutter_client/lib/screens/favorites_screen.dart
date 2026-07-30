@@ -5,6 +5,7 @@ import '../services/saved_movies_service.dart';
 import '../widgets/movie_poster.dart';
 import 'details_screen.dart';
 import '../widgets/screen_scaffold.dart';
+import '../widgets/floating_bottom_nav_bar.dart';
 
 class FavoritesScreen extends StatefulWidget {
   const FavoritesScreen({super.key});
@@ -73,6 +74,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   @override
   Widget build(BuildContext context) {
     return ScreenScaffold(
+      bottomNavTab: BottomNavTab.favorites,
       title: const Text('My List'),
       body: (context, isDesktop, padding) {
         if (_favorites.isEmpty) {

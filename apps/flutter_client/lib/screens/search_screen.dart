@@ -7,7 +7,9 @@ import '../services/tmdb_service.dart';
 import 'details_screen.dart';
 import '../widgets/movie_poster.dart';
 import '../widgets/screen_scaffold.dart';
-import '../widgets/custom_loader.dart';
+import '../widgets/shimmer_loader.dart';
+import '../widgets/floating_bottom_nav_bar.dart';
+import '../services/movie_tab_service.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -19,6 +21,7 @@ class SearchScreen extends StatefulWidget {
 class _SearchScreenState extends State<SearchScreen> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final FocusNode _searchFocusNode = FocusNode();
   final TMDBService _tmdb = TMDBService();
 
   List<Movie> _results = [];
@@ -32,6 +35,21 @@ class _SearchScreenState extends State<SearchScreen> {
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    // SearchScreen stays mounted (offscreen) for the whole movies-mode
+    // session as one of MovieTabShell's tabs, so `autofocus` would pop the
+    // keyboard the instant the app opens rather than when this tab is
+    // actually shown. Focus only on the transitions that matter: opening
+    // the keyboard when the user switches to Search, dismissing it when
+    // they switch away.
+    MovieTabService().currentTab.addListener(_onActiveTabChanged);
+  }
+
+  void _onActiveTabChanged() {
+    if (MovieTabService().currentTab.value == BottomNavTab.search) {
+      _searchFocusNode.requestFocus();
+    } else {
+      _searchFocusNode.unfocus();
+    }
   }
 
   void _onScroll() {
@@ -44,8 +62,10 @@ class _SearchScreenState extends State<SearchScreen> {
 
   @override
   void dispose() {
+    MovieTabService().currentTab.removeListener(_onActiveTabChanged);
     _debounce?.cancel();
     _controller.dispose();
+    _searchFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -102,9 +122,10 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   Widget build(BuildContext context) {
     return ScreenScaffold(
+      bottomNavTab: BottomNavTab.search,
       title: TextField(
         controller: _controller,
-        autofocus: true,
+        focusNode: _searchFocusNode,
         style: const TextStyle(color: Colors.white, fontSize: 18),
         decoration: const InputDecoration(
           hintText: 'Search movies & TV shows...',
@@ -133,7 +154,7 @@ class _SearchScreenState extends State<SearchScreen> {
   Widget _buildBody(BuildContext context, bool isDesktop, EdgeInsets padding) {
     if (_isLoading) {
       return const Center(
-        child: CustomLoader(),
+        child: ShimmerLoader(),
       );
     }
 

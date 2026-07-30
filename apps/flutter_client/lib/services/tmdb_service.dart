@@ -17,7 +17,12 @@ class TMDBService {
   factory TMDBService() => _instance;
   TMDBService._internal();
 
-  final Dio _dio = Dio();
+  final Dio _dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 15),
+    ),
+  );
   final String _baseUrl = 'https://api.themoviedb.org/3';
   final String _imageBase = 'https://image.tmdb.org/t/p/w500';
   final String _backdropBase = 'https://image.tmdb.org/t/p/w1280';
@@ -55,6 +60,10 @@ class TMDBService {
   }
 
   Future<List<Movie>> search(String query) async {
+    final key = 'search_${query.toLowerCase()}';
+    if (_cache.containsKey(key) && _cache[key]!.isValid(5)) {
+      return _cache[key]!.data as List<Movie>;
+    }
     try {
       final response = await _dio.get(
         '$_baseUrl/search/multi',
@@ -67,7 +76,10 @@ class TMDBService {
       final results = (response.data['results'] as List)
           .where((r) => r['media_type'] == 'movie' || r['media_type'] == 'tv')
           .toList();
-      return results.map((m) => _formatMovie(m)).whereType<Movie>().toList();
+      final movies =
+          results.map((m) => _formatMovie(m)).whereType<Movie>().toList();
+      _cache[key] = _CacheEntry(movies);
+      return movies;
     } catch (e) {
       print('TMDB Search Error: $e');
       return [];
@@ -76,6 +88,13 @@ class TMDBService {
 
   Future<List<Movie>> searchMulti(String query) async {
     if (query.isEmpty) return [];
+    // Short TTL — search results go stale quickly, but this still avoids
+    // re-hitting the network for the same query while the user is typing
+    // and pausing, or retyping something they already searched for.
+    final key = 'searchMulti_${query.toLowerCase()}';
+    if (_cache.containsKey(key) && _cache[key]!.isValid(5)) {
+      return _cache[key]!.data as List<Movie>;
+    }
     try {
       final response = await _dio.get(
         '$_baseUrl/search/multi',
@@ -91,7 +110,10 @@ class TMDBService {
           .where((r) => r['media_type'] == 'movie' || r['media_type'] == 'tv')
           .toList();
 
-      return results.map((m) => _formatMovie(m)).whereType<Movie>().toList();
+      final movies =
+          results.map((m) => _formatMovie(m)).whereType<Movie>().toList();
+      _cache[key] = _CacheEntry(movies);
+      return movies;
     } catch (e) {
       print('TMDB Search Error: $e');
       return [];
@@ -182,6 +204,7 @@ class TMDBService {
       description: m['overview'] ?? '',
       type: m['media_type'] ?? (isTv ? 'tv' : 'movie'),
       inCinemas: inCinemas,
+      releaseDateRaw: (m['release_date'] ?? m['first_air_date'])?.toString(),
     );
   }
 
@@ -297,6 +320,7 @@ class TMDBService {
       description: base.description,
       type: isTv ? 'tv' : 'movie',
       inCinemas: base.inCinemas,
+      releaseDateRaw: base.releaseDateRaw,
       director: director,
       cast: cast,
       genres: genres,

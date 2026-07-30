@@ -26,7 +26,7 @@ Run these from the **`apps/flutter_client`** folder:
     ```bash
     dart run flutter_launcher_icons
     ```
-    *(Generates Android, iOS, and Windows app icons from `assets/icon.png` and `assets/icon-desktop.png`)*
+    *(Generates Android, iOS, and Windows app icons from `assets/icon.png` and `assets/icon-transparent.png`)*
 
 ## Project Structure
 *   `apps/desktop`: Electron/Vite desktop application.

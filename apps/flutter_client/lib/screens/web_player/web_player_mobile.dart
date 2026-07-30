@@ -14,7 +14,7 @@ import '../../models/movie.dart';
 import '../../services/saved_movies_service.dart';
 import '../../services/scraper_service.dart';
 import '../../services/tmdb_service.dart';
-import '../../widgets/custom_loader.dart';
+import '../../widgets/shimmer_loader.dart';
 import '../../widgets/player_gesture_overlay.dart';
 import '../../widgets/episode_drawer.dart';
 import 'package:sensors_plus/sensors_plus.dart';
@@ -714,7 +714,7 @@ if (window.flutterTrackingActive) {
 
                     if (_isLoading)
                       const Center(
-                        child: CustomLoader(),
+                        child: ShimmerLoader(),
                       ),
 
                     // Only the close button rebuilds on controls visibility change.

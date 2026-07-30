@@ -41,6 +41,10 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   _GestureType _activeGesture = _GestureType.none;
   double _currentValue = 0.0;
   double _startValue = 0.0;
+  // Drag updates fire up to ~100x per full swipe — routed through this
+  // notifier instead of setState so only the small indicator widget
+  // rebuilds, not the whole gesture Stack (video content, overlays, etc).
+  final ValueNotifier<double> _currentValueNotifier = ValueNotifier(0.0);
 
   Offset? _pointerStart;
   bool _isDragging = false;
@@ -71,6 +75,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   void dispose() {
     _fadeTimer?.cancel();
     _fadeController.dispose();
+    _currentValueNotifier.dispose();
     VolumeController.instance.showSystemUI = true;
     // Reset brightness back to system default when leaving the player
     ScreenBrightness.instance
@@ -166,6 +171,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
           if (mounted) {
             _startValue = v.clamp(0.0, 1.0);
             _currentValue = _startValue;
+            _currentValueNotifier.value = _startValue;
           }
         });
       } else {
@@ -174,13 +180,20 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
           if (mounted) {
             _startValue = b.clamp(0.0, 1.0);
             _currentValue = _startValue;
+            _currentValueNotifier.value = _startValue;
           }
         }).catchError((_) {
           _startValue = 0.5;
           _currentValue = 0.5;
+          _currentValueNotifier.value = 0.5;
         });
       }
 
+      // _activeGesture just changed, which decides whether the volume/
+      // brightness Positioned indicator appears at all — that still needs
+      // a real rebuild (it's a rare, once-per-drag change, unlike the
+      // per-tick value updates below).
+      setState(() {});
       _fadeTimer?.cancel();
       _fadeController.forward();
     }
@@ -192,10 +205,12 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
     final valueDelta = verticalDelta / (screenHeight * 0.7);
     final newValue = (_startValue + valueDelta).clamp(0.0, 1.0);
 
-    // Throttle UI rebuilds and platform channel calls to ~100 steps
-    // iOS platform channels for volume/brightness drop frames if called 120Hz
+    // Throttle to ~100 steps (iOS platform channels for volume/brightness
+    // drop frames if called at 120Hz). Not routed through setState — only
+    // the indicator widget (via _currentValueNotifier) needs to react here.
     if ((newValue - _currentValue).abs() >= 0.01) {
-      setState(() => _currentValue = newValue);
+      _currentValue = newValue;
+      _currentValueNotifier.value = newValue;
 
       if (_activeGesture == _GestureType.volume) {
         VolumeController.instance.setVolume(newValue);
@@ -391,13 +406,16 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
               right: 40,
               top: 0,
               bottom: 0,
-              child: _buildIndicator(
-                icon: _currentValue <= 0.01
-                    ? Icons.volume_off_rounded
-                    : _currentValue < 0.5
-                        ? Icons.volume_down_rounded
-                        : Icons.volume_up_rounded,
-                value: _currentValue,
+              child: ValueListenableBuilder<double>(
+                valueListenable: _currentValueNotifier,
+                builder: (context, value, _) => _buildIndicator(
+                  icon: value <= 0.01
+                      ? Icons.volume_off_rounded
+                      : value < 0.5
+                          ? Icons.volume_down_rounded
+                          : Icons.volume_up_rounded,
+                  value: value,
+                ),
               ),
             ),
 
@@ -407,13 +425,16 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
               left: 40,
               top: 0,
               bottom: 0,
-              child: _buildIndicator(
-                icon: _currentValue < 0.3
-                    ? Icons.brightness_low_rounded
-                    : _currentValue < 0.7
-                        ? Icons.brightness_medium_rounded
-                        : Icons.brightness_high_rounded,
-                value: _currentValue,
+              child: ValueListenableBuilder<double>(
+                valueListenable: _currentValueNotifier,
+                builder: (context, value, _) => _buildIndicator(
+                  icon: value < 0.3
+                      ? Icons.brightness_low_rounded
+                      : value < 0.7
+                          ? Icons.brightness_medium_rounded
+                          : Icons.brightness_high_rounded,
+                  value: value,
+                ),
               ),
             ),
         ],

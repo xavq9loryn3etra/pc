@@ -53,7 +53,8 @@ class SavedMoviesService with ChangeNotifier {
         print("Error loading episode history: $e");
       }
     }
-    
+
+    _historyCache = null;
     notifyListeners();
   }
 
@@ -88,7 +89,9 @@ class SavedMoviesService with ChangeNotifier {
     if (isFavorite(movie.id)) {
       _favorites.removeWhere((m) => m.id == movie.id);
     } else {
-      _favorites.add(movie);
+      // Newest favorite first, matching how it reads as a "recently added"
+      // list rather than a chronological log.
+      _favorites.insert(0, movie);
     }
     await _saveFavorites();
     notifyListeners();
@@ -104,7 +107,14 @@ class SavedMoviesService with ChangeNotifier {
 
   // --- History API ---
 
+  // Cached so repeated reads in the same frame (this getter is called up to
+  // 4x per home-screen build) don't re-sort and re-decode the whole map each
+  // time. Invalidated wherever _history is mutated.
+  List<Movie>? _historyCache;
+
   List<Movie> get history {
+    if (_historyCache != null) return _historyCache!;
+
     // Return movies sorted by last_watched (descending)
     final entries = _history.entries.toList();
     entries.sort((a, b) {
@@ -113,10 +123,11 @@ class SavedMoviesService with ChangeNotifier {
       return tB.compareTo(tA);
     });
 
-    return entries.map((e) {
+    _historyCache = entries.map((e) {
       final movieJson = e.value['movie'];
       return Movie.fromStorageJson(movieJson);
     }).toList();
+    return _historyCache!;
   }
 
   Future<void> addToHistory(
@@ -182,6 +193,7 @@ class SavedMoviesService with ChangeNotifier {
       'movie': movieToSave.toStorageJson(),
       'last_watched': DateTime.now().millisecondsSinceEpoch,
     };
+    _historyCache = null;
 
     // Save specific episode progress
     if (season != null && episode != null && progress != null) {
@@ -196,6 +208,7 @@ class SavedMoviesService with ChangeNotifier {
   Future<void> removeFromHistory(String movieId) async {
     if (_history.containsKey(movieId)) {
       _history.remove(movieId);
+      _historyCache = null;
       await _saveHistory();
 
       // Clear associated episode history

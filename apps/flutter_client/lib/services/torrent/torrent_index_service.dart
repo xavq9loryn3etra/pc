@@ -118,6 +118,12 @@ class TorrentStream {
 }
 
 class TorrentIndexService {
+  // Singleton — avoids constructing a fresh Dio client (and its interceptors/
+  // adapter) every time a screen builds a TorrentIndexService/StreamResolver.
+  static final TorrentIndexService _instance = TorrentIndexService._internal();
+  factory TorrentIndexService() => _instance;
+  TorrentIndexService._internal();
+
   final Dio _dio = Dio();
 
   Future<List<TorrentStream>> getMovieStreams(String imdbId) async {

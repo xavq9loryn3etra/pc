@@ -9,14 +9,10 @@ import '../widgets/hero_banner.dart';
 import '../widgets/movie_poster.dart';
 import '../services/saved_movies_service.dart';
 import '../widgets/skeletons.dart';
-import 'search_screen.dart';
 import 'desktop_home_screen.dart';
-import 'favorites_screen.dart';
 import '../widgets/desktop_skeletons.dart';
 import '../widgets/custom_app_bar.dart';
-import '../services/backup_service.dart';
-import '../main.dart';
-import '../theme/app_theme.dart';
+import '../widgets/floating_bottom_nav_bar.dart';
 
 class MovieHomeScreen extends StatefulWidget {
   const MovieHomeScreen({super.key});
@@ -26,6 +22,15 @@ class MovieHomeScreen extends StatefulWidget {
 }
 
 class _MovieHomeScreenState extends State<MovieHomeScreen> {
+  // The bottom nav bar swaps tabs via pushReplacement (to avoid back-stack
+  // buildup), which tears down and recreates this widget on every visit to
+  // the Home tab. Caching the loaded data at the class level survives that
+  // recreation, so we only hit the network once per app session instead of
+  // re-fetching (and re-rolling the random featured movie) every time.
+  static List<Movie>? _cachedTrending;
+  static List<Movie>? _cachedTopRated;
+  static Movie? _cachedFeatured;
+
   final TMDBService _tmdb = TMDBService();
   final ScrollController _scrollController = ScrollController();
 
@@ -33,7 +38,6 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
   List<Movie> _topRatedMovies = [];
   Movie? _featuredMovie;
 
-  double _opacity = 0.0;
   bool _loading = true;
 
   @override
@@ -45,16 +49,13 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_onScroll);
-    _loadData();
-  }
-
-  void _onScroll() {
-    final offset = _scrollController.offset;
-    double newOpacity = (offset / 200).clamp(0.0, 1.0);
-    // print("HomeScroll: offset=\${offset.toStringAsFixed(1)} opacity=\${newOpacity.toStringAsFixed(2)}");
-    if (newOpacity != _opacity) {
-      setState(() => _opacity = newOpacity);
+    if (_cachedTrending != null) {
+      _trendingMovies = _cachedTrending!;
+      _topRatedMovies = _cachedTopRated!;
+      _featuredMovie = _cachedFeatured;
+      _loading = false;
+    } else {
+      _loadData();
     }
   }
 
@@ -70,18 +71,26 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
       Movie? featured;
       if (trending.isNotEmpty) {
         try {
-          final randomIndex = Random().nextInt(min(trending.length, 10)); // Pick from top 10
+          final randomIndex =
+              Random().nextInt(min(trending.length, 5)); // Pick from top 5
           final basic = trending[randomIndex];
           featured = await _tmdb.getDetails(basic.id, type: basic.type);
         } catch (_) {}
       }
 
+      final resolvedFeatured =
+          trending.isNotEmpty ? (featured ?? trending.first) : null;
+
+      _cachedTrending = trending;
+      _cachedTopRated = topRated;
+      _cachedFeatured = resolvedFeatured;
+
       if (mounted) {
         setState(() {
           _trendingMovies = trending;
           _topRatedMovies = topRated;
-          if (trending.isNotEmpty) {
-            _featuredMovie = featured ?? trending.first;
+          if (resolvedFeatured != null) {
+            _featuredMovie = resolvedFeatured;
           }
           _loading = false;
         });
@@ -100,7 +109,12 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
           if (constraints.maxWidth > 800) {
             return const Scaffold(body: DesktopSkeletonHome());
           }
-          return const Scaffold(body: SkeletonHome());
+          return const Stack(
+            children: [
+              Scaffold(body: SkeletonHome()),
+              FloatingBottomNavBar(activeTab: BottomNavTab.home),
+            ],
+          );
         },
       );
     }
@@ -132,24 +146,23 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
           );
         }
 
-        return Scaffold(
+        final scaffold = Scaffold(
           extendBodyBehindAppBar: true,
-          appBar: CustomAppBar(
-            scrollOffset:
-                _scrollController.hasClients ? _scrollController.offset : 0.0,
-            onSearchTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const SearchScreen()),
-              );
-            },
-            onFavoritesTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const FavoritesScreen()),
-              );
-            },
-            onLogoLongPress: _showBackupDialog,
+          // Scoped to the scroll controller so the AppBar's scroll-fade rebuilds
+          // on its own — the rest of the screen (hero banner, carousels) no
+          // longer rebuilds on every scroll frame just to update this fade.
+          appBar: PreferredSize(
+            preferredSize: const Size.fromHeight(kToolbarHeight),
+            child: ListenableBuilder(
+              listenable: _scrollController,
+              builder: (context, _) => CustomAppBar(
+                scrollOffset: _scrollController.hasClients
+                    ? _scrollController.offset
+                    : 0.0,
+                showActions: false,
+                showModeSwitch: false,
+              ),
+            ),
           ),
           body: SingleChildScrollView(
             controller: _scrollController,
@@ -175,15 +188,6 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
 
                 const SizedBox(height: 20),
 
-                // Trending Section
-                _buildSection(
-                  title: "Trending This Week",
-                  movies: _trendingMovies,
-                  heroPrefix: "trending",
-                ),
-
-                const SizedBox(height: 24),
-
                 // Continue Watching (History)
                 if (SavedMoviesService().history.isNotEmpty)
                   _buildSection(
@@ -195,6 +199,15 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
                 if (SavedMoviesService().history.isNotEmpty)
                   const SizedBox(height: 24),
 
+                // Trending Section
+                _buildSection(
+                  title: "Trending This Week",
+                  movies: _trendingMovies,
+                  heroPrefix: "trending",
+                ),
+
+                const SizedBox(height: 24),
+
                 // Top Rated Section
                 _buildSection(
                   title: "Top Rated",
@@ -202,10 +215,17 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
                   heroPrefix: "top",
                 ),
 
-                SizedBox(height: 24 + MediaQuery.of(context).padding.bottom),
+                SizedBox(height: 110 + MediaQuery.of(context).padding.bottom),
               ],
             ),
           ),
+        );
+
+        return Stack(
+          children: [
+            scaffold,
+            const FloatingBottomNavBar(activeTab: BottomNavTab.home),
+          ],
         );
       },
     );
@@ -219,80 +239,6 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
       ),
     );
     if (mounted) setState(() {});
-  }
-
-  void _showBackupDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.grey[900],
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
-          children: [
-            Icon(Icons.cloud_sync, color: AppTheme.primaryColor),
-            SizedBox(width: 12),
-            Text('Backup & Restore', style: TextStyle(color: Colors.white)),
-          ],
-        ),
-        content: const Text(
-          'Export your favorites and history to a file, or import them from a previously saved backup.',
-          style: TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('CANCEL', style: TextStyle(color: Colors.grey)),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              final success = await BackupService().exportData();
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(success ? 'Backup exported successfully!' : 'Failed to export backup.'),
-                    backgroundColor: success ? Colors.green : Colors.red,
-                  ),
-                );
-              }
-            },
-            child: const Text('EXPORT', style: TextStyle(color: AppTheme.primaryColor)),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              final success = await BackupService().importData();
-              if (mounted && success) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Backup imported! Reloading app...'),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-                // Restart app by navigating to main
-                Future.delayed(const Duration(seconds: 1), () {
-                  if (mounted) {
-                    Navigator.pushAndRemoveUntil(
-                      context,
-                      MaterialPageRoute(builder: (_) => const MyApp()),
-                      (route) => false,
-                    );
-                  }
-                });
-              } else if (mounted && !success) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Failed to import backup.'),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
-            },
-            child: const Text('IMPORT', style: TextStyle(color: AppTheme.primaryColor)),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<void> _confirmRemoveHistory(Movie movie) async {

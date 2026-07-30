@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import '../widgets/custom_loader.dart';
+import '../widgets/shimmer_loader.dart';
 
 class EpubPlayerScreenMobile extends StatefulWidget {
   final File file;
@@ -75,7 +75,7 @@ class _EpubPlayerScreenMobileState extends State<EpubPlayerScreenMobile> {
           WebViewWidget(controller: _controller),
           if (_isLoading)
             const Center(
-              child: CustomLoader(),
+              child: ShimmerLoader(),
             ),
         ],
       ),

@@ -18,7 +18,12 @@ class AppTheme {
     stops: [0.0, 1.0],
   );
 
-  static ThemeData get darkTheme {
+  // Computed once and cached — this used to be a `static get` that rebuilt
+  // the whole ThemeData (including the GoogleFonts.outfitTextTheme call)
+  // every time MaterialApp's theme was read, i.e. on every MyApp rebuild.
+  static final ThemeData darkTheme = _buildDarkTheme();
+
+  static ThemeData _buildDarkTheme() {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
@@ -37,9 +42,9 @@ class AppTheme {
       // Typography
       textTheme: GoogleFonts.outfitTextTheme(
         ThemeData.dark().textTheme.apply(
-          bodyColor: Colors.white,
-          displayColor: Colors.white,
-        ),
+              bodyColor: Colors.white,
+              displayColor: Colors.white,
+            ),
       ),
 
       // App Bar
@@ -50,7 +55,7 @@ class AppTheme {
         titleTextStyle: TextStyle(
           fontSize: 24,
           fontWeight: FontWeight.bold,
-          color: primaryColor, // Popcorn Brand Color
+          color: Colors.white,
         ),
       ),
 

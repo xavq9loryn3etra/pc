@@ -47,6 +47,15 @@ class BookCard extends StatelessWidget {
                             'PC_Flutter_Client/1.0 (megha@example.com)', // OpenLibrary requests a contact User-Agent
                       },
                       fit: BoxFit.cover,
+                      // Cover art in a scrollable grid — cap decode to the
+                      // tile size instead of the source cover's native size.
+                      // Only height is constrained (not width too) — specifying
+                      // both distorts covers whose aspect ratio isn't exactly
+                      // 2:3, since ResizeImagePolicy.exact stretches to fit
+                      // both dimensions regardless of the source's own ratio.
+                      memCacheHeight:
+                          (height * MediaQuery.of(context).devicePixelRatio)
+                              .toInt(),
                       placeholder: (context, url) => Shimmer.fromColors(
                         baseColor: Colors.grey[800]!,
                         highlightColor: Colors.grey[700]!,

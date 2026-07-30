@@ -7,12 +7,14 @@ import 'package:path_provider/path_provider.dart';
 import 'package:dio/dio.dart';
 import '../theme/app_theme.dart';
 import '../widgets/skeletons.dart';
+import '../widgets/shimmer_loader.dart';
 import '../models/movie.dart';
 import '../services/tmdb_service.dart';
 import '../services/scraper_service.dart';
 import '../services/saved_movies_service.dart';
 import '../services/torrent/torrent_index_service.dart';
 import '../services/torrent/stream_resolver.dart';
+import '../services/torrent/torrent_download_registry.dart';
 import 'web_player/web_player.dart';
 import 'player_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -42,9 +44,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
   Movie? _details;
   bool _loading = true;
   final ScrollController _scrollController = ScrollController();
-  double _opacity = 0.0;
   bool _isFavorite = false;
-  bool _showAppBarTitle = false;
+  final Dio _shareDio = Dio();
 
   // TV Show State
   List<Episode> _episodes = [];
@@ -71,7 +72,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
       // 2. Download image if it doesn't exist in temp and m.image is not null
       final file = File(path);
       if (!await file.exists() && m.image != null) {
-        await Dio().download(m.image!, path);
+        await _shareDio.download(m.image!, path);
       }
 
       if (await file.exists()) {
@@ -96,7 +97,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
     super.initState();
     _loadDetails();
     _checkFavorite();
-    _scrollController.addListener(_onScroll);
   }
 
   void _checkFavorite() {
@@ -108,21 +108,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
   Future<void> _toggleFavorite() async {
     await SavedMoviesService().toggleFavorite(_details ?? widget.movie);
     _checkFavorite();
-  }
-
-  void _onScroll() {
-    final offset = _scrollController.offset;
-    // Fade in sticky header background - matching home screen logic (divisor 200)
-    double newOpacity = (offset / 200).clamp(0.0, 1.0);
-    if (newOpacity != _opacity) {
-      setState(() => _opacity = newOpacity);
-    }
-
-    // Toggle AppBar Title visibility (sticky logo)
-    final showTitle = offset > 350;
-    if (showTitle != _showAppBarTitle) {
-      setState(() => _showAppBarTitle = showTitle);
-    }
   }
 
   @override
@@ -200,8 +185,45 @@ class _DetailsScreenState extends State<DetailsScreen> {
     }
   }
 
+  /// True if the movie itself, or the currently targeted TV episode, hasn't
+  /// been released yet — there's no real stream to find for content like
+  /// that, no matter what an indexer might claim to have.
+  bool _isSelectionUnreleased() {
+    if (_details == null) return false;
+    if (_details!.type != 'tv') return _details!.isUnreleased;
+
+    if (_selectedEpisode == null) return false;
+    final targetEp = _episodes.firstWhere(
+      (ep) => ep.episodeNumber == _selectedEpisode,
+      orElse: () => Episode(
+        id: -1,
+        episodeNumber: -1,
+        name: '',
+        overview: '',
+        voteAverage: 0,
+      ),
+    );
+    return targetEp.id != -1 && targetEp.isUnreleased;
+  }
+
+  void _showNotReleasedMessage() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        backgroundColor: Colors.black87,
+        content: Text("This hasn't been released yet."),
+      ),
+    );
+  }
+
+  String _formatReleaseDate(DateTime date) =>
+      "${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}";
+
   void _playWithTorrent() async {
     if (_details == null) return;
+    if (_isSelectionUnreleased()) {
+      _showNotReleasedMessage();
+      return;
+    }
 
     final resolver = StreamResolver();
     int? s = _selectedSeason != null && _selectedSeason!.seasonNumber > 0
@@ -234,6 +256,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   Future<void> _openWebPlayer(String provider) async {
     if (_details == null) return;
+    if (_isSelectionUnreleased()) {
+      _showNotReleasedMessage();
+      return;
+    }
 
     // Add to history with specific season/episode if TV
     int? s = _selectedSeason != null && _selectedSeason!.seasonNumber > 0
@@ -320,6 +346,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
           child: CachedNetworkImage(
             imageUrl: m.logoUrl!,
             height: 28,
+            memCacheHeight:
+                (28 * MediaQuery.of(context).devicePixelRatio).toInt(),
             alignment: Alignment.centerLeft,
             fit: BoxFit.contain,
           ),
@@ -338,409 +366,604 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: SavedMoviesService(),
-      builder: (context, _) {
-        final m = _details ?? widget.movie;
-        final bool isTv = m.type == 'tv';
-        final historyMovie =
-            SavedMoviesService().getMovieFromHistory(widget.movie.id);
+    // Not wrapped in ListenableBuilder(SavedMoviesService()) anymore — the
+    // only thing here that depended on it (historyMovie, for the
+    // Play/Resume button) now has its own narrowly-scoped ListenableBuilder
+    // further down, so a favorite/history change elsewhere in the app no
+    // longer rebuilds this entire screen (title, cast, episode list, etc).
+    return (() {
+      final m = _details ?? widget.movie;
+      final bool isTv = m.type == 'tv';
 
-        return Scaffold(
-          extendBodyBehindAppBar: true,
-          appBar: CustomAppBar(
-            scrollOffset:
-                _scrollController.hasClients ? _scrollController.offset : 0.0,
-            leading: Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: CircleAvatar(
-                backgroundColor: Colors.black26,
-                child: widget.isSidePanel
-                    ? IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white),
-                        onPressed: widget.onClose,
-                        iconSize: 20,
-                        padding: EdgeInsets.zero,
-                      )
-                    : const BackButton(color: Colors.white),
-              ),
-            ),
-            title: AnimatedOpacity(
-              opacity: _showAppBarTitle ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 300),
-              child: _showAppBarTitle ? _buildAppBarTitle(m) : null,
-            ),
-            showActions: false,
-            actions: [
-              IconButton(
-                icon: Icon(
-                  _isFavorite ? Icons.favorite : Icons.favorite_border,
-                  color: _isFavorite ? AppTheme.primaryColor : Colors.white,
+      return Scaffold(
+        extendBodyBehindAppBar: true,
+        // Scoped to the scroll controller so the fade/sticky-title rebuild
+        // on scroll stays local to the AppBar instead of the whole screen.
+        appBar: PreferredSize(
+          preferredSize: const Size.fromHeight(kToolbarHeight),
+          child: ListenableBuilder(
+            listenable: _scrollController,
+            builder: (context, _) {
+              final offset =
+                  _scrollController.hasClients ? _scrollController.offset : 0.0;
+              final showTitle = offset > 350;
+              return CustomAppBar(
+                scrollOffset: offset,
+                leading: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  // Frosted glass, same recipe as the floating nav bar's
+                  // circular buttons: clip to the circle and blur behind it.
+                  child: ClipOval(
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                      child: CircleAvatar(
+                        backgroundColor: Colors.black.withOpacity(0.35),
+                        child: widget.isSidePanel
+                            ? IconButton(
+                                icon: const Icon(Icons.close,
+                                    color: Colors.white),
+                                onPressed: widget.onClose,
+                                iconSize: 20,
+                                padding: EdgeInsets.zero,
+                              )
+                            : const BackButton(color: Colors.white),
+                      ),
+                    ),
+                  ),
                 ),
-                onPressed: _toggleFavorite,
-              ),
-              const SizedBox(width: 8),
-            ],
+                title: AnimatedOpacity(
+                  opacity: showTitle ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 300),
+                  child: showTitle ? _buildAppBarTitle(m) : null,
+                ),
+                showActions: false,
+                // Favorite/like toggle moved down to the action button row
+                // (where Share used to be), so no actions shown up here.
+                showModeSwitch: false,
+              );
+            },
           ),
-          body: _loading
-              ? const SkeletonDetails()
-              : SingleChildScrollView(
-                  controller: _scrollController,
-                  padding: EdgeInsets.zero,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Parallax Header
-                      SizedBox(
-                        height: 450,
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            ListenableBuilder(
-                              listenable: _scrollController,
-                              builder: (context, child) {
-                                double offset = 0;
-                                if (_scrollController.hasClients) {
-                                  offset = _scrollController.offset;
-                                }
-                                return Transform.translate(
-                                  offset: Offset(0, offset * 0.5),
-                                  child: Stack(
-                                    fit: StackFit.expand,
-                                    children: [
-                                      Hero(
-                                        tag: 'movie_${m.id}',
-                                        child: (m.backdrop ?? m.posterUrl ?? '')
-                                                .toLowerCase()
-                                                .endsWith('.svg')
-                                            ? SvgPicture.network(
-                                                m.backdrop ?? m.posterUrl ?? '',
-                                                fit: BoxFit.cover,
-                                              )
-                                            : CachedNetworkImage(
-                                                imageUrl: m.backdrop ??
-                                                    m.posterUrl ??
-                                                    '',
-                                                fit: BoxFit.cover,
-                                              ),
-                                      ),
-                                      // Gradient moves with image
-                                      Container(
-                                        decoration: const BoxDecoration(
-                                          gradient: LinearGradient(
-                                            begin: Alignment.topCenter,
-                                            end: Alignment.bottomCenter,
-                                            colors: [
-                                              Colors.transparent,
-                                              Colors.black,
-                                            ],
-                                            stops: [0.4, 1.0],
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
-                            Positioned(
-                              bottom: 20,
-                              left: 24,
-                              right: 24,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  m.logoUrl != null
-                                      ? (m.logoUrl!
+        ),
+        body: _loading
+            ? const SkeletonDetails()
+            : Stack(
+                children: [
+                  // Parallax background image — kept OUTSIDE the sliver tree.
+                  // A SliverToBoxAdapter stops painting its child entirely
+                  // once the scroll offset passes the child's declared
+                  // height, but this image's Transform.translate deliberately
+                  // keeps it onscreen past that point (half-speed parallax
+                  // lag). Combining the two made the sliver geometry cull the
+                  // header mid-lag, which showed up as the content below it
+                  // flickering in and out as the header abruptly popped in
+                  // and out of existence while scrolling. Rendering it as a
+                  // plain Positioned sibling — clipped by a fixed-size Stack
+                  // instead of sliver geometry — keeps it continuous.
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: SizedBox(
+                      height: 450,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          ListenableBuilder(
+                            listenable: _scrollController,
+                            builder: (context, child) {
+                              double offset = 0;
+                              if (_scrollController.hasClients) {
+                                offset = _scrollController.offset;
+                              }
+                              return Transform.translate(
+                                offset: Offset(0, -offset * 0.5),
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    Hero(
+                                      tag: 'movie_${m.id}',
+                                      child: (m.backdrop ?? m.posterUrl ?? '')
                                               .toLowerCase()
                                               .endsWith('.svg')
                                           ? SvgPicture.network(
-                                              m.logoUrl!,
-                                              width: 200,
-                                              fit: BoxFit.contain,
-                                              alignment: Alignment.centerLeft,
+                                              m.backdrop ?? m.posterUrl ?? '',
+                                              fit: BoxFit.cover,
                                             )
                                           : CachedNetworkImage(
-                                              imageUrl: m.logoUrl!,
-                                              width: 200,
-                                              fit: BoxFit.contain,
-                                              alignment: Alignment.centerLeft,
-                                            ))
-                                      : Text(
-                                          m.title,
+                                              imageUrl: m.backdrop ??
+                                                  m.posterUrl ??
+                                                  '',
+                                              fit: BoxFit.cover,
+                                              // Only constrain height, not width — specifying
+                                              // both distorts the image whenever the source's
+                                              // aspect ratio doesn't match this exact box
+                                              // (ResizeImagePolicy.exact stretches to fit both
+                                              // dimensions). One dimension lets the decoder
+                                              // scale the other proportionally, matching how
+                                              // BoxFit.cover actually crops at paint time.
+                                              memCacheHeight: (450 *
+                                                      MediaQuery.of(context)
+                                                          .devicePixelRatio)
+                                                  .toInt(),
+                                            ),
+                                    ),
+                                    // Gradient moves with image
+                                    Container(
+                                      decoration: const BoxDecoration(
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: [
+                                            Colors.transparent,
+                                            Colors.black,
+                                          ],
+                                          stops: [0.4, 1.0],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  CustomScrollView(
+                    controller: _scrollController,
+                    slivers: [
+                      // Header spacer — reserves 450px of scroll space for
+                      // the background image above, and carries the
+                      // logo/title/rating overlay, which (unlike the image)
+                      // scrolls in lockstep with the rest of the content
+                      // instead of lagging behind.
+                      SliverToBoxAdapter(
+                        child: SizedBox(
+                          height: 450,
+                          child: Stack(
+                            children: [
+                              Positioned(
+                                bottom: 20,
+                                left: 24,
+                                right: 24,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    m.logoUrl != null
+                                        ? (m.logoUrl!
+                                                .toLowerCase()
+                                                .endsWith('.svg')
+                                            ? SvgPicture.network(
+                                                m.logoUrl!,
+                                                width: 200,
+                                                fit: BoxFit.contain,
+                                                alignment: Alignment.centerLeft,
+                                              )
+                                            : CachedNetworkImage(
+                                                imageUrl: m.logoUrl!,
+                                                width: 200,
+                                                memCacheWidth: (200 *
+                                                        MediaQuery.of(context)
+                                                            .devicePixelRatio)
+                                                    .toInt(),
+                                                fit: BoxFit.contain,
+                                                alignment: Alignment.centerLeft,
+                                              ))
+                                        : Text(
+                                            m.title,
+                                            style: const TextStyle(
+                                              fontSize: 32,
+                                              fontWeight: FontWeight.bold,
+                                              shadows: [
+                                                Shadow(
+                                                  color: Colors.black,
+                                                  blurRadius: 10,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      children: [
+                                        Text(
+                                          '${m.year}  •  ${m.certification ?? "PG-13"}  •  ${m.runtime ?? "N/A"}',
                                           style: const TextStyle(
-                                            fontSize: 32,
-                                            fontWeight: FontWeight.bold,
-                                            shadows: [
-                                              Shadow(
-                                                color: Colors.black,
-                                                blurRadius: 10,
-                                              ),
-                                            ],
+                                            fontWeight: FontWeight.w500,
+                                            color: Colors.white70,
                                           ),
                                         ),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    children: [
-                                      Text(
-                                        '${m.year}  •  ${m.certification ?? "PG-13"}  •  ${m.runtime ?? "N/A"}',
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w500,
-                                          color: Colors.white70,
-                                        ),
-                                      ),
-                                      const Spacer(),
-                                      const Icon(
-                                        Icons.star,
-                                        color: Colors.amber,
-                                        size: 16,
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        m.rating,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
+                                        const Spacer(),
+                                        const Icon(
+                                          Icons.star,
                                           color: Colors.amber,
+                                          size: 16,
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          m.rating,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.amber,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
 
-                      Padding(
-                        padding: const EdgeInsets.all(24.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Dynamic Torrent & Web Server Play Controls
-                            () {
-                              final defaultProvider =
-                                  Platform.isIOS ? 'vsembed' : 'vidlink';
-                              final altProvider =
-                                  Platform.isIOS ? 'vidlink' : 'vsembed';
-                              final altLabel =
-                                  Platform.isIOS ? 'Server 1' : 'Server 4';
+                      SliverPadding(
+                        padding: EdgeInsets.fromLTRB(24, 24, 24, isTv ? 0 : 24),
+                        sliver: SliverList(
+                          delegate: SliverChildListDelegate([
+                            // Dynamic Torrent & Web Server Play Controls.
+                            // Scoped to its own ListenableBuilder — this is the
+                            // only part of the screen that needs historyMovie
+                            // (for the Play/Resume label), so a favorite/history
+                            // change elsewhere only rebuilds this button row,
+                            // not the whole details screen.
+                            ListenableBuilder(
+                              listenable: SavedMoviesService(),
+                              builder: (context, _) {
+                                final historyMovie = SavedMoviesService()
+                                    .getMovieFromHistory(widget.movie.id);
 
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      if (!isTv)
-                                        // Premium Direct Torrent Play Button
-                                        Expanded(
-                                          flex: 3,
-                                          child: Container(
-                                            height: 50,
-                                            decoration: BoxDecoration(
-                                              color: Colors.white,
-                                              borderRadius:
-                                                  BorderRadius.circular(30),
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: Colors.white
-                                                      .withOpacity(0.15),
-                                                  blurRadius: 12,
-                                                  offset: const Offset(0, 4),
+                                // Whether the "quick play" target isn't out yet,
+                                // so the button can look disabled instead of
+                                // looking normal but silently rejecting taps.
+                                final movieUnreleased = !isTv && m.isUnreleased;
+                                Episode? tvTargetEpisode;
+                                if (isTv) {
+                                  final targetSeasonNum =
+                                      historyMovie?.currentSeason ?? 1;
+                                  final targetEpNum =
+                                      historyMovie?.currentEpisode ?? 1;
+                                  // Best-effort: only accurate once the target
+                                  // season's episodes are loaded (always true
+                                  // for the common S1E1 case, since season 1
+                                  // loads on details-screen open).
+                                  if ((_selectedSeason?.seasonNumber ?? 1) ==
+                                      targetSeasonNum) {
+                                    for (final ep in _episodes) {
+                                      if (ep.episodeNumber == targetEpNum) {
+                                        tvTargetEpisode = ep;
+                                        break;
+                                      }
+                                    }
+                                  }
+                                }
+                                final tvUnreleased =
+                                    tvTargetEpisode?.isUnreleased ?? false;
+
+                                String? releaseDateText(String? raw) {
+                                  if (raw == null) return null;
+                                  final parsed = DateTime.tryParse(raw);
+                                  if (parsed == null) return null;
+                                  return 'Releases ${_formatReleaseDate(parsed)}';
+                                }
+
+                                final movieReleaseText = movieUnreleased
+                                    ? releaseDateText(m.releaseDateRaw)
+                                    : null;
+                                final tvReleaseText = tvUnreleased
+                                    ? releaseDateText(tvTargetEpisode?.airDate)
+                                    : null;
+
+                                final defaultProvider =
+                                    Platform.isIOS ? 'vsembed' : 'vidlink';
+                                final altProvider =
+                                    Platform.isIOS ? 'vidlink' : 'vsembed';
+                                final altLabel =
+                                    Platform.isIOS ? 'Server 1' : 'Server 4';
+
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        if (!isTv)
+                                          // Premium Direct Torrent Play Button
+                                          Expanded(
+                                            flex: 3,
+                                            child: Container(
+                                              height: 50,
+                                              decoration: BoxDecoration(
+                                                color: movieUnreleased
+                                                    ? Colors.white10
+                                                    : Colors.white,
+                                                borderRadius:
+                                                    BorderRadius.circular(30),
+                                                boxShadow: movieUnreleased
+                                                    ? null
+                                                    : [
+                                                        BoxShadow(
+                                                          color: Colors.white
+                                                              .withOpacity(
+                                                                  0.15),
+                                                          blurRadius: 12,
+                                                          offset: const Offset(
+                                                              0, 4),
+                                                        ),
+                                                      ],
+                                              ),
+                                              child: InkWell(
+                                                onTap: movieUnreleased
+                                                    ? null
+                                                    : _playWithTorrent,
+                                                borderRadius:
+                                                    BorderRadius.circular(30),
+                                                child: Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment.center,
+                                                  children: [
+                                                    Icon(
+                                                      movieUnreleased
+                                                          ? Icons
+                                                              .event_available
+                                                          : Icons
+                                                              .play_arrow_rounded,
+                                                      color: movieUnreleased
+                                                          ? Colors.white54
+                                                          : Colors.black,
+                                                      size: movieUnreleased
+                                                          ? 20
+                                                          : 28,
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Flexible(
+                                                      child: Text(
+                                                        movieUnreleased
+                                                            ? (movieReleaseText ??
+                                                                'Not yet released')
+                                                            : (historyMovie?.progress !=
+                                                                        null &&
+                                                                    historyMovie!
+                                                                            .progress! >
+                                                                        0
+                                                                ? 'Resume'
+                                                                : 'Play Movie'),
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        maxLines: 1,
+                                                        style: TextStyle(
+                                                          color: movieUnreleased
+                                                              ? Colors.white54
+                                                              : Colors.black,
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                          fontSize:
+                                                              movieUnreleased
+                                                                  ? 11
+                                                                  : 16,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
                                                 ),
-                                              ],
+                                              ),
                                             ),
-                                            child: InkWell(
-                                              onTap: _playWithTorrent,
-                                              borderRadius:
-                                                  BorderRadius.circular(30),
-                                              child: Row(
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment.center,
-                                                children: [
-                                                  const Icon(
-                                                    Icons.play_arrow_rounded,
-                                                    color: Colors.black,
-                                                    size: 28,
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  Text(
-                                                    historyMovie?.progress !=
+                                          )
+                                        else
+                                          // TV Show Play/Resume direct Button
+                                          Expanded(
+                                            flex: 3,
+                                            child: Container(
+                                              height: 50,
+                                              decoration: BoxDecoration(
+                                                color: tvUnreleased
+                                                    ? Colors.white10
+                                                    : Colors.white,
+                                                borderRadius:
+                                                    BorderRadius.circular(30),
+                                                boxShadow: tvUnreleased
+                                                    ? null
+                                                    : [
+                                                        BoxShadow(
+                                                          color: Colors.white
+                                                              .withOpacity(
+                                                                  0.15),
+                                                          blurRadius: 12,
+                                                          offset: const Offset(
+                                                              0, 4),
+                                                        ),
+                                                      ],
+                                              ),
+                                              child: InkWell(
+                                                onTap: tvUnreleased
+                                                    ? null
+                                                    : () async {
+                                                        int s = historyMovie
+                                                                ?.currentSeason ??
+                                                            1;
+                                                        int e = historyMovie
+                                                                ?.currentEpisode ??
+                                                            1;
+                                                        if (_details?.seasons !=
                                                                 null &&
-                                                            historyMovie!
-                                                                    .progress! >
-                                                                0
-                                                        ? 'Resume'
-                                                        : 'Play Movie',
-                                                    style: const TextStyle(
-                                                      color: Colors.black,
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      fontSize: 16,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ),
-                                        )
-                                      else
-                                        // TV Show Play/Resume direct Button
-                                        Expanded(
-                                          flex: 3,
-                                          child: Container(
-                                            height: 50,
-                                            decoration: BoxDecoration(
-                                              color: Colors.white,
-                                              borderRadius:
-                                                  BorderRadius.circular(30),
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: Colors.white
-                                                      .withOpacity(0.15),
-                                                  blurRadius: 12,
-                                                  offset: const Offset(0, 4),
-                                                ),
-                                              ],
-                                            ),
-                                            child: InkWell(
-                                              onTap: () async {
-                                                int s = historyMovie
-                                                        ?.currentSeason ??
-                                                    1;
-                                                int e = historyMovie
-                                                        ?.currentEpisode ??
-                                                    1;
-                                                if (_details?.seasons != null &&
-                                                    _details!
-                                                        .seasons!.isNotEmpty) {
-                                                  setState(() {
-                                                    _selectedSeason = _details!
-                                                        .seasons!
-                                                        .firstWhere(
-                                                      (sea) =>
-                                                          sea.seasonNumber == s,
-                                                      orElse: () => _details!
-                                                          .seasons!.first,
-                                                    );
-                                                    _selectedEpisode = e;
-                                                  });
-                                                } else {
-                                                  _selectedEpisode = e;
-                                                }
+                                                            _details!.seasons!
+                                                                .isNotEmpty) {
+                                                          setState(() {
+                                                            _selectedSeason =
+                                                                _details!
+                                                                    .seasons!
+                                                                    .firstWhere(
+                                                              (sea) =>
+                                                                  sea.seasonNumber ==
+                                                                  s,
+                                                              orElse: () =>
+                                                                  _details!
+                                                                      .seasons!
+                                                                      .first,
+                                                            );
+                                                            _selectedEpisode =
+                                                                e;
+                                                          });
+                                                        } else {
+                                                          _selectedEpisode = e;
+                                                        }
 
-                                                await _loadSeasonDetails(s);
-                                                _playWithTorrent();
-                                              },
-                                              borderRadius:
-                                                  BorderRadius.circular(30),
-                                              child: Row(
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment.center,
-                                                children: [
-                                                  Icon(
-                                                    historyMovie?.currentSeason !=
-                                                            null
-                                                        ? Icons
-                                                            .play_circle_filled
-                                                        : Icons
-                                                            .play_arrow_rounded,
-                                                    color: Colors.black,
-                                                    size: 28,
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  Text(
-                                                    historyMovie?.currentSeason !=
-                                                            null
-                                                        ? 'Resume S${historyMovie!.currentSeason} E${historyMovie.currentEpisode}'
-                                                        : 'Play S1 E1',
-                                                    style: const TextStyle(
-                                                      color: Colors.black,
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      fontSize: 16,
+                                                        await _loadSeasonDetails(
+                                                            s);
+                                                        _playWithTorrent();
+                                                      },
+                                                borderRadius:
+                                                    BorderRadius.circular(30),
+                                                child: Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment.center,
+                                                  children: [
+                                                    Icon(
+                                                      tvUnreleased
+                                                          ? Icons
+                                                              .event_available
+                                                          : (historyMovie?.currentSeason !=
+                                                                  null
+                                                              ? Icons
+                                                                  .play_circle_filled
+                                                              : Icons
+                                                                  .play_arrow_rounded),
+                                                      color: tvUnreleased
+                                                          ? Colors.white54
+                                                          : Colors.black,
+                                                      size: tvUnreleased
+                                                          ? 20
+                                                          : 28,
                                                     ),
-                                                  ),
-                                                ],
+                                                    const SizedBox(width: 8),
+                                                    Flexible(
+                                                      child: Text(
+                                                        tvUnreleased
+                                                            ? (tvReleaseText ??
+                                                                'Not yet released')
+                                                            : (historyMovie
+                                                                        ?.currentSeason !=
+                                                                    null
+                                                                ? 'Resume S${historyMovie!.currentSeason} E${historyMovie.currentEpisode}'
+                                                                : 'Play S1 E1'),
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        maxLines: 1,
+                                                        style: TextStyle(
+                                                          color: tvUnreleased
+                                                              ? Colors.white54
+                                                              : Colors.black,
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                          fontSize: tvUnreleased
+                                                              ? 11
+                                                              : 16,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
                                               ),
                                             ),
                                           ),
-                                        ),
-                                      const SizedBox(width: 12),
-                                      // Trailer Button
-                                      if (m.trailerUrl != null)
-                                        Expanded(
-                                          flex: 2,
-                                          child: Container(
-                                            height: 50,
-                                            decoration: BoxDecoration(
-                                              color: Colors.white10,
-                                              borderRadius:
-                                                  BorderRadius.circular(30),
-                                            ),
-                                            child: InkWell(
-                                              onTap: () async {
-                                                final uri =
-                                                    Uri.parse(m.trailerUrl!);
-                                                if (await canLaunchUrl(uri)) {
-                                                  await launchUrl(
-                                                    uri,
-                                                    mode: LaunchMode
-                                                        .externalApplication,
-                                                  );
-                                                }
-                                              },
-                                              borderRadius:
-                                                  BorderRadius.circular(30),
-                                              child: const Row(
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment.center,
-                                                children: [
-                                                  Icon(
-                                                    Icons
-                                                        .movie_creation_outlined,
-                                                    color: Colors.white,
-                                                  ),
-                                                  SizedBox(width: 8),
-                                                  Text(
-                                                    'Trailer',
-                                                    style: TextStyle(
+                                        const SizedBox(width: 12),
+                                        // Trailer Button
+                                        if (m.trailerUrl != null)
+                                          Expanded(
+                                            flex: 2,
+                                            child: Container(
+                                              height: 50,
+                                              decoration: BoxDecoration(
+                                                color: Colors.white10,
+                                                borderRadius:
+                                                    BorderRadius.circular(30),
+                                              ),
+                                              child: InkWell(
+                                                onTap: () async {
+                                                  final uri =
+                                                      Uri.parse(m.trailerUrl!);
+                                                  if (await canLaunchUrl(uri)) {
+                                                    await launchUrl(
+                                                      uri,
+                                                      mode: LaunchMode
+                                                          .externalApplication,
+                                                    );
+                                                  }
+                                                },
+                                                borderRadius:
+                                                    BorderRadius.circular(30),
+                                                child: const Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment.center,
+                                                  children: [
+                                                    Icon(
+                                                      Icons
+                                                          .movie_creation_outlined,
                                                       color: Colors.white,
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      fontSize: 16,
                                                     ),
-                                                  ),
-                                                ],
+                                                    SizedBox(width: 8),
+                                                    Text(
+                                                      'Trailer',
+                                                      style: TextStyle(
+                                                        color: Colors.white,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 16,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
                                               ),
                                             ),
                                           ),
-                                        ),
-                                      const SizedBox(width: 12),
-                                      // Share Button
-                                      Container(
-                                        height: 50,
-                                        width: 50,
-                                        decoration: BoxDecoration(
-                                          color: Colors.white10,
-                                          borderRadius:
-                                              BorderRadius.circular(30),
-                                        ),
-                                        child: InkWell(
-                                          onTap: _shareMovie,
-                                          borderRadius:
-                                              BorderRadius.circular(30),
-                                          child: const Icon(
-                                            Icons.share_outlined,
-                                            color: Colors.white,
+                                        const SizedBox(width: 12),
+                                        // Share Button — functionality kept, just not shown right now.
+                                        // Container(
+                                        //   height: 50,
+                                        //   width: 50,
+                                        //   decoration: BoxDecoration(
+                                        //     color: Colors.white10,
+                                        //     borderRadius:
+                                        //         BorderRadius.circular(30),
+                                        //   ),
+                                        //   child: InkWell(
+                                        //     onTap: _shareMovie,
+                                        //     borderRadius:
+                                        //         BorderRadius.circular(30),
+                                        //     child: const Icon(
+                                        //       Icons.share_outlined,
+                                        //       color: Colors.white,
+                                        //     ),
+                                        //   ),
+                                        // ),
+                                        // Like Button — moved here from the AppBar.
+                                        Container(
+                                          height: 50,
+                                          width: 50,
+                                          decoration: BoxDecoration(
+                                            color: Colors.white10,
+                                            borderRadius:
+                                                BorderRadius.circular(30),
+                                          ),
+                                          child: InkWell(
+                                            onTap: _toggleFavorite,
+                                            borderRadius:
+                                                BorderRadius.circular(30),
+                                            child: Icon(
+                                              _isFavorite
+                                                  ? Icons.favorite
+                                                  : Icons.favorite_border,
+                                              color: _isFavorite
+                                                  ? AppTheme.primaryColor
+                                                  : Colors.white,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              );
-                            }(),
+                                      ],
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
                             const SizedBox(height: 24),
 
                             Text(
@@ -830,18 +1053,23 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                       builder: (btnContext) {
                                         return TextButton.icon(
                                           style: TextButton.styleFrom(
-                                            backgroundColor: Colors.white.withOpacity(0.08),
+                                            backgroundColor:
+                                                Colors.white.withOpacity(0.08),
                                             shape: RoundedRectangleBorder(
-                                              borderRadius: BorderRadius.circular(6),
+                                              borderRadius:
+                                                  BorderRadius.circular(6),
                                             ),
-                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 12, vertical: 6),
                                           ),
-                                          icon: const Icon(Icons.layers_rounded, color: Colors.white, size: 16),
+                                          icon: const Icon(Icons.layers_rounded,
+                                              color: Colors.white, size: 16),
                                           label: Row(
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
                                               Text(
-                                                _selectedSeason?.seasonNumber == 0
+                                                _selectedSeason?.seasonNumber ==
+                                                        0
                                                     ? 'Specials'
                                                     : 'Season ${_selectedSeason?.seasonNumber ?? 1}',
                                                 style: const TextStyle(
@@ -851,27 +1079,40 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                 ),
                                               ),
                                               const SizedBox(width: 4),
-                                              const Icon(Icons.keyboard_arrow_down, color: Colors.white54, size: 14),
+                                              const Icon(
+                                                  Icons.keyboard_arrow_down,
+                                                  color: Colors.white54,
+                                                  size: 14),
                                             ],
                                           ),
                                           onPressed: () async {
-                                            final RenderBox renderBox = btnContext.findRenderObject() as RenderBox;
-                                            final offset = renderBox.localToGlobal(Offset.zero);
+                                            final RenderBox renderBox =
+                                                btnContext.findRenderObject()
+                                                    as RenderBox;
+                                            final offset = renderBox
+                                                .localToGlobal(Offset.zero);
                                             final val = await showMenu<int>(
                                               context: context,
                                               position: RelativeRect.fromLTRB(
                                                 offset.dx,
-                                                offset.dy + renderBox.size.height + 4,
-                                                offset.dx + renderBox.size.width,
+                                                offset.dy +
+                                                    renderBox.size.height +
+                                                    4,
+                                                offset.dx +
+                                                    renderBox.size.width,
                                                 0,
                                               ),
                                               color: Colors.grey[900],
-                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                              shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(8)),
                                               items: m.seasons!
                                                   .where(
                                                     (s) =>
                                                         s.seasonNumber > 0 ||
-                                                        s.seasonNumber == _selectedSeason?.seasonNumber,
+                                                        s.seasonNumber ==
+                                                            _selectedSeason
+                                                                ?.seasonNumber,
                                                   )
                                                   .map((s) => PopupMenuItem(
                                                         value: s.seasonNumber,
@@ -881,13 +1122,20 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                               ? 'Specials'
                                                               : 'Season ${s.seasonNumber}',
                                                           style: TextStyle(
-                                                            color: s.seasonNumber == _selectedSeason?.seasonNumber
-                                                                ? AppTheme.primaryColor
+                                                            color: s.seasonNumber ==
+                                                                    _selectedSeason
+                                                                        ?.seasonNumber
+                                                                ? AppTheme
+                                                                    .primaryColor
                                                                 : Colors.white,
                                                             fontSize: 13,
-                                                            fontWeight: s.seasonNumber == _selectedSeason?.seasonNumber
-                                                                ? FontWeight.bold
-                                                                : FontWeight.w500,
+                                                            fontWeight: s.seasonNumber ==
+                                                                    _selectedSeason
+                                                                        ?.seasonNumber
+                                                                ? FontWeight
+                                                                    .bold
+                                                                : FontWeight
+                                                                    .w500,
                                                           ),
                                                         ),
                                                       ))
@@ -895,10 +1143,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                             );
                                             if (val != null) {
                                               setState(() {
-                                                _selectedSeason = m.seasons!.firstWhere(
+                                                _selectedSeason =
+                                                    m.seasons!.firstWhere(
                                                   (s) => s.seasonNumber == val,
                                                 );
-                                                _selectedEpisode = null; // Reset episode
+                                                _selectedEpisode =
+                                                    null; // Reset episode
                                               });
                                               _loadSeasonDetails(val);
                                             }
@@ -910,214 +1160,235 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                 ),
 
                               const SizedBox(height: 16),
+                            ],
+                          ]),
+                        ),
+                      ),
 
-                              if (_loadingEpisodes)
-                                const ShimmerList()
-                              else if (_episodes.isEmpty)
-                                const Text(
-                                  "No episodes available.",
-                                  style: TextStyle(color: Colors.white54),
-                                )
-                              else
-                                ListView.builder(
-                                  padding: EdgeInsets.zero,
-                                  physics: const NeverScrollableScrollPhysics(),
-                                  shrinkWrap: true,
-                                  itemCount: _episodes.length,
-                                  itemBuilder: (context, index) {
-                                    final ep = _episodes[index];
-                                    final currentProgress = SavedMoviesService().getEpisodeProgress(
-                                      widget.movie.id,
-                                      _selectedSeason?.seasonNumber ?? 1,
-                                      ep.episodeNumber,
-                                    ) ?? ep.progress;
+                      // Episode list — a separate sliver (not nested inside the
+                      // regular-content SliverList above) so it's genuinely lazy
+                      // via SliverList.builder, instead of the old shrinkWrap:
+                      // true + NeverScrollableScrollPhysics ListView.builder,
+                      // which forced every episode row to build up front
+                      // regardless of scroll position. Matters a lot for shows
+                      // with long seasons (100+ episodes).
+                      if (isTv)
+                        if (_loadingEpisodes)
+                          const SliverPadding(
+                            padding: EdgeInsets.fromLTRB(24, 0, 24, 24),
+                            sliver: SliverToBoxAdapter(child: ShimmerList()),
+                          )
+                        else if (_episodes.isEmpty)
+                          const SliverPadding(
+                            padding: EdgeInsets.fromLTRB(24, 0, 24, 24),
+                            sliver: SliverToBoxAdapter(
+                              child: Text(
+                                "No episodes available.",
+                                style: TextStyle(color: Colors.white54),
+                              ),
+                            ),
+                          )
+                        else
+                          SliverPadding(
+                            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                            sliver: SliverList.builder(
+                              itemCount: _episodes.length,
+                              itemBuilder: (context, index) {
+                                final ep = _episodes[index];
+                                final currentProgress =
+                                    SavedMoviesService().getEpisodeProgress(
+                                          widget.movie.id,
+                                          _selectedSeason?.seasonNumber ?? 1,
+                                          ep.episodeNumber,
+                                        ) ??
+                                        ep.progress;
 
-                                    bool isFuture = false;
-                                    String? formattedDate;
+                                bool isFuture = false;
+                                String? formattedDate;
 
-                                    if (ep.airDate != null) {
-                                      try {
-                                        final date =
-                                            DateTime.parse(ep.airDate!);
-                                        if (date.isAfter(DateTime.now())) {
-                                          isFuture = true;
-                                          formattedDate =
-                                              "${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}";
-                                        }
-                                      } catch (_) {}
+                                if (ep.airDate != null) {
+                                  try {
+                                    final date = DateTime.parse(ep.airDate!);
+                                    if (date.isAfter(DateTime.now())) {
+                                      isFuture = true;
+                                      formattedDate =
+                                          "${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}";
                                     }
+                                  } catch (_) {}
+                                }
 
-                                    return Container(
-                                      margin: const EdgeInsets.only(bottom: 16),
-                                      child: InkWell(
-                                        onTap: isFuture
-                                            ? null
-                                            : () {
-                                                setState(() {
-                                                  _selectedEpisode =
-                                                      ep.episodeNumber;
-                                                });
-                                                _playWithTorrent();
-                                              },
-                                        borderRadius: BorderRadius.circular(4),
-                                        child: Row(
-                                          children: [
-                                            // Thumbnail
-                                            Container(
-                                              width: 140,
-                                              height: 80,
-                                              margin: const EdgeInsets.only(
-                                                right: 12,
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 16),
+                                  child: InkWell(
+                                    onTap: isFuture
+                                        ? null
+                                        : () {
+                                            setState(() {
+                                              _selectedEpisode =
+                                                  ep.episodeNumber;
+                                            });
+                                            _playWithTorrent();
+                                          },
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: Row(
+                                      children: [
+                                        // Thumbnail
+                                        Container(
+                                          width: 140,
+                                          height: 80,
+                                          margin: const EdgeInsets.only(
+                                            right: 12,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            borderRadius: BorderRadius.circular(
+                                              4,
+                                            ),
+                                            image: DecorationImage(
+                                              image: CachedNetworkImageProvider(
+                                                ep.stillPath ??
+                                                    m.backdrop ??
+                                                    '',
                                               ),
-                                              decoration: BoxDecoration(
-                                                borderRadius:
-                                                    BorderRadius.circular(
-                                                  4,
-                                                ),
-                                                image: DecorationImage(
-                                                  image:
-                                                      CachedNetworkImageProvider(
-                                                    ep.stillPath ??
-                                                        m.backdrop ??
-                                                        '',
-                                                  ),
-                                                  fit: BoxFit.cover,
-                                                  colorFilter: isFuture
-                                                      ? const ColorFilter.mode(
-                                                          Colors.black54,
-                                                          BlendMode.darken,
-                                                        )
-                                                      : null,
-                                                  opacity: isFuture ? 0.6 : 1.0,
-                                                ),
-                                              ),
-                                              child: Stack(
-                                                fit: StackFit.expand,
-                                                children: [
-                                                  isFuture
-                                                      ? const Center(
-                                                          child: Icon(
-                                                            Icons.lock_clock,
-                                                            color:
-                                                                Colors.white54,
-                                                            size: 24,
-                                                          ),
-                                                        )
-                                                      : Container(
-                                                          color: Colors.black26,
-                                                          child: const Center(
-                                                            child: Icon(
-                                                              Icons
-                                                                  .play_circle_outline,
-                                                              color:
-                                                                  Colors.white,
-                                                              size: 32,
-                                                            ),
-                                                          ),
-                                                        ),
-                                                  // Progress Bar
-                                                  if (currentProgress != null &&
-                                                      currentProgress > 0)
-                                                    Positioned(
-                                                      bottom: 4,
-                                                      left: 6,
-                                                      right: 6,
-                                                      child: Container(
-                                                        height: 4,
-                                                        decoration: BoxDecoration(
-                                                          color: Colors.black54,
-                                                          borderRadius: BorderRadius.circular(4),
-                                                        ),
-                                                        child: ClipRRect(
-                                                          borderRadius: BorderRadius.circular(4),
-                                                          child: FractionallySizedBox(
-                                                            alignment: Alignment.centerLeft,
-                                                            widthFactor: currentProgress.clamp(0.0, 1.0),
-                                                            child: Container(color: AppTheme.primaryColor),
-                                                          ),
+                                              fit: BoxFit.cover,
+                                              colorFilter: isFuture
+                                                  ? const ColorFilter.mode(
+                                                      Colors.black54,
+                                                      BlendMode.darken,
+                                                    )
+                                                  : null,
+                                              opacity: isFuture ? 0.6 : 1.0,
+                                            ),
+                                          ),
+                                          child: Stack(
+                                            fit: StackFit.expand,
+                                            children: [
+                                              isFuture
+                                                  ? const Center(
+                                                      child: Icon(
+                                                        Icons.lock_clock,
+                                                        color: Colors.white54,
+                                                        size: 24,
+                                                      ),
+                                                    )
+                                                  : Container(
+                                                      color: Colors.black26,
+                                                      child: const Center(
+                                                        child: Icon(
+                                                          Icons
+                                                              .play_circle_outline,
+                                                          color: Colors.white,
+                                                          size: 32,
                                                         ),
                                                       ),
                                                     ),
-                                                ],
-                                              ),
-                                            ),
-
-                                            // Info
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    '${ep.episodeNumber}. ${ep.name}',
-                                                    style: TextStyle(
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      fontSize: 14,
-                                                      color: isFuture
-                                                          ? Colors.white54
-                                                          : Colors.white,
+                                              // Progress Bar
+                                              if (currentProgress != null &&
+                                                  currentProgress > 0)
+                                                Positioned(
+                                                  bottom: 4,
+                                                  left: 6,
+                                                  right: 6,
+                                                  child: Container(
+                                                    height: 4,
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.black54,
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              4),
                                                     ),
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                  ),
-                                                  const SizedBox(height: 4),
-                                                  Text(
-                                                    ep.overview.isNotEmpty
-                                                        ? ep.overview
-                                                        : "No description available.",
-                                                    maxLines: 2,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: const TextStyle(
-                                                      fontSize: 12,
-                                                      color: Colors.grey,
-                                                    ),
-                                                  ),
-                                                  const SizedBox(height: 4),
-                                                  isFuture &&
-                                                          formattedDate != null
-                                                      ? Text(
-                                                          'Available on: $formattedDate',
-                                                          style:
-                                                              const TextStyle(
-                                                            fontSize: 12,
+                                                    child: ClipRRect(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              4),
+                                                      child:
+                                                          FractionallySizedBox(
+                                                        alignment: Alignment
+                                                            .centerLeft,
+                                                        widthFactor:
+                                                            currentProgress
+                                                                .clamp(
+                                                                    0.0, 1.0),
+                                                        child: Container(
                                                             color: AppTheme
-                                                                .primaryColor,
-                                                            fontStyle: FontStyle
-                                                                .italic,
-                                                          ),
-                                                        )
-                                                      : Text(
-                                                          '${ep.voteAverage.toStringAsFixed(1)} ★',
-                                                          style:
-                                                              const TextStyle(
-                                                            fontSize: 10,
-                                                            color:
-                                                                Colors.white54,
-                                                          ),
-                                                        ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
+                                                                .primaryColor),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
                                         ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                            ],
-                          ],
+
+                                        // Info
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                '${ep.episodeNumber}. ${ep.name}',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 14,
+                                                  color: isFuture
+                                                      ? Colors.white54
+                                                      : Colors.white,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                ep.overview.isNotEmpty
+                                                    ? ep.overview
+                                                    : "No description available.",
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.grey,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              isFuture && formattedDate != null
+                                                  ? Text(
+                                                      'Available on: $formattedDate',
+                                                      style: const TextStyle(
+                                                        fontSize: 12,
+                                                        color: AppTheme
+                                                            .primaryColor,
+                                                        fontStyle:
+                                                            FontStyle.italic,
+                                                      ),
+                                                    )
+                                                  : Text(
+                                                      '${ep.voteAverage.toStringAsFixed(1)} ★',
+                                                      style: const TextStyle(
+                                                        fontSize: 10,
+                                                        color: Colors.white54,
+                                                      ),
+                                                    ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                      SliverToBoxAdapter(
+                        child: SizedBox(
+                          height: MediaQuery.of(context).padding.bottom,
                         ),
                       ),
-                      SizedBox(height: MediaQuery.of(context).padding.bottom),
                     ],
                   ),
-                ),
-        );
-      },
-    );
+                ],
+              ),
+      );
+    })();
   }
 }
 
@@ -1231,14 +1502,38 @@ class _TorrentQualitySelectorSheetState
     });
 
     try {
-      // Save last played torrent infohash to SharedPreferences
+      // Resolve the tapped stream, automatically trying the next-best
+      // candidates if it fails or times out — Torrentio's seed counts are
+      // often stale, so one dead pick shouldn't send the user straight to
+      // the web-embed fallback when another torrent would have worked.
+      final resolved = await widget.resolver
+          .resolveWithFallback(stream, _streams ?? [stream]);
+      final resolvedStream = resolved.stream;
+      final result = resolved.result;
+
+      // Save last played torrent infohash — the one that actually resolved,
+      // not necessarily the one originally tapped.
       final prefs = await SharedPreferences.getInstance();
       final String key = widget.season != null && widget.episode != null
           ? 'last_played_torrent_${widget.imdbId}_${widget.season}_${widget.episode}'
           : 'last_played_torrent_${widget.imdbId}';
-      await prefs.setString(key, stream.infoHash);
+      await prefs.setString(key, resolvedStream.infoHash);
 
-      final result = await widget.resolver.resolve(stream);
+      // Record which movie/episode this download is and how big it's
+      // supposed to be, so Settings > Storage can show something more
+      // useful than a bare infoHash (see TorrentDownloadRegistry).
+      await TorrentDownloadRegistry.save(
+        resolvedStream.infoHash,
+        TorrentDownloadInfo(
+          movieId: widget.movie.id,
+          imdbId: widget.imdbId,
+          title: widget.movie.title,
+          image: widget.movie.image,
+          season: widget.season,
+          episode: widget.episode,
+          totalBytes: TorrentDownloadRegistry.parseSizeBytes(resolvedStream.size),
+        ),
+      );
 
       // Add to history
       await SavedMoviesService().addToHistory(
@@ -1252,7 +1547,7 @@ class _TorrentQualitySelectorSheetState
 
       if (widget.onStreamSelected != null) {
         widget.onStreamSelected!(
-          stream,
+          resolvedStream,
           result.streamUrl,
           result.torrentId,
           _streams ?? [stream],
@@ -1267,7 +1562,8 @@ class _TorrentQualitySelectorSheetState
           builder: (_) => PlayerScreen(
             url: result.streamUrl,
             torrentId: result.torrentId,
-            selectedStream: stream,
+            streamId: result.streamId,
+            selectedStream: resolvedStream,
             availableStreams: _streams ?? [stream],
             movie: widget.movie,
             details: widget.details,
@@ -1323,7 +1619,8 @@ class _TorrentQualitySelectorSheetState
             top: isLandscape ? 6 : 8,
             left: 20,
             right: 20,
-            bottom: (isLandscape ? 10 : 20) + MediaQuery.of(context).padding.bottom,
+            bottom:
+                (isLandscape ? 10 : 20) + MediaQuery.of(context).padding.bottom,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1377,12 +1674,7 @@ class _TorrentQualitySelectorSheetState
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         SizedBox(height: isLandscape ? 12 : 24),
-                        const Center(
-                          child: CircularProgressIndicator(
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                                AppTheme.primaryColor),
-                          ),
-                        ),
+                        const Center(child: ShimmerLoader(size: 90)),
                         const SizedBox(height: 16),
                         Center(
                           child: Text(
@@ -1405,12 +1697,7 @@ class _TorrentQualitySelectorSheetState
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         SizedBox(height: isLandscape ? 20 : 40),
-                        const Center(
-                          child: CircularProgressIndicator(
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                                AppTheme.primaryColor),
-                          ),
-                        ),
+                        const Center(child: ShimmerLoader(size: 90)),
                         const SizedBox(height: 16),
                         const Center(
                           child: Text(

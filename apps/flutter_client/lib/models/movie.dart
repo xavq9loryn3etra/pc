@@ -9,6 +9,7 @@ class Movie {
   final String description;
   final String type; // 'movie' or 'tv'
   final bool inCinemas;
+  final String? releaseDateRaw; // Raw TMDB release_date/first_air_date
 
   // Extra Details
   final String? director;
@@ -34,6 +35,17 @@ class Movie {
   double get voteAverage => double.tryParse(rating) ?? 0.0;
   String? get overview => description;
 
+  /// Whether this movie/show's release date is in the future — used to
+  /// block playback of content that hasn't come out yet (no real torrent
+  /// stream can exist for it regardless of what an indexer might return).
+  bool get isUnreleased {
+    final raw = releaseDateRaw;
+    if (raw == null || raw.isEmpty) return false;
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return false;
+    return parsed.isAfter(DateTime.now());
+  }
+
   Movie({
     required this.id,
     required this.title,
@@ -45,6 +57,7 @@ class Movie {
     required this.description,
     required this.type,
     required this.inCinemas,
+    this.releaseDateRaw,
     this.director,
     this.cast,
     this.genres,
@@ -73,6 +86,7 @@ class Movie {
       'description': description,
       'type': type,
       'in_cinemas': inCinemas,
+      'release_date_raw': releaseDateRaw,
       'trailer_url': trailerUrl,
       'imdb_id': imdbId,
       'current_season': currentSeason,
@@ -93,6 +107,7 @@ class Movie {
       description: json['description'],
       type: json['type'],
       inCinemas: json['in_cinemas'] ?? false,
+      releaseDateRaw: json['release_date_raw'],
       trailerUrl: json['trailer_url'],
       imdbId: json['imdb_id'],
       currentSeason: json['current_season'],
@@ -134,6 +149,16 @@ class Episode {
   final String? airDate;
   final double voteAverage;
   final double? progress;
+
+  /// Whether this episode's air date is in the future — see
+  /// Movie.isUnreleased for why this matters for playback.
+  bool get isUnreleased {
+    final raw = airDate;
+    if (raw == null || raw.isEmpty) return false;
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return false;
+    return parsed.isAfter(DateTime.now());
+  }
 
   Episode({
     required this.id,

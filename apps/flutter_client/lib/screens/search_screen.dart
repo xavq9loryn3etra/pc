@@ -123,6 +123,14 @@ class _SearchScreenState extends State<SearchScreen> {
   Widget build(BuildContext context) {
     return ScreenScaffold(
       bottomNavTab: BottomNavTab.search,
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back, color: Colors.white),
+        // Search is a bottom-nav tab, not a pushed route, so there's no
+        // route to pop — "back" here means returning to the Home tab,
+        // same as tapping the Home icon in FloatingBottomNavBar.
+        onPressed: () =>
+            MovieTabService().currentTab.value = BottomNavTab.home,
+      ),
       title: TextField(
         controller: _controller,
         focusNode: _searchFocusNode,

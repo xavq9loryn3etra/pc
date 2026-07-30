@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import '../widgets/screen_scaffold.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
-import '../widgets/mode_switcher_dialog.dart';
 import '../widgets/shimmer_loader.dart';
+import '../enums/app_mode.dart';
+import '../services/app_mode_service.dart';
 import '../services/backup_service.dart';
 import '../services/torrent/torrent_storage_service.dart';
 import '../services/torrent/torrent_download_registry.dart';
@@ -35,142 +37,91 @@ class SettingsScreen extends StatelessWidget {
         return ListView(
           padding: padding.copyWith(top: 100),
           children: [
-            const SizedBox(height: 8),
-            _SettingsTile(
-              icon: Icons.grid_view,
-              label: 'Switch Mode',
-              onTap: () => showModeSwitcherDialog(context),
+            const _SectionLabel('SWITCH MODE', topPadding: 8),
+            const _ModeSwitchRow(),
+            const _SectionLabel('BACKUP & RESTORE'),
+            _BackupRestoreRow(
+              onExport: () => _exportBackup(context),
+              onImport: () => _importBackup(context),
             ),
-            _SettingsTile(
-              icon: Icons.cloud_sync,
-              label: 'Backup & Restore',
-              onTap: () => _showBackupRestoreDialog(context),
-            ),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 24, 16, 8),
-              child: Text(
-                'STORAGE',
-                style: TextStyle(
-                  color: Colors.white38,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
-                ),
-              ),
-            ),
+            const _SectionLabel('STORAGE'),
             const _StorageSection(),
           ],
         );
       },
     );
   }
+}
 
-  void _showBackupRestoreDialog(BuildContext rootContext) {
-    showDialog(
-      context: rootContext,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: Colors.grey[900],
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
-          children: [
-            Icon(Icons.cloud_sync, color: AppTheme.primaryColor),
-            SizedBox(width: 12),
-            Text('Backup & Restore', style: TextStyle(color: Colors.white)),
-          ],
-        ),
-        content: const Text(
-          'Export your favorites and history to a file, or import them from a previously saved backup.',
-          style: TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('CANCEL', style: TextStyle(color: Colors.grey)),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(dialogContext);
-              final success = await _runWithLoadingDialog(
-                rootContext,
-                message: 'Exporting backup...',
-                action: () => BackupService().exportData(),
-              );
-              if (success != null && rootContext.mounted) {
-                ScaffoldMessenger.of(rootContext).showSnackBar(
-                  SnackBar(
-                    content: Text(success
-                        ? 'Backup exported successfully!'
-                        : 'Failed to export backup.'),
-                    backgroundColor: success ? Colors.green : Colors.red,
-                  ),
-                );
-              }
-            },
-            child: const Text('EXPORT',
-                style: TextStyle(color: AppTheme.primaryColor)),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(dialogContext);
-              final success = await _runWithLoadingDialog(
-                rootContext,
-                message: 'Importing backup...',
-                action: () => BackupService().importData(),
-              );
-              if (success == null || !rootContext.mounted) return;
-              if (success) {
-                ScaffoldMessenger.of(rootContext).showSnackBar(
-                  const SnackBar(
-                    content: Text('Backup imported! Reloading app...'),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-                // Restart app by navigating to main
-                Future.delayed(const Duration(seconds: 1), () {
-                  if (rootContext.mounted) {
-                    Navigator.pushAndRemoveUntil(
-                      rootContext,
-                      MaterialPageRoute(builder: (_) => const MyApp()),
-                      (route) => false,
-                    );
-                  }
-                });
-              } else {
-                ScaffoldMessenger.of(rootContext).showSnackBar(
-                  const SnackBar(
-                    content: Text('Failed to import backup.'),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
-            },
-            child: const Text('IMPORT',
-                style: TextStyle(color: AppTheme.primaryColor)),
-          ),
-        ],
+/// Runs [action] (backup export/import) behind a blocking loading dialog —
+/// without it there's no feedback at all between tapping the button and a
+/// SnackBar appearing seconds later. Returns [action]'s result, or null if
+/// `context` was unmounted by the time it finished.
+Future<bool?> _runWithLoadingDialog(
+  BuildContext context, {
+  required String message,
+  required Future<bool> Function() action,
+}) async {
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => _BackupLoadingDialog(message: message),
+  );
+  final success = await action();
+  if (!context.mounted) return null;
+  Navigator.of(context).pop(); // dismiss the loading dialog
+  return success;
+}
+
+Future<void> _exportBackup(BuildContext context) async {
+  final success = await _runWithLoadingDialog(
+    context,
+    message: 'Exporting backup...',
+    action: () => BackupService().exportData(),
+  );
+  if (success != null && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(success
+            ? 'Backup exported successfully!'
+            : 'Failed to export backup.'),
+        backgroundColor: success ? Colors.green : Colors.red,
       ),
     );
   }
+}
 
-  /// Shows a blocking loading dialog for the duration of [action] (backup
-  /// export/import previously gave no feedback at all between tapping the
-  /// button and a SnackBar appearing seconds later — this fills that gap).
-  /// Returns [action]'s result, or null if `context` was unmounted by the
-  /// time it finished.
-  Future<bool?> _runWithLoadingDialog(
-    BuildContext context, {
-    required String message,
-    required Future<bool> Function() action,
-  }) async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _BackupLoadingDialog(message: message),
+Future<void> _importBackup(BuildContext context) async {
+  final success = await _runWithLoadingDialog(
+    context,
+    message: 'Importing backup...',
+    action: () => BackupService().importData(),
+  );
+  if (success == null || !context.mounted) return;
+  if (success) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Backup imported! Reloading app...'),
+        backgroundColor: Colors.green,
+      ),
     );
-    final success = await action();
-    if (!context.mounted) return null;
-    Navigator.of(context).pop(); // dismiss the loading dialog
-    return success;
+    // Restart app by navigating to main
+    Future.delayed(const Duration(seconds: 1), () {
+      if (context.mounted) {
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const MyApp()),
+          (route) => false,
+        );
+      }
+    });
+  } else {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Failed to import backup.'),
+        backgroundColor: Colors.red,
+      ),
+    );
   }
 }
 
@@ -200,24 +151,238 @@ class _BackupLoadingDialog extends StatelessWidget {
   }
 }
 
-class _SettingsTile extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback? onTap;
+class _SectionLabel extends StatelessWidget {
+  final String text;
+  final double topPadding;
 
-  const _SettingsTile({
-    required this.icon,
+  const _SectionLabel(this.text, {this.topPadding = 24});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, topPadding, 16, 8),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white38,
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 1,
+        ),
+      ),
+    );
+  }
+}
+
+/// Inline mode picker — used to live behind a "Switch Mode" tap target that
+/// opened [ModeSwitcherDialog] as a sliding top panel; now shown directly on
+/// the Settings screen instead.
+class _ModeSwitchRow extends StatelessWidget {
+  const _ModeSwitchRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: const [
+          _ModeOption(
+            mode: AppMode.movies,
+            assetPath: 'assets/logo.svg',
+            isSvg: true,
+            size: 32,
+            label: 'Popcorn',
+          ),
+          _ModeOption(
+            mode: AppMode.music,
+            assetPath: 'assets/music-app-logo.png',
+            label: 'Groovy',
+          ),
+          _ModeOption(
+            mode: AppMode.books,
+            assetPath: 'assets/book-app-logo.png',
+            label: 'Library',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ModeOption extends StatelessWidget {
+  final AppMode mode;
+  final String assetPath;
+  final String label;
+  final bool isSvg;
+  final double size;
+
+  const _ModeOption({
+    required this.mode,
+    required this.assetPath,
     required this.label,
-    this.onTap,
+    this.isSvg = false,
+    this.size = 48.0,
   });
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(icon, color: Colors.white),
-      title: Text(label, style: const TextStyle(color: Colors.white)),
-      trailing: const Icon(Icons.chevron_right, color: Colors.white38),
-      onTap: onTap,
+    return ValueListenableBuilder<AppMode>(
+      valueListenable: AppModeService().currentMode,
+      builder: (context, currentMode, child) {
+        final isSelected = currentMode == mode;
+
+        return GestureDetector(
+          onTap: () => AppModeService().setMode(mode),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: 90,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            decoration: BoxDecoration(
+              color: isSelected
+                  ? Colors.white.withOpacity(0.1)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: isSelected ? Colors.white24 : Colors.transparent,
+                width: 1,
+              ),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SizedBox(
+                  height: 48,
+                  child: Center(
+                    child: isSvg
+                        ? SvgPicture.asset(
+                            assetPath,
+                            height: size,
+                            width: size,
+                            colorFilter: ColorFilter.mode(
+                              isSelected ? AppTheme.primaryColor : Colors.white70,
+                              BlendMode.srcIn,
+                            ),
+                          )
+                        : Image.asset(
+                            assetPath,
+                            height: size,
+                            width: size,
+                            cacheWidth: (size * 3).toInt(),
+                            gaplessPlayback: true,
+                            fit: BoxFit.contain,
+                            opacity: isSelected
+                                ? const AlwaysStoppedAnimation(1.0)
+                                : const AlwaysStoppedAnimation(0.7),
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: isSelected ? Colors.white : Colors.white60,
+                    fontWeight:
+                        isSelected ? FontWeight.bold : FontWeight.normal,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Inline Export/Import buttons — used to live behind a "Backup & Restore"
+/// tap target that opened an AlertDialog asking which action to run; now
+/// shown directly on the Settings screen instead. Buttons match the
+/// pill-shaped, height-50 style used for the Trailer/Like buttons on
+/// DetailsScreen and the Play/More Info buttons on the home hero banner.
+class _BackupRestoreRow extends StatelessWidget {
+  final VoidCallback onExport;
+  final VoidCallback onImport;
+
+  const _BackupRestoreRow({required this.onExport, required this.onImport});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Export your favorites and history to a file, or import them '
+            'from a previously saved backup.',
+            style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _BackupButton(
+                  icon: Icons.file_upload_outlined,
+                  label: 'Export',
+                  onTap: onExport,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _BackupButton(
+                  icon: Icons.file_download_outlined,
+                  label: 'Import',
+                  onTap: onImport,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BackupButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _BackupButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 50,
+      decoration: BoxDecoration(
+        color: Colors.white10,
+        borderRadius: BorderRadius.circular(30),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(30),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: Colors.white, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

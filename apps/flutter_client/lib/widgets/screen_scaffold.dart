@@ -10,6 +10,7 @@ typedef BodyBuilder = Widget Function(
 
 class ScreenScaffold extends StatelessWidget {
   final Widget title;
+  final Widget? leading;
   final List<Widget>? actions;
   final BodyBuilder body;
   final double opacity;
@@ -22,6 +23,7 @@ class ScreenScaffold extends StatelessWidget {
     super.key,
     required this.title,
     required this.body,
+    this.leading,
     this.actions,
     this.opacity = 0.0,
     this.selectedMovie,
@@ -43,6 +45,7 @@ class ScreenScaffold extends StatelessWidget {
               extendBodyBehindAppBar: extendBodyBehindAppBar,
               appBar: CustomAppBar(
                 title: title,
+                leading: leading,
                 actions: actions,
                 forceOpacity: opacity,
                 showActions: false, // Scaffold users provide their own actions

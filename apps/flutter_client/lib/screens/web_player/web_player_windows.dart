@@ -30,6 +30,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
 
   bool _showControls = false;
   Timer? _hideTimer;
+  StreamSubscription? _webMessageSub;
 
   @override
   void initState() {
@@ -45,7 +46,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
       await _controller.setUserAgent(
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
-      _controller.webMessage.listen((msg) {
+      _webMessageSub = _controller.webMessage.listen((msg) {
         _handleMessage(msg);
       });
 
@@ -285,6 +286,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
   @override
   void dispose() {
     _hideTimer?.cancel();
+    _webMessageSub?.cancel();
     _controller.dispose();
     super.dispose();
   }

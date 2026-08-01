@@ -70,6 +70,12 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
   static const double _crossAxisSpacing = 16.0;
   static const double _childAspectRatio = 1.25;
 
+  double _itemWidthFor(double gridWidth) {
+    final availableWidth = gridWidth - _gridPadding * 2;
+    return (availableWidth - _crossAxisSpacing * (_crossAxisCount - 1)) /
+        _crossAxisCount;
+  }
+
   void _scrollToCurrentEpisode(double gridWidth) {
     if (_hasScrolled) return;
     if (widget.currentSeason != widget.playingSeason) return;
@@ -78,10 +84,7 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
     if (index <= 0) return; // already on row 0, no scroll needed
     _hasScrolled = true;
     final row = index ~/ _crossAxisCount;
-    final availableWidth = gridWidth - _gridPadding * 2;
-    final itemWidth =
-        (availableWidth - _crossAxisSpacing * (_crossAxisCount - 1)) /
-            _crossAxisCount;
+    final itemWidth = _itemWidthFor(gridWidth);
     final itemHeight = itemWidth / _childAspectRatio;
     final offset =
         (row * (itemHeight + _mainAxisSpacing) - _gridPadding / 2)
@@ -167,8 +170,10 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
                   childAspectRatio: _childAspectRatio,
                 ),
                 itemCount: widget.episodes.length,
-                itemBuilder: (context, index) =>
-                    _buildGridCard(widget.episodes[index]),
+                itemBuilder: (context, index) => _buildGridCard(
+                  widget.episodes[index],
+                  _itemWidthFor(constraints.maxWidth),
+                ),
               );
             },
           ),
@@ -290,7 +295,7 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
     );
   }
 
-  Widget _buildGridCard(Episode ep) {
+  Widget _buildGridCard(Episode ep, double itemWidth) {
     final bool isCurrent = widget.currentSeason == widget.playingSeason &&
         ep.episodeNumber == widget.playingEpisode;
     final double? progress = SavedMoviesService().getEpisodeProgress(
@@ -324,7 +329,12 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
                     CachedNetworkImage(
                       imageUrl: ep.stillPath!,
                       fit: BoxFit.cover,
-                      memCacheWidth: 400,
+                      // Sized to the actual grid cell instead of a flat
+                      // guess — a 4-column grid cell is far smaller than
+                      // 400px wide on most phones.
+                      memCacheWidth: (itemWidth *
+                              MediaQuery.of(context).devicePixelRatio)
+                          .toInt(),
                       color: isFuture || isWatched
                           ? Colors.black.withOpacity(0.4)
                           : null,

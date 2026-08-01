@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../models/movie.dart';
@@ -14,6 +15,13 @@ class ScreenScaffold extends StatelessWidget {
   final List<Widget>? actions;
   final BodyBuilder body;
   final double opacity;
+  // Scroll-driven app-bar fade, as a listenable instead of a plain double.
+  // When set, only the AppBar repaints as it changes — the screen (and
+  // this widget's own build()) never re-runs, so `body(...)` isn't
+  // reinvoked and the scrollable content underneath isn't forced to
+  // rebuild on every scroll tick. Falls back to the static [opacity]
+  // field when absent (e.g. Settings, which has no scroll fade at all).
+  final ValueListenable<double>? opacityListenable;
   final Movie? selectedMovie;
   final VoidCallback? onCloseSidePanel;
   final bool extendBodyBehindAppBar;
@@ -26,6 +34,7 @@ class ScreenScaffold extends StatelessWidget {
     this.leading,
     this.actions,
     this.opacity = 0.0,
+    this.opacityListenable,
     this.selectedMovie,
     this.onCloseSidePanel,
     this.extendBodyBehindAppBar = true,
@@ -39,21 +48,49 @@ class ScreenScaffold extends StatelessWidget {
         final isDesktop = constraints.maxWidth > 800;
         final bottomSafePadding = MediaQuery.of(context).padding.bottom;
 
-        return Stack(
-          children: [
-            Scaffold(
-              extendBodyBehindAppBar: extendBodyBehindAppBar,
-              appBar: CustomAppBar(
+        // An if/else into a pre-declared variable, not a ternary — Dart
+        // infers a bare ternary's static type as the LUB of the two
+        // branches' own types (here, Widget, since PreferredSize and
+        // CustomAppBar only share the class hierarchy at that level), not
+        // their shared PreferredSizeWidget interface, so Scaffold.appBar
+        // rejects it even with an explicitly-typed target variable.
+        // Independent if/else assignments don't have that problem — each
+        // is checked against the variable's declared type on its own.
+        final PreferredSizeWidget appBar;
+        if (opacityListenable != null) {
+          appBar = PreferredSize(
+            preferredSize: const Size.fromHeight(kToolbarHeight),
+            child: ValueListenableBuilder<double>(
+              valueListenable: opacityListenable!,
+              builder: (context, liveOpacity, _) => CustomAppBar(
                 title: title,
                 leading: leading,
                 actions: actions,
-                forceOpacity: opacity,
+                forceOpacity: liveOpacity,
                 showActions: false, // Scaffold users provide their own actions
                 // Its 3 callers (Search/Favorites/Settings) all have the
                 // floating bottom nav bar now — mode-switching lives in
                 // Settings instead of a header icon.
                 showModeSwitch: false,
               ),
+            ),
+          );
+        } else {
+          appBar = CustomAppBar(
+            title: title,
+            leading: leading,
+            actions: actions,
+            forceOpacity: opacity,
+            showActions: false,
+            showModeSwitch: false,
+          );
+        }
+
+        return Stack(
+          children: [
+            Scaffold(
+              extendBodyBehindAppBar: extendBodyBehindAppBar,
+              appBar: appBar,
               body: body(
                 context,
                 isDesktop,

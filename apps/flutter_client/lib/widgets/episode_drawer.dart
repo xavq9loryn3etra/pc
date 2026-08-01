@@ -372,6 +372,9 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                         fit: BoxFit.cover,
                         color: Colors.black.withOpacity(0.6),
                         colorBlendMode: BlendMode.darken,
+                        memCacheWidth: (cardWidth *
+                                MediaQuery.of(context).devicePixelRatio)
+                            .toInt(),
                       )
                     else if (ep.stillPath != null)
                       CachedNetworkImage(
@@ -379,6 +382,9 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                         fit: BoxFit.cover,
                         color: isWatched ? Colors.black.withOpacity(0.6) : null,
                         colorBlendMode: isWatched ? BlendMode.darken : null,
+                        memCacheWidth: (cardWidth *
+                                MediaQuery.of(context).devicePixelRatio)
+                            .toInt(),
                       )
                     else
                       Container(color: Colors.grey[900]),

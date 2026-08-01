@@ -44,8 +44,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
   Movie? _details;
   bool _loading = true;
   final ScrollController _scrollController = ScrollController();
-  bool _isFavorite = false;
   final Dio _shareDio = Dio();
+  final CancelToken _detailsCancelToken = CancelToken();
 
   // TV Show State
   List<Episode> _episodes = [];
@@ -96,31 +96,39 @@ class _DetailsScreenState extends State<DetailsScreen> {
   void initState() {
     super.initState();
     _loadDetails();
-    _checkFavorite();
   }
 
-  void _checkFavorite() {
-    setState(() {
-      _isFavorite = SavedMoviesService().isFavorite(widget.movie.id);
-    });
-  }
-
+  // No local _isFavorite field/setState needed — toggleFavorite() below
+  // calls notifyListeners(), and the like button already reads
+  // SavedMoviesService().isFavorite(...) directly inside the
+  // ListenableBuilder(listenable: SavedMoviesService()) further down, so it
+  // updates on its own without a second, full-screen rebuild.
   Future<void> _toggleFavorite() async {
     await SavedMoviesService().toggleFavorite(_details ?? widget.movie);
-    _checkFavorite();
   }
 
   @override
   void dispose() {
+    // Aborts the in-flight TMDB request if the screen is closed before it
+    // resolves, instead of letting it finish (and get silently discarded)
+    // in the background — saves bandwidth/battery on a quick back-out.
+    _detailsCancelToken.cancel();
     _scrollController.dispose();
     super.dispose();
   }
 
   Future<void> _loadDetails() async {
-    final d = await TMDBService().getDetails(
-      widget.movie.id,
-      type: widget.movie.type,
-    );
+    Movie? d;
+    try {
+      d = await TMDBService().getDetails(
+        widget.movie.id,
+        type: widget.movie.type,
+        cancelToken: _detailsCancelToken,
+      );
+    } catch (e) {
+      if (e is DioException && CancelToken.isCancel(e)) return;
+      rethrow;
+    }
     if (mounted) {
       setState(() {
         _details = d ?? widget.movie;
@@ -462,15 +470,27 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                   children: [
                                     Hero(
                                       tag: 'movie_${m.id}',
-                                      child: (m.backdrop ?? m.posterUrl ?? '')
+                                      // Full-width parallax header — like the
+                                      // home hero banners, this renders large
+                                      // enough that TMDB's standard w1280
+                                      // backdrop tier can look soft, so it
+                                      // uses the full-resolution source.
+                                      child: (m.backdropHighRes ??
+                                                      m.backdrop ??
+                                                      m.posterUrl ??
+                                                      '')
                                               .toLowerCase()
                                               .endsWith('.svg')
                                           ? SvgPicture.network(
-                                              m.backdrop ?? m.posterUrl ?? '',
+                                              m.backdropHighRes ??
+                                                  m.backdrop ??
+                                                  m.posterUrl ??
+                                                  '',
                                               fit: BoxFit.cover,
                                             )
                                           : CachedNetworkImage(
-                                              imageUrl: m.backdrop ??
+                                              imageUrl: m.backdropHighRes ??
+                                                  m.backdrop ??
                                                   m.posterUrl ??
                                                   '',
                                               fit: BoxFit.cover,
@@ -531,17 +551,18 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     m.logoUrl != null
-                                        ? (m.logoUrl!
+                                        ? ((m.logoHighRes ?? m.logoUrl!)
                                                 .toLowerCase()
                                                 .endsWith('.svg')
                                             ? SvgPicture.network(
-                                                m.logoUrl!,
+                                                m.logoHighRes ?? m.logoUrl!,
                                                 width: 200,
                                                 fit: BoxFit.contain,
                                                 alignment: Alignment.centerLeft,
                                               )
                                             : CachedNetworkImage(
-                                                imageUrl: m.logoUrl!,
+                                                imageUrl:
+                                                    m.logoHighRes ?? m.logoUrl!,
                                                 width: 200,
                                                 memCacheWidth: (200 *
                                                         MediaQuery.of(context)
@@ -949,10 +970,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                             borderRadius:
                                                 BorderRadius.circular(30),
                                             child: Icon(
-                                              _isFavorite
+                                              SavedMoviesService()
+                                                      .isFavorite(
+                                                          widget.movie.id)
                                                   ? Icons.favorite
                                                   : Icons.favorite_border,
-                                              color: _isFavorite
+                                              color: SavedMoviesService()
+                                                      .isFavorite(
+                                                          widget.movie.id)
                                                   ? AppTheme.primaryColor
                                                   : Colors.white,
                                             ),
@@ -1248,6 +1273,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                 ep.stillPath ??
                                                     m.backdrop ??
                                                     '',
+                                                maxWidth: (140 *
+                                                        MediaQuery.of(context)
+                                                            .devicePixelRatio)
+                                                    .toInt(),
+                                                maxHeight: (80 *
+                                                        MediaQuery.of(context)
+                                                            .devicePixelRatio)
+                                                    .toInt(),
                                               ),
                                               fit: BoxFit.cover,
                                               colorFilter: isFuture
@@ -1468,12 +1501,6 @@ class _TorrentQualitySelectorSheetState
           _streams = list;
           _loading = false;
         });
-
-        // Auto fallback to web player if no torrents found
-        if (list.isEmpty) {
-          Navigator.pop(context);
-          widget.onFallback(Platform.isIOS ? 'vsembed' : 'vidlink');
-        }
       }
     } catch (e) {
       if (mounted) {
@@ -1582,13 +1609,11 @@ class _TorrentQualitySelectorSheetState
           SnackBar(
             backgroundColor: Colors.red[900],
             content: Text(
-              'Failed to resolve torrent: $e\nFalling back to web server.',
+              'Failed to resolve torrent: $e\nTry another source, or use "Alternative Web Servers" below.',
               style: const TextStyle(color: Colors.white),
             ),
           ),
         );
-        Navigator.pop(context);
-        widget.onFallback(Platform.isIOS ? 'vsembed' : 'vidlink');
       }
     }
   }
@@ -1745,6 +1770,16 @@ class _TorrentQualitySelectorSheetState
                             'No direct torrent streams available.',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.white54),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Center(
+                          child: Text(
+                            'Try "Alternative Web Servers" below instead.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                color: Colors.white.withOpacity(0.3),
+                                fontSize: 12),
                           ),
                         ),
                         SizedBox(height: isLandscape ? 10 : 20),

@@ -26,10 +26,15 @@ class _SearchScreenState extends State<SearchScreen> {
 
   List<Movie> _results = [];
   bool _isLoading = false;
-  double _opacity = 0.0;
+  // Scroll-driven app-bar fade. A ValueNotifier instead of a setState field
+  // — ScreenScaffold scopes it to just the AppBar via ValueListenableBuilder,
+  // so scrolling doesn't force this screen's build() (and the poster grid's
+  // itemBuilder for every visible cell) to re-run on every scroll tick.
+  final ValueNotifier<double> _opacityNotifier = ValueNotifier(0.0);
   Timer? _debounce;
   String? _error;
   Movie? _selectedMovie;
+  int _searchRequestId = 0;
 
   @override
   void initState() {
@@ -54,9 +59,9 @@ class _SearchScreenState extends State<SearchScreen> {
 
   void _onScroll() {
     final offset = _scrollController.offset;
-    double newOpacity = (offset / 50).clamp(0.0, 1.0);
-    if (newOpacity != _opacity) {
-      setState(() => _opacity = newOpacity);
+    final newOpacity = (offset / 50).clamp(0.0, 1.0);
+    if (newOpacity != _opacityNotifier.value) {
+      _opacityNotifier.value = newOpacity;
     }
   }
 
@@ -67,6 +72,7 @@ class _SearchScreenState extends State<SearchScreen> {
     _controller.dispose();
     _searchFocusNode.dispose();
     _scrollController.dispose();
+    _opacityNotifier.dispose();
     super.dispose();
   }
 
@@ -75,6 +81,7 @@ class _SearchScreenState extends State<SearchScreen> {
 
     // Clear results if empty
     if (query.isEmpty) {
+      _searchRequestId++; // invalidate any in-flight request
       setState(() {
         _results = [];
         _error = null;
@@ -89,6 +96,7 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   Future<void> _performSearch(String query) async {
+    final requestId = ++_searchRequestId;
     setState(() {
       _isLoading = true;
       _error = null;
@@ -96,7 +104,11 @@ class _SearchScreenState extends State<SearchScreen> {
 
     try {
       final results = await _tmdb.searchMulti(query);
-      if (mounted) {
+      // Response times vary enough that an older query's request can
+      // resolve after a newer one already has — only apply this response
+      // if nothing newer has been fired since, otherwise it'd silently
+      // clobber the correct, more recent results.
+      if (mounted && requestId == _searchRequestId) {
         setState(() {
           _results = results;
           _isLoading = false;
@@ -104,7 +116,7 @@ class _SearchScreenState extends State<SearchScreen> {
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && requestId == _searchRequestId) {
         setState(() {
           _isLoading = false;
           _error = "Search failed. Please check your connection.";
@@ -153,7 +165,7 @@ class _SearchScreenState extends State<SearchScreen> {
           ),
       ],
       body: _buildBody,
-      opacity: _opacity,
+      opacityListenable: _opacityNotifier,
       selectedMovie: _selectedMovie,
       onCloseSidePanel: _closeSidePanel,
     );

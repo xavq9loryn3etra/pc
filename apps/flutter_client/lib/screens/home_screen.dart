@@ -109,136 +109,150 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
           if (constraints.maxWidth > 800) {
             return const Scaffold(body: DesktopSkeletonHome());
           }
-          return const Stack(
-            children: [
-              Scaffold(body: SkeletonHome()),
-              FloatingBottomNavBar(activeTab: BottomNavTab.home),
-            ],
-          );
+          // FloatingBottomNavBar is deliberately absent here (unlike the
+          // loaded Stack below) — it plays a staggered pop-in entrance the
+          // first time it's actually built, so it should only get built
+          // once the shimmer is done, not sit there statically the whole
+          // time it's loading.
+          return const Scaffold(body: SkeletonHome());
         },
       );
     }
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (constraints.maxWidth > 800 && _featuredMovie != null) {
-          return DesktopHomeScreen(
-            featuredMovie: _featuredMovie!,
-            trendingMovies: _trendingMovies,
-            historyMovies: SavedMoviesService().history,
-            topRatedMovies: _topRatedMovies,
-            onPlayHero: () {
-              SavedMoviesService().addToHistory(_featuredMovie!);
-              _navigateToDetails(
-                _featuredMovie!,
-                heroTag: 'hero_${_featuredMovie!.id}',
-              );
-            },
-            onInfoHero: () => _navigateToDetails(
-              _featuredMovie!,
-              heroTag: 'hero_${_featuredMovie!.id}',
-            ),
-            onMovieTap: (movie) => _navigateToDetails(
-              movie,
-              heroTag: 'desktop_trending_${movie.id}',
-            ),
-            onRemoveHistory: (movie) => _confirmRemoveHistory(movie),
-          );
-        }
-
-        final scaffold = Scaffold(
-          extendBodyBehindAppBar: true,
-          // Scoped to the scroll controller so the AppBar's scroll-fade rebuilds
-          // on its own — the rest of the screen (hero banner, carousels) no
-          // longer rebuilds on every scroll frame just to update this fade.
-          appBar: PreferredSize(
-            preferredSize: const Size.fromHeight(kToolbarHeight),
-            child: ListenableBuilder(
-              listenable: _scrollController,
-              builder: (context, _) => CustomAppBar(
-                scrollOffset: _scrollController.hasClients
-                    ? _scrollController.offset
-                    : 0.0,
-                showActions: false,
-                showModeSwitch: false,
-              ),
-            ),
-          ),
-          body: SingleChildScrollView(
-            controller: _scrollController,
-            child: Column(
-              children: [
-                // Hero Banner
-                if (_featuredMovie != null)
-                  MovieHeroBanner(
-                    scrollController: _scrollController,
-                    movie: _featuredMovie!,
-                    onPlay: () {
-                      SavedMoviesService().addToHistory(_featuredMovie!);
-                      _navigateToDetails(
-                        _featuredMovie!,
-                        heroTag: 'hero_${_featuredMovie!.id}',
-                      );
-                    },
-                    onInfo: () => _navigateToDetails(
-                      _featuredMovie!,
-                      heroTag: 'hero_${_featuredMovie!.id}',
-                    ),
-                  ),
-
-                const SizedBox(height: 20),
-
-                // Continue Watching (History)
-                if (SavedMoviesService().history.isNotEmpty)
-                  _buildSection(
-                    title: "Continue Watching",
-                    movies: SavedMoviesService().history,
-                    heroPrefix: "history",
-                  ),
-
-                if (SavedMoviesService().history.isNotEmpty)
-                  const SizedBox(height: 24),
-
-                // Trending Section
-                _buildSection(
-                  title: "Trending This Week",
-                  movies: _trendingMovies,
-                  heroPrefix: "trending",
-                ),
-
-                const SizedBox(height: 24),
-
-                // Top Rated Section
-                _buildSection(
-                  title: "Top Rated",
-                  movies: _topRatedMovies,
-                  heroPrefix: "top",
-                ),
-
-                SizedBox(height: 110 + MediaQuery.of(context).padding.bottom),
-              ],
-            ),
-          ),
-        );
-
-        return Stack(
-          children: [
-            scaffold,
-            const FloatingBottomNavBar(activeTab: BottomNavTab.home),
-          ],
+        // Scoped to SavedMoviesService so Continue Watching (and the
+        // desktop panel's historyMovies prop) only refresh when history
+        // actually changes, instead of after every single navigation
+        // return regardless of whether anything changed.
+        return ListenableBuilder(
+          listenable: SavedMoviesService(),
+          builder: (context, _) => _buildContent(context, constraints),
         );
       },
     );
   }
 
+  Widget _buildContent(BuildContext context, BoxConstraints constraints) {
+    if (constraints.maxWidth > 800 && _featuredMovie != null) {
+      return DesktopHomeScreen(
+        featuredMovie: _featuredMovie!,
+        trendingMovies: _trendingMovies,
+        historyMovies: SavedMoviesService().history,
+        topRatedMovies: _topRatedMovies,
+        onPlayHero: () {
+          SavedMoviesService().addToHistory(_featuredMovie!);
+          _navigateToDetails(
+            _featuredMovie!,
+            heroTag: 'hero_${_featuredMovie!.id}',
+          );
+        },
+        onInfoHero: () => _navigateToDetails(
+          _featuredMovie!,
+          heroTag: 'hero_${_featuredMovie!.id}',
+        ),
+        onMovieTap: (movie) => _navigateToDetails(
+          movie,
+          heroTag: 'desktop_trending_${movie.id}',
+        ),
+        onRemoveHistory: (movie) => _confirmRemoveHistory(movie),
+      );
+    }
+
+    final scaffold = Scaffold(
+      extendBodyBehindAppBar: true,
+      // Scoped to the scroll controller so the AppBar's scroll-fade rebuilds
+      // on its own — the rest of the screen (hero banner, carousels) no
+      // longer rebuilds on every scroll frame just to update this fade.
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(kToolbarHeight),
+        child: ListenableBuilder(
+          listenable: _scrollController,
+          builder: (context, _) => CustomAppBar(
+            scrollOffset: _scrollController.hasClients
+                ? _scrollController.offset
+                : 0.0,
+            showActions: false,
+            showModeSwitch: false,
+          ),
+        ),
+      ),
+      body: SingleChildScrollView(
+        controller: _scrollController,
+        child: Column(
+          children: [
+            // Hero Banner
+            if (_featuredMovie != null)
+              MovieHeroBanner(
+                scrollController: _scrollController,
+                movie: _featuredMovie!,
+                onPlay: () {
+                  SavedMoviesService().addToHistory(_featuredMovie!);
+                  _navigateToDetails(
+                    _featuredMovie!,
+                    heroTag: 'hero_${_featuredMovie!.id}',
+                  );
+                },
+                onInfo: () => _navigateToDetails(
+                  _featuredMovie!,
+                  heroTag: 'hero_${_featuredMovie!.id}',
+                ),
+              ),
+
+            const SizedBox(height: 20),
+
+            // Continue Watching (History)
+            if (SavedMoviesService().history.isNotEmpty)
+              _buildSection(
+                title: "Continue Watching",
+                movies: SavedMoviesService().history,
+                heroPrefix: "history",
+              ),
+
+            if (SavedMoviesService().history.isNotEmpty)
+              const SizedBox(height: 24),
+
+            // Trending Section
+            _buildSection(
+              title: "Trending This Week",
+              movies: _trendingMovies,
+              heroPrefix: "trending",
+            ),
+
+            const SizedBox(height: 24),
+
+            // Top Rated Section
+            _buildSection(
+              title: "Top Rated",
+              movies: _topRatedMovies,
+              heroPrefix: "top",
+            ),
+
+            SizedBox(height: 110 + MediaQuery.of(context).padding.bottom),
+          ],
+        ),
+      ),
+    );
+
+    return Stack(
+      children: [
+        scaffold,
+        const FloatingBottomNavBar(activeTab: BottomNavTab.home),
+      ],
+    );
+  }
+
   Future<void> _navigateToDetails(Movie movie, {String? heroTag}) async {
+    // No manual refresh needed on return — _buildContent is wrapped in a
+    // ListenableBuilder(SavedMoviesService()), so it already reacts on its
+    // own if history actually changed (and skips a rebuild entirely for
+    // the common case of just glancing at a title and backing out).
     await Navigator.push(
       context,
       CupertinoPageRoute(
         builder: (_) => DetailsScreen(movie: movie, heroTag: heroTag),
       ),
     );
-    if (mounted) setState(() {});
   }
 
   Future<void> _confirmRemoveHistory(Movie movie) async {
@@ -268,10 +282,10 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
     );
 
     if (confirmed == true) {
+      // removeFromHistory() calls notifyListeners() itself — the
+      // ListenableBuilder(SavedMoviesService()) around _buildContent picks
+      // it up without a manual setState here.
       await SavedMoviesService().removeFromHistory(movie.id);
-      if (mounted) {
-        setState(() {}); // Refresh logic will pick up the change
-      }
     }
   }
 

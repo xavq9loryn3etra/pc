@@ -16,6 +16,16 @@ const _kGap = 12.0;
 const _kBounceDuration = Duration(milliseconds: 350);
 const _kBounceCurve = Curves.easeOutBack;
 
+// One-time pop-in played when a bar is first built (see MovieHomeScreen,
+// which only constructs its bar once the loading shimmer is done, so this
+// plays right as the shimmer closes rather than sitting there statically).
+// Each item's own window starts _kEntranceStagger later than the previous
+// one's, so they cascade in left-to-right instead of all popping at once.
+const _kEntranceDuration = Duration(milliseconds: 650);
+const _kEntranceStagger = 0.15;
+const _kEntranceWindow = 0.55;
+const _kEntranceTravel = 24.0; // px the item slides up from
+
 /// Floating tab bar for the Popcorn (movies) mobile experience, replacing
 /// the old header icon buttons. Sits on a bottom-fading gradient so it stays
 /// legible over whatever scrolls beneath it. Selection is indicated purely
@@ -29,13 +39,47 @@ const _kBounceCurve = Curves.easeOutBack;
 /// Stack + AnimatedPositioned (rather than a Row) so every item's position
 /// animates in sync instead of only Search's own width changing while the
 /// rest stay pinned where they were.
-class FloatingBottomNavBar extends StatelessWidget {
+class FloatingBottomNavBar extends StatefulWidget {
   final BottomNavTab activeTab;
 
   const FloatingBottomNavBar({super.key, required this.activeTab});
 
+  @override
+  State<FloatingBottomNavBar> createState() => _FloatingBottomNavBarState();
+}
+
+class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _entranceController;
+
+  @override
+  void initState() {
+    super.initState();
+    _entranceController =
+        AnimationController(vsync: this, duration: _kEntranceDuration)
+          ..forward();
+  }
+
+  @override
+  void dispose() {
+    _entranceController.dispose();
+    super.dispose();
+  }
+
+  /// This item's 0..1 entrance progress at the controller's current value —
+  /// each item's window starts _kEntranceStagger later than the previous
+  /// one's (see the constants above), so evaluating them all against the
+  /// same controller value is what makes them cascade in staggered instead
+  /// of moving together.
+  double _entranceProgress(int index) {
+    final start = index * _kEntranceStagger;
+    final end = (start + _kEntranceWindow).clamp(0.0, 1.0);
+    return Interval(start, end, curve: Curves.easeOutBack)
+        .transform(_entranceController.value);
+  }
+
   void _navigate(BuildContext context, BottomNavTab tab) {
-    if (tab == activeTab) return;
+    if (tab == widget.activeTab) return;
 
     // Tabs live in MovieTabShell's IndexedStack, so switching is just a
     // value flip — no rebuild, no refetch, scroll/search state stays put.
@@ -53,26 +97,26 @@ class FloatingBottomNavBar extends StatelessWidget {
         return _NavCircle(
           icon: Icons.home_outlined,
           activeIcon: Icons.home_rounded,
-          isActive: activeTab == BottomNavTab.home,
+          isActive: widget.activeTab == BottomNavTab.home,
           onTap: () => _navigate(context, BottomNavTab.home),
         );
       case BottomNavTab.search:
         return _SearchPill(
-          isActive: activeTab == BottomNavTab.search,
+          isActive: widget.activeTab == BottomNavTab.search,
           onTap: () => _navigate(context, BottomNavTab.search),
         );
       case BottomNavTab.favorites:
         return _NavCircle(
           icon: Icons.favorite_border,
           activeIcon: Icons.favorite_rounded,
-          isActive: activeTab == BottomNavTab.favorites,
+          isActive: widget.activeTab == BottomNavTab.favorites,
           onTap: () => _navigate(context, BottomNavTab.favorites),
         );
       case BottomNavTab.settings:
         return _NavCircle(
           icon: Icons.settings_outlined,
           activeIcon: Icons.settings_rounded,
-          isActive: activeTab == BottomNavTab.settings,
+          isActive: widget.activeTab == BottomNavTab.settings,
           onTap: () => _navigate(context, BottomNavTab.settings),
         );
     }
@@ -81,7 +125,7 @@ class FloatingBottomNavBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bottomPadding = MediaQuery.of(context).padding.bottom;
-    final isSearchActive = activeTab == BottomNavTab.search;
+    final isSearchActive = widget.activeTab == BottomNavTab.search;
 
     final tabs = [
       BottomNavTab.home,
@@ -153,24 +197,42 @@ class FloatingBottomNavBar extends StatelessWidget {
                 return SizedBox(
                   width: totalWidth,
                   height: _kCircleSize,
-                  child: Stack(
-                    children: [
-                      for (var i = 0; i < itemCount; i++)
-                        AnimatedPositioned(
-                          duration: _kBounceDuration,
-                          curve: _kBounceCurve,
-                          left: isSearchActive
-                              ? groupStart + i * step
-                              : normalX[i],
-                          top: 0,
-                          width:
-                              tabs[i] == BottomNavTab.search && !isSearchActive
+                  child: AnimatedBuilder(
+                    animation: _entranceController,
+                    builder: (context, _) {
+                      return Stack(
+                        children: [
+                          for (var i = 0; i < itemCount; i++)
+                            AnimatedPositioned(
+                              duration: _kBounceDuration,
+                              curve: _kBounceCurve,
+                              left: isSearchActive
+                                  ? groupStart + i * step
+                                  : normalX[i],
+                              top: 0,
+                              width: tabs[i] == BottomNavTab.search &&
+                                      !isSearchActive
                                   ? wideSearchWidth
                                   : _kCircleSize,
-                          height: _kCircleSize,
-                          child: _circleFor(context, tabs[i]),
-                        ),
-                    ],
+                              height: _kCircleSize,
+                              child: Builder(builder: (context) {
+                                final t = _entranceProgress(i);
+                                return Opacity(
+                                  opacity: t.clamp(0.0, 1.0),
+                                  child: Transform.translate(
+                                    // Not clamped like opacity — easeOutBack
+                                    // briefly overshoots past 1.0, giving
+                                    // each item a tiny bounce as it settles
+                                    // instead of just stopping dead.
+                                    offset: Offset(0, (1 - t) * _kEntranceTravel),
+                                    child: _circleFor(context, tabs[i]),
+                                  ),
+                                );
+                              }),
+                            ),
+                        ],
+                      );
+                    },
                   ),
                 );
               },

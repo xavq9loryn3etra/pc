@@ -41,6 +41,49 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
 
+  /// Renders the brand wordmark with a soft drop shadow shaped like the
+  /// actual letterforms, not a rectangular box — a plain BoxShadow only
+  /// shadows a widget's rectangular bounds, which would paint a visible box
+  /// behind the mostly-transparent svg and does nothing useful against a
+  /// light hero image behind it (this sits directly over the Home hero
+  /// backdrop before the scroll-fade kicks in). Instead the same asset is
+  /// rendered twice — once tinted solid black and blurred, offset slightly
+  /// behind the real, brand-colored one — so the shadow traces the letters.
+  Widget _buildDefaultLogo() {
+    Widget logo({Color? shadowTint}) => SvgPicture.asset(
+          'assets/logo.svg',
+          height: 32,
+          colorFilter: ColorFilter.mode(
+            shadowTint ?? AppTheme.primaryColor,
+            BlendMode.srcIn,
+          ),
+        );
+
+    return Stack(
+      // Stack's own bounds are set by the plain logo (the only non-Positioned
+      // child), sized tight with no room for the blurred shadow layer's
+      // bleed — Stack's default Clip.hardEdge then crops that overflow,
+      // most visibly at the bottom-left where the shadow's `top: 1` offset
+      // pushes it past the Stack's bottom edge too. The blur is meant to
+      // extend a little past the logo's exact box, so let it.
+      clipBehavior: Clip.none,
+      children: [
+        Positioned(
+          top: 1,
+          left: 0,
+          child: Opacity(
+            opacity: 0.3,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 2, sigmaY: 2),
+              child: logo(shadowTint: Colors.black),
+            ),
+          ),
+        ),
+        logo(),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Gradual opacity calculation (divisor 200)
@@ -54,15 +97,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
       centerTitle: centerTitle,
       title: GestureDetector(
         onLongPress: onLogoLongPress,
-        child: title ??
-            SvgPicture.asset(
-              'assets/logo.svg',
-              height: 32,
-              colorFilter: const ColorFilter.mode(
-                AppTheme.primaryColor,
-                BlendMode.srcIn,
-              ),
-            ),
+        child: title ?? _buildDefaultLogo(),
       ),
       backgroundColor: Colors.transparent,
       flexibleSpace: opacity > 0.01

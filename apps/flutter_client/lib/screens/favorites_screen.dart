@@ -17,7 +17,11 @@ class FavoritesScreen extends StatefulWidget {
 class _FavoritesScreenState extends State<FavoritesScreen> {
   List<Movie> _favorites = [];
   final ScrollController _scrollController = ScrollController();
-  double _opacity = 0.0;
+  // Scroll-driven app-bar fade. A ValueNotifier instead of a setState field
+  // — ScreenScaffold scopes it to just the AppBar via ValueListenableBuilder,
+  // so scrolling doesn't force this screen's build() (and the poster grid's
+  // itemBuilder for every visible cell) to re-run on every scroll tick.
+  final ValueNotifier<double> _opacityNotifier = ValueNotifier(0.0);
   Movie? _selectedMovie;
 
   @override
@@ -29,15 +33,16 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
 
   void _onScroll() {
     final offset = _scrollController.offset;
-    double newOpacity = (offset / 50).clamp(0.0, 1.0);
-    if (newOpacity != _opacity) {
-      setState(() => _opacity = newOpacity);
+    final newOpacity = (offset / 50).clamp(0.0, 1.0);
+    if (newOpacity != _opacityNotifier.value) {
+      _opacityNotifier.value = newOpacity;
     }
   }
 
   @override
   void dispose() {
     _scrollController.dispose();
+    _opacityNotifier.dispose();
     super.dispose();
   }
 
@@ -127,7 +132,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
           },
         );
       },
-      opacity: _opacity,
+      opacityListenable: _opacityNotifier,
       selectedMovie: _selectedMovie,
       onCloseSidePanel: _closeSidePanel,
     );

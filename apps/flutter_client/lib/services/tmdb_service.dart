@@ -120,7 +120,8 @@ class TMDBService {
     }
   }
 
-  Future<Movie?> getDetails(String id, {String? type}) async {
+  Future<Movie?> getDetails(String id,
+      {String? type, CancelToken? cancelToken}) async {
     final key = 'details_${id}_$type';
     if (_cache.containsKey(key) && _cache[key]!.isValid(30)) {
       return _cache[key]!.data as Movie;
@@ -136,11 +137,13 @@ class TMDBService {
             'append_to_response': 'credits,videos,images,release_dates,external_ids',
             'include_image_language': 'en,null',
           },
+          cancelToken: cancelToken,
         );
         final movie = _formatMovieDetails(response.data, isTv: false);
         _cache[key] = _CacheEntry(movie);
         return movie;
       } catch (e) {
+        if (e is DioException && CancelToken.isCancel(e)) rethrow;
         if (type == 'movie') return null;
       }
     }
@@ -155,11 +158,13 @@ class TMDBService {
               'credits,videos,images,content_ratings,external_ids',
           'include_image_language': 'en,null',
         },
+        cancelToken: cancelToken,
       );
       final movie = _formatMovieDetails(response.data, isTv: true);
       _cache[key] = _CacheEntry(movie);
       return movie;
     } catch (e) {
+      if (e is DioException && CancelToken.isCancel(e)) rethrow;
       print('TMDB Details Error: $e');
       return null;
     }
@@ -271,6 +276,22 @@ class TMDBService {
       if (enLogo != null) logoUrl = '$_imageBase${enLogo['file_path']}';
     }
 
+    // Backdrop — prefer the best-rated entry from images.backdrops (already
+    // filtered to en/null language by include_image_language, and
+    // pre-sorted by vote_average) over the bare backdrop_path field, which
+    // is just TMDB's own arbitrary "primary" pick and isn't language-aware —
+    // foreign titles in particular can default to a backdrop with
+    // non-English text baked in.
+    String? backdrop = base.backdrop;
+    if (images != null &&
+        images['backdrops'] != null &&
+        (images['backdrops'] as List).isNotEmpty) {
+      final bestBackdrop = (images['backdrops'] as List).first;
+      if (bestBackdrop['file_path'] != null) {
+        backdrop = '$_backdropBase${bestBackdrop['file_path']}';
+      }
+    }
+
     // Runtime
     String? runtime;
     if (isTv) {
@@ -314,7 +335,7 @@ class TMDBService {
       title: base.title,
       year: base.year,
       image: base.image,
-      backdrop: base.backdrop,
+      backdrop: backdrop,
       rating: base.rating,
       voteCount: base.voteCount,
       description: base.description,
@@ -335,12 +356,16 @@ class TMDBService {
   }
 
   Future<List<Episode>> getSeasonDetails(String tvId, int seasonNumber) async {
+    final key = 'season_${tvId}_$seasonNumber';
+    if (_cache.containsKey(key) && _cache[key]!.isValid(30)) {
+      return _cache[key]!.data as List<Episode>;
+    }
     try {
       final response = await _dio.get(
         '$_baseUrl/tv/$tvId/season/$seasonNumber',
         queryParameters: {'api_key': _apiKey},
       );
-      return (response.data['episodes'] as List)
+      final episodes = (response.data['episodes'] as List)
           .map(
             (e) => Episode(
               id: e['id'],
@@ -355,6 +380,8 @@ class TMDBService {
             ),
           )
           .toList();
+      _cache[key] = _CacheEntry(episodes);
+      return episodes;
     } catch (e) {
       print('TMDB Season Details Error: $e');
       return [];

@@ -92,6 +92,25 @@ class TorrentEngineService {
     final savePath = await TorrentPaths.savePathFor(infoHash);
     final id = engine.addMagnet(magnetUri, savePath);
 
+    // release() (normal player close) stops the HTTP stream reader but
+    // deliberately leaves the torrent registered and downloading, so a
+    // resumed watch doesn't need to refetch already-cached bytes. Left
+    // unchecked, every previously-watched-then-closed title keeps pulling
+    // data forever, all sharing the same session-wide _downloadLimitBytesPerSec
+    // cap — starving whatever's actually on screen right now. Pause
+    // everything else so the current stream gets the full budget; their
+    // downloaded bytes stay on disk untouched.
+    for (final otherId in engine.torrents.keys) {
+      if (otherId != id) {
+        try {
+          engine.pauseTorrent(otherId);
+        } catch (_) {}
+      }
+    }
+    // In case `id` refers to a torrent from an earlier session that we'd
+    // previously paused this same way.
+    engine.resumeTorrent(id);
+
     try {
       // Wait for metadata (poll torrentUpdates until hasMetadata == true)
       await _waitForMetadata(id);

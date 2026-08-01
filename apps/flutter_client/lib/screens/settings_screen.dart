@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import '../widgets/screen_scaffold.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/shimmer_loader.dart';
@@ -33,6 +34,7 @@ class SettingsScreen extends StatelessWidget {
     return ScreenScaffold(
       title: const Text('Settings'),
       bottomNavTab: BottomNavTab.settings,
+      actions: const [_AppVersionLabel()],
       body: (context, isDesktop, padding) {
         return ListView(
           padding: padding.copyWith(top: 100),
@@ -145,6 +147,37 @@ class _BackupLoadingDialog extends StatelessWidget {
               child: Text(message, style: const TextStyle(color: Colors.white)),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// App version pulled from pubspec.yaml (via package_info_plus, which reads
+/// it back out of the built app bundle) — deliberately muted/small so it
+/// reads as a footnote, not a piece of the actual settings UI.
+class _AppVersionLabel extends StatelessWidget {
+  const _AppVersionLabel();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 20),
+      child: Center(
+        child: FutureBuilder<PackageInfo>(
+          future: PackageInfo.fromPlatform(),
+          builder: (context, snapshot) {
+            final info = snapshot.data;
+            if (info == null) return const SizedBox.shrink();
+            return Text(
+              'v${info.version}+${info.buildNumber}',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.3),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            );
+          },
         ),
       ),
     );

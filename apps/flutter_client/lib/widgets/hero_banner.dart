@@ -98,42 +98,7 @@ class MovieHeroBanner extends StatelessWidget {
                   // Title
                   // Title or Logo
                   if (movie.logoUrl != null)
-                    (movie.logoUrl!.toLowerCase().endsWith('.svg')
-                            ? SvgPicture.network(
-                                movie.logoUrl!,
-                                height: 100,
-                                fit: BoxFit.contain,
-                                placeholderBuilder: (context) =>
-                                    const SizedBox(height: 100),
-                              )
-                            : CachedNetworkImage(
-                                imageUrl: movie.logoUrl!,
-                                height: 100,
-                                memCacheHeight:
-                                    (100 * MediaQuery.of(context).devicePixelRatio)
-                                        .toInt(),
-                                fit: BoxFit.contain,
-                                placeholder: (context, url) => const SizedBox(
-                                  height: 100,
-                                ), // Wait, don't show text
-                                // Wait 1 second before showing text if image fails/is missing
-                                errorWidget: (context, url, error) => Text(
-                                  movie.title,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    fontSize: 40,
-                                    fontWeight: FontWeight.bold,
-                                    letterSpacing: -0.5,
-                                    shadows: [
-                                      Shadow(
-                                        color: Colors.black,
-                                        blurRadius: 20,
-                                        offset: Offset(0, 4),
-                                      ),
-                                    ],
-                                  ),
-                                ).animate().fadeIn(delay: 1000.ms),
-                              ))
+                    _buildLogo(context)
                         .animate()
                         .fadeIn(duration: 600.ms)
                         .slideY(begin: 0.2, end: 0)
@@ -244,17 +209,55 @@ class MovieHeroBanner extends StatelessWidget {
     );
   }
 
+  Widget _buildLogo(BuildContext context) {
+    final url = movie.logoHighRes ?? movie.logoUrl!;
+    if (url.toLowerCase().endsWith('.svg')) {
+      return SvgPicture.network(
+        url,
+        height: 100,
+        fit: BoxFit.contain,
+        placeholderBuilder: (context) => const SizedBox(height: 100),
+      );
+    }
+    return CachedNetworkImage(
+      imageUrl: url,
+      height: 100,
+      memCacheHeight: (100 * MediaQuery.of(context).devicePixelRatio).toInt(),
+      fit: BoxFit.contain,
+      placeholder: (context, url) => const SizedBox(height: 100),
+      // Wait 1 second before showing text if image fails/is missing
+      errorWidget: (context, url, error) => Text(
+        movie.title,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          fontSize: 40,
+          fontWeight: FontWeight.bold,
+          letterSpacing: -0.5,
+          shadows: [
+            Shadow(
+              color: Colors.black,
+              blurRadius: 20,
+              offset: Offset(0, 4),
+            ),
+          ],
+        ),
+      ).animate().fadeIn(delay: 1000.ms),
+    );
+  }
+
   Widget _buildBackgroundImage(BuildContext context) {
-    return (movie.backdrop ?? movie.posterUrl ?? '').toLowerCase().endsWith(
+    final imageUrl =
+        movie.backdropHighRes ?? movie.backdrop ?? movie.posterUrl ?? '';
+    return imageUrl.toLowerCase().endsWith(
           '.svg',
         )
         ? SvgPicture.network(
-            movie.backdrop ?? movie.posterUrl ?? '',
+            imageUrl,
             fit: BoxFit.cover,
             alignment: Alignment.topCenter,
           )
         : CachedNetworkImage(
-            imageUrl: movie.backdrop ?? movie.posterUrl ?? '',
+            imageUrl: imageUrl,
             fit: BoxFit.cover,
             alignment: Alignment.topCenter,
             memCacheHeight: (600 * MediaQuery.of(context).devicePixelRatio)

@@ -199,19 +199,18 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                     top: 0,
                     bottom: 0,
                     right: 0,
-                    child:
-                        DesktopDetailsPanel(
-                              movie: _selectedMovie!,
-                              onClose: _closeSidePanel,
-                            )
-                            .animate()
-                            .slideX(
-                              begin: 1.0,
-                              end: 0.0,
-                              duration: 300.ms,
-                              curve: Curves.easeOutCubic,
-                            )
-                            .fadeIn(duration: 200.ms),
+                    child: DesktopDetailsPanel(
+                      movie: _selectedMovie!,
+                      onClose: _closeSidePanel,
+                    )
+                        .animate()
+                        .slideX(
+                          begin: 1.0,
+                          end: 0.0,
+                          duration: 300.ms,
+                          curve: Curves.easeOutCubic,
+                        )
+                        .fadeIn(duration: 200.ms),
                   ),
                 ],
               ),
@@ -223,8 +222,12 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
 
   Widget _buildBackground(BuildContext context) {
     // accesses widget.featuredMovie
-    final image =
-        widget.featuredMovie.backdrop ?? widget.featuredMovie.posterUrl;
+    // The desktop hero can render wider than TMDB's w1280 backdrop tier on
+    // any 1080p+ display, so this one uses the full-resolution `original`
+    // source instead of the standard `backdrop` field everything else uses.
+    final image = widget.featuredMovie.backdropHighRes ??
+        widget.featuredMovie.backdrop ??
+        widget.featuredMovie.posterUrl;
     if (image == null) return const SizedBox.shrink();
 
     return CachedNetworkImage(
@@ -233,10 +236,9 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
       // Cap decode to the actual screen width — this fills the whole
       // background so without this it decodes at the source image's
       // native resolution regardless of how big the window actually is.
-      memCacheWidth:
-          (MediaQuery.of(context).size.width *
-                  MediaQuery.of(context).devicePixelRatio)
-              .toInt(),
+      memCacheWidth: (MediaQuery.of(context).size.width *
+              MediaQuery.of(context).devicePixelRatio)
+          .toInt(),
       placeholder: (context, url) => Container(color: Colors.black),
       errorWidget: (context, url, error) => Container(color: Colors.black),
     ).animate().fadeIn(duration: 800.ms);
@@ -384,22 +386,29 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     );
   }
 
+  Widget _buildLogo(BuildContext context) {
+    final url =
+        widget.featuredMovie.logoHighRes ?? widget.featuredMovie.logoUrl!;
+
+    return CachedNetworkImage(
+      imageUrl: url,
+      height: 150,
+      memCacheHeight:
+          (150 * MediaQuery.of(context).devicePixelRatio).toInt(),
+      fit: BoxFit.contain,
+      alignment: Alignment.centerLeft,
+      placeholder: (context, url) => const SizedBox(height: 150),
+      errorWidget: (context, url, err) => _buildHeroTitle(),
+    );
+  }
+
   Widget _buildHeroContent(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         if (widget.featuredMovie.logoUrl != null)
-          CachedNetworkImage(
-            imageUrl: widget.featuredMovie.logoUrl!,
-            height: 150,
-            memCacheHeight:
-                (150 * MediaQuery.of(context).devicePixelRatio).toInt(),
-            fit: BoxFit.contain,
-            alignment: Alignment.centerLeft,
-            placeholder: (context, url) => const SizedBox(height: 150),
-            errorWidget: (context, url, err) => _buildHeroTitle(),
-          ).animate().fadeIn().slideX()
+          _buildLogo(context).animate().fadeIn().slideX()
         else
           _buildHeroTitle().animate().fadeIn().slideX(),
         const SizedBox(height: 16),
@@ -475,8 +484,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                   icon: const Icon(Icons.info_outline, color: Colors.white),
                   label: const Text("More Info"),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor:
-                        const Color.fromRGBO(109, 109, 109, 0.7),
+                    backgroundColor: const Color.fromRGBO(109, 109, 109, 0.7),
                     foregroundColor: Colors.white,
                     elevation: 0,
                     padding: const EdgeInsets.symmetric(
@@ -577,9 +585,9 @@ class _DesktopSectionListState extends State<_DesktopSectionList> {
         Text(
           widget.title,
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-          ),
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
         ).animate().fadeIn(delay: 600.ms),
         const SizedBox(height: 32),
         SizedBox(

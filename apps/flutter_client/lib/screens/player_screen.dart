@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -1763,13 +1764,13 @@ class _PlayerScreenState extends State<PlayerScreen>
                                       widget.details.logoUrl!.isNotEmpty)
                                     Padding(
                                       padding: const EdgeInsets.only(bottom: 6),
-                                      child: Image.network(
-                                        widget.details.logoUrl!,
+                                      child: CachedNetworkImage(
+                                        imageUrl: widget.details.logoUrl!,
                                         height: 64,
                                         fit: BoxFit.contain,
                                         alignment: Alignment.centerLeft,
-                                        errorBuilder:
-                                            (context, error, stackTrace) {
+                                        errorWidget:
+                                            (context, url, error) {
                                           return Text(
                                             widget.movie.title,
                                             maxLines: 2,

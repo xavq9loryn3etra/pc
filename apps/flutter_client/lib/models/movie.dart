@@ -30,6 +30,19 @@ class Movie {
 
   String? get posterUrl => image;
   String? get backdropUrl => backdrop;
+  // `backdrop` is TMDB's w1280 tier — plenty for episode thumbnails, the
+  // player overlay, etc., but visibly soft when stretched across a full-width
+  // hero banner on desktop (see TMDBService._backdropBase). This swaps in
+  // TMDB's actual source resolution for the few places that render a
+  // backdrop that large: the home hero banners and the details-page hero.
+  String? get backdropHighRes => backdrop?.replaceFirst('/w1280/', '/original/');
+  // `logoUrl` is also built from TMDB's w500 tier. Logos are usually wide,
+  // short wordmarks, so a 500px-wide source can have well under 200px of
+  // real height — same shortfall as backdrop for the couple of places a
+  // logo renders large (the hero banners' ~100-150px logo, the details
+  // page's 200px-wide hero header logo). No-op for the rare SVG logo path,
+  // since TMDB serves those unscaled regardless of the size segment.
+  String? get logoHighRes => logoUrl?.replaceFirst('/w500/', '/original/');
   // Mappings for UI compatibility
   DateTime? get releaseDate => DateTime(year);
   double get voteAverage => double.tryParse(rating) ?? 0.0;

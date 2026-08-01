@@ -127,49 +127,61 @@ class TorrentIndexService {
   final Dio _dio = Dio();
 
   Future<List<TorrentStream>> getMovieStreams(String imdbId) async {
+    final url = 'https://torrentio.strem.fun/stream/movie/$imdbId.json';
     try {
       final response = await _dio.get(
-        'https://torrentio.strem.fun/stream/movie/$imdbId.json',
+        url,
         options: Options(
           headers: {'User-Agent': 'Mozilla/5.0'},
           sendTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 10),
+          // Torrentio's free public instance has to live-scrape trackers on
+          // a cache miss, which can take 15-20s for less popular titles —
+          // 10s was cutting the response off right before it arrived.
+          receiveTimeout: const Duration(seconds: 25),
         ),
       );
 
       if (response.statusCode == 200 && response.data != null) {
         final List<dynamic> streamsJson = response.data['streams'] ?? [];
+        print('Torrentio $url -> ${streamsJson.length} stream(s)');
         return streamsJson
             .where((json) => json['infoHash'] != null)
             .map((json) => TorrentStream.fromJson(json))
             .toList();
       }
+      print('Torrentio $url -> unexpected status ${response.statusCode}');
     } catch (e) {
-      print('Error fetching movie torrents: $e');
+      print('Error fetching movie torrents ($url): $e');
     }
     return [];
   }
 
   Future<List<TorrentStream>> getSeriesStreams(String imdbId, int season, int episode) async {
+    final url = 'https://torrentio.strem.fun/stream/series/$imdbId:$season:$episode.json';
     try {
       final response = await _dio.get(
-        'https://torrentio.strem.fun/stream/series/$imdbId:$season:$episode.json',
+        url,
         options: Options(
           headers: {'User-Agent': 'Mozilla/5.0'},
           sendTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 10),
+          // Torrentio's free public instance has to live-scrape trackers on
+          // a cache miss, which can take 15-20s for less popular titles —
+          // 10s was cutting the response off right before it arrived.
+          receiveTimeout: const Duration(seconds: 25),
         ),
       );
 
       if (response.statusCode == 200 && response.data != null) {
         final List<dynamic> streamsJson = response.data['streams'] ?? [];
+        print('Torrentio $url -> ${streamsJson.length} stream(s)');
         return streamsJson
             .where((json) => json['infoHash'] != null)
             .map((json) => TorrentStream.fromJson(json))
             .toList();
       }
+      print('Torrentio $url -> unexpected status ${response.statusCode}');
     } catch (e) {
-      print('Error fetching series torrents: $e');
+      print('Error fetching series torrents ($url): $e');
     }
     return [];
   }

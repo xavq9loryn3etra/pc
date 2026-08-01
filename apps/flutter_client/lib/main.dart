@@ -296,10 +296,21 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
       builder: (context, child) {
-        if (_isOffline) {
-          return const NoInternetOverlay();
-        }
-        return child!;
+        // `child` is the app's whole Navigator — swapping it out for
+        // NoInternetOverlay (instead of stacking on top of it) unmounts the
+        // Navigator entirely, destroying whatever route the user was on. On
+        // reconnect, `child!` had to be rebuilt from scratch, restarting at
+        // `home: homeWidget` (always ModeSelectorScreen by that point in a
+        // session) instead of returning to where they were. Stacking the
+        // overlay on top instead keeps the Navigator alive underneath —
+        // it's just visually and interactively covered while offline.
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            if (child != null) child,
+            if (_isOffline) const NoInternetOverlay(),
+          ],
+        );
       },
       home: homeWidget,
     );

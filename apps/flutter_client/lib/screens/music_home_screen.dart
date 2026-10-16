@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import '../widgets/custom_app_bar.dart';
+import '../widgets/floating_bottom_nav_bar.dart';
 
 class MusicHomeScreen extends StatefulWidget {
   const MusicHomeScreen({super.key});
@@ -30,18 +32,22 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+
+    final scaffold = Scaffold(
       extendBodyBehindAppBar: true,
       appBar: CustomAppBar(
         scrollOffset: _scrollOffset,
         showActions: false,
-        title: Image.asset(
-          'assets/music-app-logo.png',
+        showModeSwitch: false,
+        title: SvgPicture.asset(
+          'assets/music-app-logo.svg',
           height: 32,
         ),
       ),
       body: SingleChildScrollView(
         controller: _scrollController,
+        padding: EdgeInsets.only(bottom: 110 + bottomInset),
         child: Container(
           // Ensure container fills at least the screen height to allow scrolling if content is small
           constraints: BoxConstraints(
@@ -63,10 +69,9 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 const SizedBox(height: 100), // Spacing for transparency
-                Image.asset(
-                  'assets/music-app-logo.png',
-                  width: 120,
-                  height: 120,
+                SvgPicture.asset(
+                  'assets/music-app-logo.svg',
+                  width: 140,
                 ),
                 const SizedBox(height: 24),
                 Text(
@@ -87,6 +92,13 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
           ),
         ),
       ),
+    );
+
+    return Stack(
+      children: [
+        scaffold,
+        const FloatingBottomNavBar(activeTab: BottomNavTab.home),
+      ],
     );
   }
 }

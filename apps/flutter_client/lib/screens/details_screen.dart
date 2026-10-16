@@ -338,22 +338,30 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   Widget _buildAppBarTitle(Movie m) {
     if (m.logoUrl != null) {
+      // Fixed width+height (not just a maxWidth cap) — CachedNetworkImage/
+      // SvgPicture.network report zero size while their first frame is
+      // still loading (octo_image's placeholder for the "loading" state is
+      // a bare zero-size Container), so a maxWidth-only box collapsed to
+      // nothing and then snapped to full size the instant the logo finished
+      // decoding — only on first load, since after that it's served
+      // synchronously from Flutter's image cache. A tight box keeps the
+      // space stable from the very first frame, loaded or not.
       if (m.logoUrl!.toLowerCase().endsWith('.svg')) {
-        return Container(
-          constraints: const BoxConstraints(maxWidth: 120),
+        return SizedBox(
+          width: 120,
+          height: 28,
           child: SvgPicture.network(
             m.logoUrl!,
-            height: 28,
             alignment: Alignment.centerLeft,
             fit: BoxFit.contain,
           ),
         );
       } else {
-        return Container(
-          constraints: const BoxConstraints(maxWidth: 120),
+        return SizedBox(
+          width: 120,
+          height: 28,
           child: CachedNetworkImage(
             imageUrl: m.logoUrl!,
-            height: 28,
             memCacheHeight:
                 (28 * MediaQuery.of(context).devicePixelRatio).toInt(),
             alignment: Alignment.centerLeft,
@@ -394,40 +402,66 @@ class _DetailsScreenState extends State<DetailsScreen> {
             builder: (context, _) {
               final offset =
                   _scrollController.hasClients ? _scrollController.offset : 0.0;
+              // Logo reveal point — unchanged from before.
               final showTitle = offset > 350;
-              return CustomAppBar(
-                scrollOffset: offset,
-                leading: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  // Frosted glass, same recipe as the floating nav bar's
-                  // circular buttons: clip to the circle and blur behind it.
-                  child: ClipOval(
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-                      child: CircleAvatar(
-                        backgroundColor: Colors.black.withOpacity(0.35),
-                        child: widget.isSidePanel
-                            ? IconButton(
-                                icon: const Icon(Icons.close,
-                                    color: Colors.white),
-                                onPressed: widget.onClose,
-                                iconSize: 20,
-                                padding: EdgeInsets.zero,
-                              )
-                            : const BackButton(color: Colors.white),
+              // The background used to fade in continuously over 0-200px of
+              // scroll — well before the logo showed up at offset > 350 —
+              // and, scrolling back up, disappear at that earlier point too
+              // instead of together with the logo. TweenAnimationBuilder
+              // re-targets to 0/1 on the same showTitle flip the logo's
+              // AnimatedOpacity below reacts to, with the same 300ms/linear
+              // timing, so the two now move in lockstep.
+              return TweenAnimationBuilder<double>(
+                tween: Tween<double>(end: showTitle ? 1.0 : 0.0),
+                duration: const Duration(milliseconds: 300),
+                builder: (context, bgOpacity, child) {
+                  return CustomAppBar(
+                    forceOpacity: bgOpacity,
+                    leading: Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      // Frosted glass, same recipe as the floating nav bar's
+                      // circular buttons: clip to the circle and blur behind it.
+                      child: ClipOval(
+                        child: BackdropFilter(
+                          // See mode_switcher_dialog.dart's comment — lower
+                          // sigma to cut GPU cost on weaker/high-refresh-rate
+                          // devices.
+                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                          child: CircleAvatar(
+                            backgroundColor: Colors.black.withOpacity(0.35),
+                            child: widget.isSidePanel
+                                ? IconButton(
+                                    icon: const Icon(Icons.close,
+                                        color: Colors.white),
+                                    onPressed: widget.onClose,
+                                    iconSize: 20,
+                                    padding: EdgeInsets.zero,
+                                  )
+                                : const BackButton(color: Colors.white),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-                title: AnimatedOpacity(
-                  opacity: showTitle ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 300),
-                  child: showTitle ? _buildAppBarTitle(m) : null,
-                ),
-                showActions: false,
-                // Favorite/like toggle moved down to the action button row
-                // (where Share used to be), so no actions shown up here.
-                showModeSwitch: false,
+                    title: AnimatedOpacity(
+                      opacity: showTitle ? 1.0 : 0.0,
+                      duration: const Duration(milliseconds: 300),
+                      // Always mounted (not swapped to null when hidden) —
+                      // an AnimatedOpacity can only fade a child that's
+                      // actually still there. Swapping to null in lockstep
+                      // with the opacity used to yank the logo out on the
+                      // exact same frame the fade-out started, instead of
+                      // fading like it does coming in. Keeping it mounted
+                      // (just invisible before first reveal) also means its
+                      // image has usually already finished loading by the
+                      // time it's first scrolled into view.
+                      child: _buildAppBarTitle(m),
+                    ),
+                    showActions: false,
+                    // Favorite/like toggle moved down to the action button row
+                    // (where Share used to be), so no actions shown up here.
+                    showModeSwitch: false,
+                  );
+                },
               );
             },
           ),
@@ -2021,7 +2055,7 @@ class _TorrentQualitySelectorSheetState
                         ),
                       ),
                       const PopupMenuItem(
-                        value: 'vidking',
+                        value: '2embed',
                         child: Text(
                           'Server 3',
                           style: const TextStyle(

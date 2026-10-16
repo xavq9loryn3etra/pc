@@ -4,8 +4,6 @@ import 'package:animations/animations.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import 'movie_tab_shell.dart';
-import 'books_home_screen.dart';
-import 'music_home_screen.dart';
 
 // MainScreen is the app's first/only route (ModeSelectorScreen replaces
 // itself with this via pushReplacement), so there's nothing left to pop —
@@ -79,13 +77,6 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildScreen(AppMode mode) {
-    switch (mode) {
-      case AppMode.movies:
-        return const MovieTabShell();
-      case AppMode.books:
-        return const BooksHomeScreen();
-      case AppMode.music:
-        return const MusicHomeScreen();
-    }
+    return MovieTabShell(key: ValueKey(mode));
   }
 }

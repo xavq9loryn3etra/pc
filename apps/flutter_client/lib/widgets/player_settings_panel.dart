@@ -4,7 +4,23 @@ import '../services/torrent/torrent_index_service.dart';
 import '../theme/app_theme.dart';
 import '../services/subtitle_service.dart';
 
-/// A premium, sliding right-side panel for unified player settings (Subtitles and Quality Selection).
+/// How the video is scaled to the screen.
+enum VideoFit {
+  fit(BoxFit.contain, 'Fit', 'Whole picture, with black bars',
+      Icons.fit_screen_rounded),
+  fill(BoxFit.cover, 'Fill', 'Fill the screen, cropping the edges',
+      Icons.crop_free_rounded);
+
+  final BoxFit boxFit;
+  final String label;
+  final String description;
+  final IconData icon;
+
+  const VideoFit(this.boxFit, this.label, this.description, this.icon);
+}
+
+/// A premium, sliding right-side panel for unified player settings (Quality,
+/// Subtitles and Video size).
 ///
 /// Provides a sleek settings-menu style interface with sliding animated transitions
 /// and a high-end semi-transparent glassmorphic look.
@@ -19,8 +35,11 @@ class PlayerSettingsPanel extends StatefulWidget {
   final TorrentStream currentStream;
   final ValueChanged<TorrentStream> onStreamSelected;
 
+  final VideoFit videoFit;
+  final ValueChanged<VideoFit> onVideoFitSelected;
+
   final VoidCallback onClose;
-  final String initialView; // 'main', 'subtitles', 'quality'
+  final String initialView; // 'main', 'subtitles', 'quality', 'videoSize'
 
   const PlayerSettingsPanel({
     super.key,
@@ -32,6 +51,8 @@ class PlayerSettingsPanel extends StatefulWidget {
     required this.availableStreams,
     required this.currentStream,
     required this.onStreamSelected,
+    required this.videoFit,
+    required this.onVideoFitSelected,
     required this.onClose,
     this.initialView = 'main',
   });
@@ -164,6 +185,13 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
             color: Colors.white70, size: 16),
         onPressed: () => setState(() => _currentView = 'main'),
       );
+    } else if (_currentView == 'videoSize') {
+      title = 'Video Size';
+      leftButton = IconButton(
+        icon: const Icon(Icons.arrow_back_ios_new_rounded,
+            color: Colors.white70, size: 16),
+        onPressed: () => setState(() => _currentView = 'main'),
+      );
     }
 
     return Padding(
@@ -200,6 +228,8 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
         return _buildSubtitlesView();
       case 'quality':
         return _buildQualityView();
+      case 'videoSize':
+        return _buildVideoSizeView();
       case 'main':
       default:
         return _buildMainMenuView();
@@ -228,6 +258,31 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
           subtitle: activeSubtitleLabel,
           onTap: () => setState(() => _currentView = 'subtitles'),
         ),
+        const SizedBox(height: 12),
+        _buildMenuTile(
+          icon: widget.videoFit.icon,
+          title: 'Video Size',
+          subtitle: widget.videoFit.label,
+          onTap: () => setState(() => _currentView = 'videoSize'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVideoSizeView() {
+    return ListView(
+      key: const ValueKey('video-size-settings'),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      children: [
+        for (final fit in VideoFit.values)
+          _buildSelectionTile(
+            title: fit.label,
+            subtitle: fit.description,
+            isSelected: fit == widget.videoFit,
+            // Stays open, like Subtitles, so the change can be seen behind
+            // the panel.
+            onTap: () => widget.onVideoFitSelected(fit),
+          ),
       ],
     );
   }

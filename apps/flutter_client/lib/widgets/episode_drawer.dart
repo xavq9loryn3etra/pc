@@ -360,6 +360,18 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                       blurRadius: 10,
                       offset: const Offset(0, 5),
                     ),
+                    // Barely-there ambient glow for the episode actually
+                    // playing — paired with the top-edge highlight below,
+                    // which does most of the signaling, instead of a hard
+                    // border ring that didn't match the rest of the app's
+                    // frosted/glow visual language.
+                    if (isCurrent)
+                      BoxShadow(
+                        color: AppTheme.primaryColor.withOpacity(0.35),
+                        blurRadius: 14,
+                        spreadRadius: -6,
+                        offset: const Offset(0, 6),
+                      ),
                   ],
                 ),
                 clipBehavior: Clip.antiAlias,
@@ -437,25 +449,50 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                         ),
                       ),
 
-                    // Border ring overlay on top of thumbnail and icons
-                    IgnorePointer(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(16),
-                          border: isCurrent
-                              ? Border.all(
-                                  color: AppTheme.primaryColor,
-                                  width: 3,
-                                  strokeAlign: BorderSide.strokeAlignInside,
-                                )
-                              : Border.all(
-                                  color: Colors.white.withOpacity(0.1),
-                                  width: 1,
-                                  strokeAlign: BorderSide.strokeAlignInside,
-                                ),
+                    // Border ring overlay on top of thumbnail and icons —
+                    // the current episode is marked by the glow above and
+                    // the top-edge highlight below instead, so only the
+                    // other cards get a definition edge.
+                    if (!isCurrent)
+                      IgnorePointer(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.1),
+                              width: 1,
+                              strokeAlign: BorderSide.strokeAlignInside,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
+
+                    // Top-edge highlight — a crisp, short gradient line that
+                    // does the actual "this one" signaling, so the ambient
+                    // glow above can stay subtle instead of trying to do it
+                    // alone.
+                    if (isCurrent)
+                      Positioned(
+                        top: 0,
+                        left: 14,
+                        right: 14,
+                        child: IgnorePointer(
+                          child: Container(
+                            height: 2,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(2),
+                              gradient: LinearGradient(
+                                colors: [
+                                  Colors.transparent,
+                                  AppTheme.primaryColor,
+                                  AppTheme.primaryColor,
+                                  Colors.transparent,
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -476,26 +513,9 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
-            if (isCurrent)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Row(
-                  children: [
-                    const Icon(Icons.equalizer, color: AppTheme.primaryColor, size: 14),
-                    const SizedBox(width: 6),
-                    const Text(
-                      "NOW PLAYING",
-                      style: TextStyle(
-                        color: AppTheme.primaryColor,
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1,
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            else if (isFuture && formattedDate != null)
+            // "NOW PLAYING" label removed — the under-glow on the thumbnail
+            // above already marks the current episode, no text needed too.
+            if (isFuture && formattedDate != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Row(

@@ -2,6 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../enums/app_mode.dart';
 
+import '../widgets/floating_bottom_nav_bar.dart';
+import 'movie_tab_service.dart';
+
 class AppModeService {
   static final AppModeService _instance = AppModeService._internal();
   static const String _storageKey = 'selected_app_mode';
@@ -24,6 +27,7 @@ class AppModeService {
 
   Future<void> setMode(AppMode mode) async {
     currentMode.value = mode;
+    MovieTabService().currentTab.value = BottomNavTab.home;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_storageKey, mode.index);
   }

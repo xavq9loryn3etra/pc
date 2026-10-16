@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import '../models/book.dart';
 import '../services/books_service.dart';
 import '../widgets/custom_app_bar.dart';
 import '../widgets/section_header.dart';
 import '../widgets/book_card.dart';
 import '../widgets/book_skeletons.dart';
+import '../widgets/floating_bottom_nav_bar.dart';
 import 'book_details_screen.dart';
-import 'book_search_screen.dart';
 
 class BooksHomeScreen extends StatefulWidget {
   const BooksHomeScreen({super.key});
@@ -20,7 +21,6 @@ class _BooksHomeScreenState extends State<BooksHomeScreen> {
   final BooksService _booksService = BooksService();
   double _scrollOffset = 0.0;
 
-  // Future caching to prevent reload on scroll/rebuild
   late Future<List<Book>> _trendingBooks;
   late Future<List<Book>> _classicBooks;
 
@@ -43,30 +43,28 @@ class _BooksHomeScreenState extends State<BooksHomeScreen> {
   }
 
   void _navigateToDetails(Book book) {
-    Navigator.of(context).push(
+    Navigator.push(
+      context,
       MaterialPageRoute(
-        builder: (context) => BookDetailsScreen(book: book),
+        builder: (_) => BookDetailsScreen(book: book),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+
+    final scaffold = Scaffold(
       extendBodyBehindAppBar: true,
       appBar: CustomAppBar(
         scrollOffset: _scrollOffset,
-        showActions: true,
-        onSearchTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const BookSearchScreen()),
-          );
-        },
+        showActions: false,
+        showModeSwitch: false,
         title: Row(
           children: [
-            Image.asset(
-              'assets/book-app-logo.png',
+            SvgPicture.asset(
+              'assets/book-app-logo.svg',
               height: 32,
             ),
           ],
@@ -88,7 +86,7 @@ class _BooksHomeScreenState extends State<BooksHomeScreen> {
           controller: _scrollController,
           padding: EdgeInsets.only(
             top: MediaQuery.of(context).padding.top + 80,
-            bottom: 40,
+            bottom: 110 + bottomInset,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -100,18 +98,23 @@ class _BooksHomeScreenState extends State<BooksHomeScreen> {
 
               const SectionHeader(title: "Classic Literature"),
               _buildHorizontalList(_classicBooks),
-
-              // Add more sections as needed (e.g., Romance, Sci-Fi)
             ],
           ),
         ),
       ),
     );
+
+    return Stack(
+      children: [
+        scaffold,
+        const FloatingBottomNavBar(activeTab: BottomNavTab.home),
+      ],
+    );
   }
 
   Widget _buildHorizontalList(Future<List<Book>> future) {
     return SizedBox(
-      height: 260, // Height for Card + Text
+      height: 260,
       child: FutureBuilder<List<Book>>(
         future: future,
         builder: (context, snapshot) {
@@ -135,7 +138,7 @@ class _BooksHomeScreenState extends State<BooksHomeScreen> {
             separatorBuilder: (_, __) => const SizedBox(width: 16),
             itemBuilder: (context, index) {
               return Padding(
-                padding: const EdgeInsets.only(bottom: 8.0), // Space for shadow
+                padding: const EdgeInsets.only(bottom: 8.0),
                 child: BookCard(
                   book: books[index],
                   onTap: () => _navigateToDetails(books[index]),

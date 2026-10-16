@@ -320,6 +320,20 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
               width: double.infinity,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(10),
+                boxShadow: [
+                  // Barely-there ambient glow for the episode actually
+                  // playing — paired with the top-edge highlight below,
+                  // which does most of the signaling. Tight/negative spread
+                  // so it doesn't wash into neighboring cards in this
+                  // 4-column grid's narrow 16px gaps.
+                  if (isCurrent)
+                    BoxShadow(
+                      color: AppTheme.primaryColor.withOpacity(0.35),
+                      blurRadius: 10,
+                      spreadRadius: -4,
+                      offset: const Offset(0, 4),
+                    ),
+                ],
               ),
               clipBehavior: Clip.antiAlias,
               child: Stack(
@@ -388,15 +402,28 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
                         ),
                       ),
                     ),
+                  // Top-edge highlight — a crisp, short gradient line that
+                  // does the actual "this one" signaling, so the ambient
+                  // glow above can stay subtle instead of trying to do it
+                  // alone.
                   if (isCurrent)
-                    IgnorePointer(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(
-                            color: AppTheme.primaryColor,
-                            width: 3,
-                            strokeAlign: BorderSide.strokeAlignInside,
+                    Positioned(
+                      top: 0,
+                      left: 8,
+                      right: 8,
+                      child: IgnorePointer(
+                        child: Container(
+                          height: 1.5,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(2),
+                            gradient: LinearGradient(
+                              colors: [
+                                Colors.transparent,
+                                AppTheme.primaryColor,
+                                AppTheme.primaryColor,
+                                Colors.transparent,
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -420,22 +447,14 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
+          // "NOW PLAYING" label removed — the under-glow on the thumbnail
+          // above already marks the current episode, no text needed too.
           if (isFuture && formattedDate != null)
             Text(
               'Available on: $formattedDate',
               style: const TextStyle(color: Colors.white54, fontSize: 9),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-            )
-          else if (isCurrent)
-            const Text(
-              'NOW PLAYING',
-              style: TextStyle(
-                color: AppTheme.primaryColor,
-                fontSize: 9,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.5,
-              ),
             ),
         ],
       ),
@@ -741,7 +760,7 @@ class _EpisodeSourcePickerState extends State<_EpisodeSourcePicker> {
     final servers = <String, String>{
       defaultProvider: Platform.isIOS ? 'Server 4' : 'Server 1',
       'moviesapi': 'Server 2',
-      'vidking': 'Server 3',
+      '2embed': 'Server 3',
       altProvider: Platform.isIOS ? 'Server 1' : 'Server 4',
     };
 

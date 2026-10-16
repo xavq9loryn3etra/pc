@@ -18,13 +18,14 @@ import 'screens/mode_selector_screen.dart';
 import 'screens/update_overlay.dart';
 import 'screens/maintenance_overlay.dart';
 import 'screens/no_internet_overlay.dart';
+import 'screens/splash_screen.dart';
 import 'theme/app_theme.dart';
 
 import 'services/app_mode_service.dart';
 import 'services/saved_movies_service.dart';
 import 'services/deep_link_service.dart';
 import 'services/torrent/torrent_engine_service.dart';
-import 'widgets/shimmer_loader.dart';
+import 'services/trending_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -79,6 +80,10 @@ void main() async {
     );
   }
 
+  // Not awaited: warms up the mode selector's background slideshow while
+  // the splash plays (needs the TMDB key from .env above).
+  unawaited(TrendingService().fetch(AppModeService().currentMode.value));
+
   runApp(const MyApp());
 }
 
@@ -100,6 +105,20 @@ enum _AppScreen {
 
 class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   _AppScreen _currentScreen = _AppScreen.checking;
+  // The splash intro keeps covering the app until it has played through,
+  // even if _checkConfig already resolved the next screen. Then:
+  //  1. _splashRevealing: the next screen is built *underneath* the still,
+  //     opaque splash, so its expensive first frames (layout, image
+  //     decodes) happen where nobody can see them stutter.
+  //  2. _splashFading: a moment later the splash fades out on top of it.
+  //  3. _splashDone: the splash is removed.
+  bool _splashRevealing = false;
+  bool _splashFading = false;
+  bool _splashDone = false;
+  // Whether the mode selector's first background slide is loaded. The
+  // splash waits for it (up to a cap) when that's the next screen, so the
+  // selector doesn't open on an empty background.
+  bool _selectorWarm = false;
   String _maintenanceMsg = "";
   String _updateMsg = "";
 
@@ -112,6 +131,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _checkConfig();
+    // Image precaching needs a context below MaterialApp (MediaQuery), so
+    // start once the first frame is up.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _warmUpSelector());
     _initConnectivity();
     DeepLinkService().init(_navigatorKey);
   }
@@ -142,6 +164,20 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     _connectivitySubscription.cancel();
     DeepLinkService().dispose();
     super.dispose();
+  }
+
+  Future<void> _warmUpSelector() async {
+    final context = _navigatorKey.currentContext;
+    if (context != null) {
+      try {
+        await TrendingService()
+            .warmUp(AppModeService().currentMode.value, context)
+            // Slow or offline: give up and let the selector show its
+            // placeholder rather than holding the splash indefinitely.
+            .timeout(const Duration(seconds: 4));
+      } catch (_) {}
+    }
+    if (mounted) setState(() => _selectorWarm = true);
   }
 
   Future<void> _checkConfig() async {
@@ -257,38 +293,35 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    Widget homeWidget;
+  void _onSplashFinished() {
+    setState(() => _splashRevealing = true);
+    // Give the newly mounted screen a couple of frames to lay out and
+    // decode its first images before the splash starts fading off it.
+    Future.delayed(const Duration(milliseconds: 150), () {
+      if (mounted) setState(() => _splashFading = true);
+    });
+  }
 
+  Widget? _buildScreen() {
     switch (_currentScreen) {
       case _AppScreen.checking:
-        homeWidget = const Scaffold(
-          backgroundColor: Colors.black87,
-          body: Stack(
-            children: [
-              Center(child: ShimmerLoader()),
-              _ShaderWarmup(),
-            ],
-          ),
-        );
-        break;
+        return null;
       case _AppScreen.updateRequired:
-        homeWidget = UpdateOverlay(message: _updateMsg);
-        break;
+        return UpdateOverlay(message: _updateMsg);
       case _AppScreen.maintenance:
-        homeWidget = MaintenanceOverlay(message: _maintenanceMsg);
-        break;
+        return MaintenanceOverlay(message: _maintenanceMsg);
       case _AppScreen.welcome:
-        homeWidget = WelcomeScreen(onGetStarted: _onWelcomeComplete);
-        break;
+        return WelcomeScreen(onGetStarted: _onWelcomeComplete);
       case _AppScreen.onboarding:
-        homeWidget = OnboardingScreen(onComplete: _onOnboardingComplete);
-        break;
+        return OnboardingScreen(onComplete: _onOnboardingComplete);
       case _AppScreen.modeSelector:
-        homeWidget = const ModeSelectorScreen();
-        break;
+        return const ModeSelectorScreen();
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screen = _splashRevealing ? _buildScreen() : null;
 
     return MaterialApp(
       title: 'Popcorn',
@@ -312,7 +345,47 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           ],
         );
       },
-      home: homeWidget,
+      home: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (screen != null)
+            // Cross-fade between later startup screens (welcome →
+            // onboarding → mode selector) instead of hard-cutting. The
+            // first screen shown appears without a transition — it's
+            // revealed by the splash fading off it.
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 500),
+              child: KeyedSubtree(
+                key: ValueKey(_currentScreen),
+                child: screen,
+              ),
+            ),
+          if (!_splashDone)
+            IgnorePointer(
+              ignoring: _splashRevealing,
+              child: AnimatedOpacity(
+                opacity: _splashFading ? 0 : 1,
+                duration: const Duration(milliseconds: 450),
+                curve: Curves.easeOut,
+                onEnd: () => setState(() => _splashDone = true),
+                child: Scaffold(
+                  backgroundColor: AppTheme.scaffoldColor,
+                  body: Stack(
+                    children: [
+                      SplashScreen(
+                        ready: _currentScreen != _AppScreen.checking &&
+                            (_currentScreen != _AppScreen.modeSelector ||
+                                _selectorWarm),
+                        onFinished: _onSplashFinished,
+                      ),
+                      const _ShaderWarmup(),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -336,7 +409,10 @@ class _ShaderWarmup extends StatelessWidget {
       height: 1,
       child: ClipRect(
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          // Kept in sync with the sigma actually used app-wide (see
+          // custom_app_bar.dart/floating_bottom_nav_bar.dart/etc.) — this
+          // widget's only job is to precompile that exact blur variant.
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
           child: Container(color: Colors.transparent),
         ),
       ),

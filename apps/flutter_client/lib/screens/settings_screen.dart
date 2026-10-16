@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../widgets/screen_scaffold.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/shimmer_loader.dart';
+import '../widgets/mode_switch_row.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import '../services/backup_service.dart';
@@ -36,19 +36,28 @@ class SettingsScreen extends StatelessWidget {
       bottomNavTab: BottomNavTab.settings,
       actions: const [_AppVersionLabel()],
       body: (context, isDesktop, padding) {
-        return ListView(
-          padding: padding.copyWith(top: 100),
-          children: [
-            const _SectionLabel('SWITCH MODE', topPadding: 8),
-            const _ModeSwitchRow(),
-            const _SectionLabel('BACKUP & RESTORE'),
-            _BackupRestoreRow(
-              onExport: () => _exportBackup(context),
-              onImport: () => _importBackup(context),
-            ),
-            const _SectionLabel('STORAGE'),
-            const _StorageSection(),
-          ],
+        return ValueListenableBuilder<AppMode>(
+          valueListenable: AppModeService().currentMode,
+          builder: (context, mode, _) {
+            final showStorage = mode == AppMode.movies;
+
+            return ListView(
+              padding: padding.copyWith(top: 100),
+              children: [
+                const _SectionLabel('SWITCH MODE', topPadding: 8),
+                const ModeSwitchRow(),
+                const _SectionLabel('BACKUP & RESTORE'),
+                _BackupRestoreRow(
+                  onExport: () => _exportBackup(context),
+                  onImport: () => _importBackup(context),
+                ),
+                if (showStorage) ...[
+                  const _SectionLabel('STORAGE'),
+                  const _StorageSection(),
+                ],
+              ],
+            );
+          },
         );
       },
     );
@@ -172,7 +181,7 @@ class _AppVersionLabel extends StatelessWidget {
             return Text(
               'v${info.version}+${info.buildNumber}',
               style: TextStyle(
-                color: Colors.white.withOpacity(0.3),
+                color: Colors.white.withValues(alpha: 0.3),
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
@@ -203,128 +212,6 @@ class _SectionLabel extends StatelessWidget {
           letterSpacing: 1,
         ),
       ),
-    );
-  }
-}
-
-/// Inline mode picker — used to live behind a "Switch Mode" tap target that
-/// opened [ModeSwitcherDialog] as a sliding top panel; now shown directly on
-/// the Settings screen instead.
-class _ModeSwitchRow extends StatelessWidget {
-  const _ModeSwitchRow();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: const [
-          _ModeOption(
-            mode: AppMode.movies,
-            assetPath: 'assets/logo.svg',
-            isSvg: true,
-            size: 32,
-            label: 'Popcorn',
-          ),
-          _ModeOption(
-            mode: AppMode.music,
-            assetPath: 'assets/music-app-logo.png',
-            label: 'Groovy',
-          ),
-          _ModeOption(
-            mode: AppMode.books,
-            assetPath: 'assets/book-app-logo.png',
-            label: 'Library',
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ModeOption extends StatelessWidget {
-  final AppMode mode;
-  final String assetPath;
-  final String label;
-  final bool isSvg;
-  final double size;
-
-  const _ModeOption({
-    required this.mode,
-    required this.assetPath,
-    required this.label,
-    this.isSvg = false,
-    this.size = 48.0,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<AppMode>(
-      valueListenable: AppModeService().currentMode,
-      builder: (context, currentMode, child) {
-        final isSelected = currentMode == mode;
-
-        return GestureDetector(
-          onTap: () => AppModeService().setMode(mode),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: 90,
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? Colors.white.withOpacity(0.1)
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isSelected ? Colors.white24 : Colors.transparent,
-                width: 1,
-              ),
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                SizedBox(
-                  height: 48,
-                  child: Center(
-                    child: isSvg
-                        ? SvgPicture.asset(
-                            assetPath,
-                            height: size,
-                            width: size,
-                            colorFilter: ColorFilter.mode(
-                              isSelected ? AppTheme.primaryColor : Colors.white70,
-                              BlendMode.srcIn,
-                            ),
-                          )
-                        : Image.asset(
-                            assetPath,
-                            height: size,
-                            width: size,
-                            cacheWidth: (size * 3).toInt(),
-                            gaplessPlayback: true,
-                            fit: BoxFit.contain,
-                            opacity: isSelected
-                                ? const AlwaysStoppedAnimation(1.0)
-                                : const AlwaysStoppedAnimation(0.7),
-                          ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: isSelected ? Colors.white : Colors.white60,
-                    fontWeight:
-                        isSelected ? FontWeight.bold : FontWeight.normal,
-                    fontSize: 13,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
     );
   }
 }

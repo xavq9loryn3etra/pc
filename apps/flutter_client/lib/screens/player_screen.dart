@@ -16,6 +16,7 @@ import '../services/torrent/torrent_index_service.dart';
 import '../services/torrent/torrent_engine_service.dart';
 import '../services/torrent/stream_resolver.dart';
 import '../services/torrent/torrent_download_registry.dart';
+import '../services/torrent/torrent_storage_service.dart';
 import '../services/tmdb_service.dart';
 import '../models/movie.dart';
 import '../theme/app_theme.dart';
@@ -59,7 +60,7 @@ class PlayerScreen extends StatefulWidget {
 }
 
 class _PlayerScreenState extends State<PlayerScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, TickerProviderStateMixin {
   late final Player player;
   late final VideoController controller;
 
@@ -77,7 +78,16 @@ class _PlayerScreenState extends State<PlayerScreen>
   late int? _currentSeason;
 
   // Episode Drawer state
+  // "Logically open" — drives back-button interception, controls-hiding,
+  // etc. Flips false the instant a close is requested, before the slide-
+  // down animation finishes.
   bool _showEpisodeDrawer = false;
+  // "Still in the widget tree" — stays true through the slide-down
+  // animation and only flips false once it's actually finished, so the
+  // drawer has something to animate out from instead of just vanishing.
+  bool _episodeDrawerMounted = false;
+  late final AnimationController _episodeDrawerController;
+  late final Animation<Offset> _episodeDrawerOffset;
   late int? _browsingSeason;
   late List<Episode> _episodes;
   // True when we auto-paused because the episode browser opened, so we only
@@ -103,6 +113,24 @@ class _PlayerScreenState extends State<PlayerScreen>
   // UI Control State
   bool _controlsVisible = true;
   Timer? _controlsTimer;
+  Timer? _screenTapTimer;
+  DateTime? _controlsPointerAt;
+  bool _isBuffering = false;
+  Timer? _bufferingRevealTimer;
+
+  // Centre-screen play/pause flash shown on user play/pause. Starts at its
+  // end (invisible).
+  late final AnimationController _playPauseFlash = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 700),
+    value: 1,
+  );
+  IconData _flashIcon = Icons.pause_rounded;
+
+  // Video scaling (Fit / Fill), set from the settings panel and
+  // remembered across sessions.
+  static const _videoFitPrefKey = 'player_video_fit';
+  VideoFit _videoFit = VideoFit.fill;
   bool _switchingQuality = false;
   String? _switchingMessage;
 
@@ -129,9 +157,33 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _isLoadingSubtitles = false;
   bool _initialPositionRestored = false;
   double? _pendingResumeSnackbarProgress;
-  bool _isMediaOpening =
-      true; // True from player.open() until first buffering/play event
+  // True from player.open() until playback is actually progressing (see
+  // _checkOpeningFinished) — drives the loading spinner along with
+  // _isBuffering.
+  bool _isMediaOpening = true;
+  // Last position seen while opening, to tell real playback (small steady
+  // steps) from the initial jump to the resume point.
+  Duration? _openingLastPosition;
   DateTime? _lastSaveTime;
+
+  // Stall watchdog — the local torrent HTTP server (serve_range in the
+  // native libtorrent_flutter plugin) gives up and drops the connection if
+  // a piece never arrives, which mpv doesn't always surface as a clean
+  // error; playback just silently stops advancing. Reopening the app and
+  // re-streaming the same torrent hits the same swarm/piece and reproduces
+  // it, since nothing ever re-verifies or clears the cached save directory
+  // on its own — previously the only fix was Settings > Storage > Delete.
+  // This watches for position AND real download progress both freezing
+  // while we're supposed to be playing, and if so, does that same
+  // wipe-and-retry automatically.
+  Timer? _stallWatchdogTimer;
+  Duration _lastWatchdogPosition = Duration.zero;
+  int? _lastWatchdogDownloadedBytes;
+  int _stallTicks = 0;
+  static const int _stallTicksThreshold = 4; // 4 * 5s = 20s of no progress
+  bool _recoveringStream = false;
+  int _autoRecoverAttempts = 0;
+  static const int _maxAutoRecoverAttempts = 2;
 
   final _resolver = StreamResolver();
   final _mediaSession = FlutterMediaSession();
@@ -171,6 +223,21 @@ class _PlayerScreenState extends State<PlayerScreen>
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _initGyroRotation();
 
+    // Episode drawer slide up/down — starts "dismissed" (off the bottom of
+    // the screen) since the drawer isn't open yet.
+    _episodeDrawerController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
+    _episodeDrawerOffset = Tween<Offset>(
+      begin: const Offset(0, 1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _episodeDrawerController,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    ));
+
     // Initialize media_kit Player
     player = Player();
     controller = VideoController(player);
@@ -179,6 +246,24 @@ class _PlayerScreenState extends State<PlayerScreen>
     _subscribeToTorrent(_torrentId);
     _resetControlsTimer();
     _initMediaSession();
+    _loadVideoFit();
+  }
+
+  Future<void> _loadVideoFit() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_videoFitPrefKey);
+    for (final fit in VideoFit.values) {
+      if (fit.name == saved) {
+        if (mounted) setState(() => _videoFit = fit);
+        return;
+      }
+    }
+  }
+
+  void _selectVideoFit(VideoFit fit) {
+    setState(() => _videoFit = fit);
+    SharedPreferences.getInstance()
+        .then((prefs) => prefs.setString(_videoFitPrefKey, fit.name));
   }
 
   // Continuously monitor the accelerometer to auto-rotate between
@@ -247,6 +332,49 @@ class _PlayerScreenState extends State<PlayerScreen>
         'yes'); // Pause at startup until initial cache fills
     await mpv.setProperty(
         'cache-pause-wait', '5'); // Re-pause if buffer drops below 5s
+    // Subscribe to playing/buffering *before* opening the media: events
+    // fired while it opens (playback starting, buffering on/off) were
+    // previously missed depending on timing, leaving the loading spinner
+    // and play/pause state stuck wrong.
+    // Listen to play/pause state for premium zoom effect and control bar visibility
+    _playingSub = player.stream.playing.listen((val) {
+      if (mounted) {
+        // Not a signal that loading finished: mpv reports "playing" as soon
+        // as it's told to play, before any video has arrived. See
+        // _checkOpeningFinished for what ends the opening state.
+        setState(() => _isPlaying = val);
+        // Sync play/pause to notification
+        _syncMediaSessionPlaybackState();
+        if (val) {
+          _resetControlsTimer();
+        } else {
+          setState(() => _controlsVisible = true);
+          _controlsTimer?.cancel();
+        }
+      }
+    });
+
+    // Mid-playback stalls. Also not used to end the opening state — opening
+    // emits a "not buffering" reset before the stream has even connected.
+    _bufferingSub = player.stream.buffering.listen((isBuffering) {
+      if (!mounted) return;
+      setState(() => _isBuffering = isBuffering);
+      // The loading spinner rings the play/pause button, which lives in the
+      // controls — so bring them up for any stall long enough to notice
+      // (not the momentary blip after every seek), and let them auto-hide
+      // again once playback resumes.
+      _bufferingRevealTimer?.cancel();
+      if (isBuffering) {
+        _bufferingRevealTimer = Timer(const Duration(milliseconds: 600), () {
+          if (!mounted || !_isBuffering) return;
+          _controlsTimer?.cancel();
+          setState(() => _controlsVisible = true);
+        });
+      } else {
+        _resetControlsTimer();
+      }
+    });
+
     await _openMediaWithResume(_streamUrl);
 
     // Listen to video position
@@ -257,6 +385,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         // several times a second during playback.
         _currentPosition = pos;
         _positionNotifier.value = pos;
+        if (_isMediaOpening) _checkOpeningFinished(pos);
         // Save progress periodically (throttled) ONLY after initial position is restored
         if (_initialPositionRestored) {
           _saveProgress();
@@ -303,32 +432,6 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
     });
 
-    // Listen to play/pause state for premium zoom effect and control bar visibility
-    _playingSub = player.stream.playing.listen((val) {
-      if (mounted) {
-        setState(() {
-          _isPlaying = val;
-          if (val)
-            _isMediaOpening = false; // playback started, hide initial spinner
-        });
-        // Sync play/pause to notification
-        _syncMediaSessionPlaybackState();
-        if (val) {
-          _resetControlsTimer();
-        } else {
-          setState(() => _controlsVisible = true);
-          _controlsTimer?.cancel();
-        }
-      }
-    });
-
-    // Clear _isMediaOpening as soon as buffering state is first observed
-    _bufferingSub = player.stream.buffering.listen((isBuffering) {
-      if (mounted && _isMediaOpening) {
-        setState(() => _isMediaOpening = false);
-      }
-    });
-
     // Listen to video buffer duration (for YouTube-style grayed-out buffered bar).
     // Not wrapped in setState — only the seek bar's secondary track needs this.
     _bufferSub = player.stream.buffer.listen((buf) {
@@ -336,6 +439,171 @@ class _PlayerScreenState extends State<PlayerScreen>
         _bufferNotifier.value = buf;
       }
     });
+
+    // See the _stallWatchdogTimer field doc for why this exists.
+    _stallWatchdogTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      _checkForStall();
+    });
+  }
+
+  /// Ends the opening state once playback is genuinely under way: playing,
+  /// not buffering, and the position moving forward in small steps. A
+  /// single "playing"/"not buffering" event isn't enough (both fire before
+  /// the stream connects), and the first position change is often the jump
+  /// to the resume point rather than playback.
+  void _checkOpeningFinished(Duration pos) {
+    final last = _openingLastPosition;
+    _openingLastPosition = pos;
+    if (last == null || !_isPlaying || _isBuffering) return;
+    final step = pos - last;
+    if (step > Duration.zero && step < const Duration(seconds: 2)) {
+      setState(() => _isMediaOpening = false);
+    }
+  }
+
+  /// Ticks every 5s (see [_stallWatchdogTimer]). If both playback position
+  /// and real torrent download bytes stay completely flat for
+  /// [_stallTicksThreshold] consecutive ticks while we're supposed to be
+  /// actively playing, treats it as a stuck stream and attempts recovery.
+  /// Requiring *both* to be flat (not just position) avoids false-triggering
+  /// on a decoder-side hiccup that has nothing to do with missing torrent
+  /// data — wiping and re-downloading wouldn't fix that anyway.
+  void _checkForStall() {
+    // Deliberately runs while the media is still opening too: a stream that
+    // never connects (no download progress for 20s) is exactly what this
+    // should recover from.
+    if (!mounted ||
+        !_isPlaying ||
+        _isDragging ||
+        _switchingQuality ||
+        _recoveringStream) {
+      _stallTicks = 0;
+      _lastWatchdogPosition = _currentPosition;
+      _lastWatchdogDownloadedBytes =
+          LibtorrentFlutter.instance.torrents[_torrentId]?.totalDone;
+      return;
+    }
+
+    // Near the natural end of the content — that's completion, not a stall.
+    if (_duration.inSeconds > 0 &&
+        _currentPosition >= _duration - const Duration(seconds: 2)) {
+      _stallTicks = 0;
+      return;
+    }
+
+    final downloadedBytes =
+        LibtorrentFlutter.instance.torrents[_torrentId]?.totalDone;
+    final positionStuck = _currentPosition == _lastWatchdogPosition;
+    final downloadStuck = _lastWatchdogDownloadedBytes == null ||
+        downloadedBytes == null ||
+        downloadedBytes <= _lastWatchdogDownloadedBytes!;
+
+    _stallTicks = (positionStuck && downloadStuck) ? _stallTicks + 1 : 0;
+    _lastWatchdogPosition = _currentPosition;
+    _lastWatchdogDownloadedBytes = downloadedBytes;
+
+    if (_stallTicks >= _stallTicksThreshold) {
+      _stallTicks = 0;
+      _attemptStreamRecovery(
+        reason: 'No playback or download progress for 20s',
+      );
+    }
+  }
+
+  /// Recovers from a stalled/stuck stream: wipes this torrent's cached save
+  /// directory (the same operation Settings > Storage's manual "Delete"
+  /// performs — see TorrentStorageService.deleteByInfoHash) and re-resolves
+  /// a fresh stream, falling back to a different source if this exact one
+  /// keeps failing. Previously this required the user to notice playback
+  /// had died, back out to Settings, and delete the cached file by hand;
+  /// this does the same thing automatically, in place.
+  Future<void> _attemptStreamRecovery({String? reason}) async {
+    if (_recoveringStream || _switchingQuality || !mounted) return;
+
+    if (_autoRecoverAttempts >= _maxAutoRecoverAttempts) {
+      // Already auto-retried enough times this session — if it's still
+      // stuck, the torrent itself is likely the problem (e.g. no real
+      // seeds for this piece range), and retrying forever would just
+      // thrash. Surface it instead of silently looping.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: Colors.red[900],
+          duration: const Duration(seconds: 6),
+          content: const Text(
+            'Playback keeps stalling — this source may be unavailable. '
+            'Try a different one from the quality menu.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    print('Stream recovery triggered: $reason');
+    _autoRecoverAttempts++;
+    _recoveringStream = true;
+    final resumeAt = _currentPosition;
+    final staleInfoHash = _currentStream.infoHash;
+
+    if (mounted) {
+      setState(() {
+        _switchingQuality = true;
+        _switchingMessage = 'Playback stalled — clearing cache and retrying...';
+        _controlsVisible = false;
+        _initialPositionRestored = false;
+      });
+    }
+
+    player.pause();
+
+    try {
+      // Wipe the stuck torrent's cached data (also removes the live handle
+      // if it's still registered) so the retry doesn't just reuse whatever
+      // was stuck on disk.
+      await TorrentStorageService.deleteByInfoHash(staleInfoHash);
+
+      final resolved = await _resolver.resolveWithFallback(
+        _currentStream,
+        widget.availableStreams,
+      );
+      final resolvedStream = resolved.stream;
+      final result = resolved.result;
+
+      await _openMediaWithResume(result.streamUrl, precisePosition: resumeAt);
+      player.play();
+
+      if (mounted) {
+        setState(() {
+          _currentStream = resolvedStream;
+          _torrentId = result.torrentId;
+          _streamId = result.streamId;
+          _streamUrl = result.streamUrl;
+          _switchingQuality = false;
+          _resetControlsTimer();
+        });
+        _subscribeToTorrent(_torrentId);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Colors.black87,
+            content: Text('Recovered from a playback stall.'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _switchingQuality = false;
+          _initialPositionRestored = true;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: Colors.red[900],
+            content: Text('Failed to recover playback: $e'),
+          ),
+        );
+      }
+    } finally {
+      _recoveringStream = false;
+    }
   }
 
   // Fully pause playback when the app is backgrounded — otherwise mpv keeps
@@ -489,6 +757,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted) {
         setState(() {
           _isMediaOpening = true;
+          _openingLastPosition = null;
           _initialPositionRestored = true;
         });
       }
@@ -520,6 +789,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted) {
         setState(() {
           _isMediaOpening = true;
+          _openingLastPosition = null;
           _initialPositionRestored = true;
         });
       }
@@ -567,7 +837,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     });
   }
 
-  void _saveProgress({bool force = false}) {
+  // Returns a Future so callers that are about to tear down the current
+  // episode/torrent (e.g. _playEpisode switching to the next one) can await
+  // it — otherwise the SharedPreferences write can lose the race against
+  // _applyResolvedEpisode's addToHistory() call for the *new* episode,
+  // which overwrites the same 'continue watching' entry.
+  Future<void> _saveProgress({bool force = false}) async {
     if (_duration.inSeconds > 0) {
       final now = DateTime.now();
       // Throttle progress updates to SharedPreferences (every 5 seconds) to avoid CPU/disk churn, unless forced
@@ -579,7 +854,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _lastSaveTime = now;
 
       final double progress = _currentPosition.inSeconds / _duration.inSeconds;
-      SavedMoviesService().addToHistory(
+      await SavedMoviesService().addToHistory(
         widget.movie,
         season: _currentSeason,
         episode: _currentEpisode,
@@ -599,17 +874,43 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  // A single tap in the middle third of the screen plays/pauses (pausing
+  // also brings the controls up — see the playing listener); on either
+  // side — the double-tap seek areas — it just shows/hides the controls.
+  // Either way it waits out the gesture overlay's 320ms double-tap window
+  // first, so a double-tap seek can cancel it.
+  //
+  // The overlay listens to raw pointers over the whole screen, controls
+  // included, so taps on the top/bottom bars (back button, seek bar,
+  // buttons) are marked and skipped here — they do their own thing.
+  void _onScreenTap(Offset position) {
+    final onControls = _controlsPointerAt != null &&
+        DateTime.now().difference(_controlsPointerAt!) <
+            const Duration(seconds: 1);
+    _controlsPointerAt = null;
+    if (onControls) return;
+
+    final width = MediaQuery.of(context).size.width;
+    final inMiddle =
+        position.dx > width / 3 && position.dx < width * 2 / 3;
+    _screenTapTimer?.cancel();
+    _screenTapTimer = Timer(const Duration(milliseconds: 320),
+        inMiddle ? _playPause : _toggleControls);
+  }
+
   void _toggleControls() {
+    // While paused the controls stay up (the pause screen isn't
+    // dismissible).
     if (!_isPlaying) {
-      // Pause screen is not dismissible! Keep controls visible.
       setState(() => _controlsVisible = true);
       return;
     }
-    setState(() {
-      _controlsVisible = !_controlsVisible;
-      if (_controlsVisible) _resetControlsTimer();
-    });
+    setState(() => _controlsVisible = !_controlsVisible);
+    if (_controlsVisible) _resetControlsTimer();
   }
+
+  void _markControlsPointer(PointerDownEvent _) =>
+      _controlsPointerAt = DateTime.now();
 
   void _playPause() {
     if (_isPlaying) {
@@ -617,18 +918,37 @@ class _PlayerScreenState extends State<PlayerScreen>
     } else {
       player.play();
     }
+    // Flash what just happened in the middle of the screen, since the
+    // play/pause button itself is tucked into the bottom bar.
+    setState(() => _flashIcon =
+        _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded);
+    _playPauseFlash.forward(from: 0);
   }
 
-  void _skipBackward() {
-    final newPos = _currentPosition - const Duration(seconds: 10);
-    player.seek(newPos < Duration.zero ? Duration.zero : newPos);
-    _syncMediaSessionPlaybackState();
-    _resetControlsTimer();
-  }
+  void _skipBackward() => _skipBy(const Duration(seconds: -10));
 
-  void _skipForward() {
-    final newPos = _currentPosition + const Duration(seconds: 10);
-    player.seek(newPos > _duration ? _duration : newPos);
+  void _skipForward() => _skipBy(const Duration(seconds: 10));
+
+  // Rapid skips (a double-tap seek streak taps every ~300ms) build on the
+  // previous skip's target: the reported position can lag behind a seek,
+  // especially on a torrent stream, so basing each on _currentPosition
+  // would make some taps land on the same spot.
+  Duration? _lastSkipTarget;
+  DateTime? _lastSkipAt;
+
+  void _skipBy(Duration delta) {
+    final now = DateTime.now();
+    final base = _lastSkipTarget != null &&
+            _lastSkipAt != null &&
+            now.difference(_lastSkipAt!) < const Duration(milliseconds: 1500)
+        ? _lastSkipTarget!
+        : _currentPosition;
+    var target = base + delta;
+    if (target < Duration.zero) target = Duration.zero;
+    if (_duration > Duration.zero && target > _duration) target = _duration;
+    _lastSkipTarget = target;
+    _lastSkipAt = now;
+    player.seek(target);
     _syncMediaSessionPlaybackState();
     _resetControlsTimer();
   }
@@ -812,7 +1132,19 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     setState(() {
       _showEpisodeDrawer = true;
+      _episodeDrawerMounted = true;
       _controlsVisible = false;
+    });
+    _episodeDrawerController.forward();
+  }
+
+  /// Slides the episode drawer down and unmounts it once that finishes.
+  /// Doesn't touch playback state — callers decide that separately (resume
+  /// after a cancelled browse vs. jumping straight into a newly chosen
+  /// episode), this just handles the drawer's own exit animation.
+  void _animateEpisodeDrawerClosed() {
+    _episodeDrawerController.reverse().whenComplete(() {
+      if (mounted) setState(() => _episodeDrawerMounted = false);
     });
   }
 
@@ -828,6 +1160,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _controlsVisible = true;
       }
     });
+    _animateEpisodeDrawerClosed();
   }
 
   /// Generalized Play Episode Function
@@ -850,6 +1183,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     });
 
     player.pause();
+
+    // Persist the outgoing episode's final position before tearing it down
+    // — without this, pressing "Next Episode" (or picking another episode)
+    // could lose up to the last 5s of progress on the one just finished,
+    // since the periodic save in the position listener is throttled and
+    // nothing else force-saves before a switch (see _saveProgress's doc).
+    await _saveProgress(force: true);
 
     try {
       // 1. Clean up old torrent
@@ -921,6 +1261,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     });
 
     player.pause();
+
+    // See the matching comment in _playEpisode — same reasoning.
+    await _saveProgress(force: true);
 
     try {
       _resolver.cleanup(_torrentId);
@@ -1058,6 +1401,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     WakelockPlus.disable();
+    _screenTapTimer?.cancel();
+    _bufferingRevealTimer?.cancel();
     _accelSubscription?.cancel();
     // Safety net in case this screen is disposed while still backgrounded.
     BackgroundDownloadService.instance.stop();
@@ -1093,8 +1438,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     _bufferingSub?.cancel();
     _torrentSub?.cancel();
     _controlsTimer?.cancel();
+    _stallWatchdogTimer?.cancel();
     _mediaActionSub?.cancel();
     _mediaSession.deactivate();
+    _episodeDrawerController.dispose();
+    _playPauseFlash.dispose();
 
     // 4. Dispose players and release (not delete) the active FFI torrent —
     // keeps whatever was downloaded so resuming this content later doesn't
@@ -1442,6 +1790,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
+    // Camera cutout (punch hole / notch) — the video draws under it (see
+    // MainActivity), but the controls stay clear of it.
+    final safe = MediaQuery.of(context).padding;
     bool nextEpisodePlayable = false;
     if (widget.details.type == 'tv' &&
         _currentEpisode != null &&
@@ -1484,8 +1835,10 @@ class _PlayerScreenState extends State<PlayerScreen>
             // Layer 1: PlayerGestureOverlay + Video + Controls
             PlayerGestureOverlay(
               enabled: !_showEpisodeDrawer && !_showSettingsPanel,
-              onTap: _toggleControls,
+              onTapAt: _onScreenTap,
               onDoubleTapSeek: (isForward) {
+                // The double tap's first tap already scheduled a pause.
+                _screenTapTimer?.cancel();
                 if (isForward) {
                   _skipForward();
                 } else {
@@ -1508,9 +1861,41 @@ class _PlayerScreenState extends State<PlayerScreen>
                           controller: controller,
                           controls:
                               NoVideoControls, // Pure custom controls overlay
-                          fit: BoxFit.cover,
+                          fit: _videoFit.boxFit,
                           width: double.infinity,
                           height: double.infinity,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // Play/pause flash: pops in, then fades as it grows
+                  IgnorePointer(
+                    child: Center(
+                      child: AnimatedBuilder(
+                        animation: _playPauseFlash,
+                        builder: (context, child) {
+                          final t = _playPauseFlash.value;
+                          final fade =
+                              t < 0.3 ? 1.0 : 1 - (t - 0.3) / 0.7;
+                          return Opacity(
+                            opacity: fade.clamp(0.0, 1.0),
+                            child: Transform.scale(
+                              scale: 0.85 +
+                                  0.3 * Curves.easeOut.transform(t),
+                              child: child,
+                            ),
+                          );
+                        },
+                        child: Container(
+                          width: 84,
+                          height: 84,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.45),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(_flashIcon,
+                              color: Colors.white, size: 48),
                         ),
                       ),
                     ),
@@ -1534,21 +1919,6 @@ class _PlayerScreenState extends State<PlayerScreen>
                                   fontWeight: FontWeight.bold),
                             ),
                           ],
-                        ),
-                      ),
-                    ),
-
-                  // Direct Torrent Initial Buffer Indicator (spins around the central play/pause button)
-                  if (!_switchingQuality &&
-                      (_isMediaOpening || player.state.buffering))
-                    const Center(
-                      child: SizedBox(
-                        width: 86,
-                        height: 86,
-                        child: CircularProgressIndicator(
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                              AppTheme.primaryColor),
-                          strokeWidth: 3.5,
                         ),
                       ),
                     ),
@@ -1607,129 +1977,95 @@ class _PlayerScreenState extends State<PlayerScreen>
                           // ─── TOP BAR ───
                           Positioned(
                             top: 8 + MediaQuery.of(context).padding.top,
-                            left: 16,
-                            right: 16,
-                            child: Row(
-                              children: [
-                                IconButton(
-                                  icon: const Icon(
-                                      Icons.arrow_back_ios_new_rounded,
-                                      color: Colors.white,
-                                      size: 22),
-                                  onPressed: () => Navigator.pop(context),
-                                ),
-                                const SizedBox(width: 8),
-                                // Title (visible when playing)
-                                if (_isPlaying)
-                                  Expanded(
-                                    child: Text(
-                                      widget.movie.title,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
+                            left: 16 + safe.left,
+                            right: 16 + safe.right,
+                            child: Listener(
+                              onPointerDown: _markControlsPointer,
+                              child: Row(
+                                children: [
+                                  IconButton(
+                                    icon: const Icon(
+                                        Icons.arrow_back_ios_new_rounded,
                                         color: Colors.white,
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  )
-                                else
-                                  const Spacer(),
-                                // Torrent stats pill — scoped to its own
-                                // ListenableBuilder so the ~1/sec libtorrent
-                                // update only rebuilds this pill, not the
-                                // whole player screen.
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 5),
-                                  margin: const EdgeInsets.only(right: 12),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.08),
-                                    borderRadius: BorderRadius.circular(20),
+                                        size: 22),
+                                    onPressed: () => Navigator.pop(context),
                                   ),
-                                  child: ListenableBuilder(
-                                    listenable: Listenable.merge([
-                                      _downloadSpeedNotifier,
-                                      _peersNotifier
-                                    ]),
-                                    builder: (context, _) => Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(Icons.arrow_downward_rounded,
-                                            color: Colors.greenAccent.shade400,
-                                            size: 12),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          '${_downloadSpeedNotifier.value.toStringAsFixed(1)} MB/s',
-                                          style: TextStyle(
-                                              color:
-                                                  Colors.greenAccent.shade400,
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 11),
+                                  const SizedBox(width: 8),
+                                  // Title (visible when playing)
+                                  if (_isPlaying)
+                                    Expanded(
+                                      child: Text(
+                                        widget.movie.title,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w600,
                                         ),
-                                        Container(
-                                          width: 1,
-                                          height: 12,
-                                          margin: const EdgeInsets.symmetric(
-                                              horizontal: 8),
-                                          color: Colors.white12,
-                                        ),
-                                        const Icon(Icons.people_alt_outlined,
-                                            color: Colors.white54, size: 12),
-                                        const SizedBox(width: 4),
-                                        Text('${_peersNotifier.value}',
-                                            style: const TextStyle(
-                                                color: Colors.white54,
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.w600)),
-                                      ],
+                                      ),
+                                    )
+                                  else
+                                    const Spacer(),
+                                  // Torrent stats pill — scoped to its own
+                                  // ListenableBuilder so the ~1/sec libtorrent
+                                  // update only rebuilds this pill, not the
+                                  // whole player screen.
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 5),
+                                    margin: const EdgeInsets.only(right: 12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.08),
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: ListenableBuilder(
+                                      listenable: Listenable.merge([
+                                        _downloadSpeedNotifier,
+                                        _peersNotifier
+                                      ]),
+                                      builder: (context, _) => Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.arrow_downward_rounded,
+                                              color: Colors.greenAccent.shade400,
+                                              size: 12),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            '${_downloadSpeedNotifier.value.toStringAsFixed(1)} MB/s',
+                                            style: TextStyle(
+                                                color:
+                                                    Colors.greenAccent.shade400,
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 11),
+                                          ),
+                                          Container(
+                                            width: 1,
+                                            height: 12,
+                                            margin: const EdgeInsets.symmetric(
+                                                horizontal: 8),
+                                            color: Colors.white12,
+                                          ),
+                                          const Icon(Icons.people_alt_outlined,
+                                              color: Colors.white54, size: 12),
+                                          const SizedBox(width: 4),
+                                          Text('${_peersNotifier.value}',
+                                              style: const TextStyle(
+                                                  color: Colors.white54,
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w600)),
+                                        ],
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ],
-                            ),
-                          ),
-
-                          // ─── CENTER PLAY CONTROLS ───
-                          Center(
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                // Big play/pause — slightly elevated with a subtle glow
-                                Container(
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.white.withOpacity(0.08),
-                                        blurRadius: 30,
-                                        spreadRadius: 4,
-                                      ),
-                                    ],
-                                  ),
-                                  child: Material(
-                                    color: Colors.transparent,
-                                    child: InkWell(
-                                      onTap: _playPause,
-                                      borderRadius: BorderRadius.circular(40),
-                                      child: Icon(
-                                        _isPlaying
-                                            ? Icons.pause_circle_filled_rounded
-                                            : Icons.play_circle_filled_rounded,
-                                        color: Colors.white,
-                                        size: 72,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
 
                           // ─── LEFT METADATA PANEL ───
                           Positioned(
-                            left: 32,
+                            left: 32 + safe.left,
                             bottom: 100,
                             width: size.width * 0.38,
                             child: AnimatedOpacity(
@@ -1739,26 +2075,6 @@ class _PlayerScreenState extends State<PlayerScreen>
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  // "NOW PLAYING" label
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: AppTheme.primaryColor
-                                          .withOpacity(0.15),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Text(
-                                      'NOW PLAYING',
-                                      style: TextStyle(
-                                        color: AppTheme.primaryColor,
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.w800,
-                                        letterSpacing: 2.0,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 12),
                                   // Title or Logo
                                   if (widget.details.logoUrl != null &&
                                       widget.details.logoUrl!.isNotEmpty)
@@ -1891,177 +2207,149 @@ class _PlayerScreenState extends State<PlayerScreen>
                           // ─── BOTTOM BAR ───
                           Positioned(
                             bottom: 16 + MediaQuery.of(context).padding.bottom,
-                            left: 24,
-                            right: 24,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                // Seek slider — scoped to a ListenableBuilder over the
-                                // position/duration/buffer notifiers so playback ticks
-                                // (several times/sec) only rebuild this, not the screen.
-                                ListenableBuilder(
-                                  listenable: Listenable.merge([
-                                    _positionNotifier,
-                                    _durationNotifier,
-                                    _bufferNotifier
-                                  ]),
-                                  builder: (context, _) {
-                                    final dur = _durationNotifier.value;
-                                    return SliderTheme(
-                                      data: SliderThemeData(
-                                        trackHeight: 3,
-                                        activeTrackColor: AppTheme.primaryColor,
-                                        secondaryActiveTrackColor:
-                                            Colors.white.withOpacity(0.3),
-                                        inactiveTrackColor:
-                                            Colors.white.withOpacity(0.12),
-                                        thumbColor: AppTheme.primaryColor,
-                                        thumbShape: const RoundSliderThumbShape(
-                                            enabledThumbRadius: 7),
-                                        overlayShape:
-                                            const RoundSliderOverlayShape(
-                                                overlayRadius: 16),
-                                        overlayColor: AppTheme.primaryColor
-                                            .withOpacity(0.12),
-                                      ),
-                                      child: Slider(
-                                        value: _positionNotifier.value.inSeconds
-                                            .toDouble()
-                                            .clamp(
-                                                0.0, dur.inSeconds.toDouble()),
-                                        secondaryTrackValue: _bufferNotifier
-                                            .value.inSeconds
-                                            .toDouble()
-                                            .clamp(
-                                                0.0, dur.inSeconds.toDouble()),
-                                        min: 0.0,
-                                        max: dur.inSeconds.toDouble() > 0
-                                            ? dur.inSeconds.toDouble()
-                                            : 1.0,
-                                        onChangeStart: (val) {
-                                          _isDragging = true;
-                                        },
-                                        onChanged: (val) {
-                                          final d =
-                                              Duration(seconds: val.toInt());
-                                          _currentPosition = d;
-                                          _positionNotifier.value = d;
-                                        },
-                                        onChangeEnd: (val) {
-                                          _isDragging = false;
-                                          player.seek(
-                                              Duration(seconds: val.toInt()));
-                                          _syncMediaSessionPlaybackState();
-                                        },
-                                      ),
-                                    );
-                                  },
-                                ),
-                                // Timestamps + next episode row
-                                Padding(
-                                  padding:
-                                      const EdgeInsets.symmetric(horizontal: 8),
-                                  child: Row(
-                                    children: [
-                                      ListenableBuilder(
-                                        listenable: Listenable.merge([
-                                          _positionNotifier,
-                                          _durationNotifier
-                                        ]),
-                                        builder: (context, _) => Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Text(
-                                              _formatDuration(
-                                                  _positionNotifier.value),
-                                              style: const TextStyle(
+                            left: 24 + safe.left,
+                            right: 24 + safe.right,
+                            child: Listener(
+                              onPointerDown: _markControlsPointer,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // Seek slider — scoped to a ListenableBuilder over the
+                                  // position/duration/buffer notifiers so playback ticks
+                                  // (several times/sec) only rebuild this, not the screen.
+                                  ListenableBuilder(
+                                    listenable: Listenable.merge([
+                                      _positionNotifier,
+                                      _durationNotifier,
+                                      _bufferNotifier
+                                    ]),
+                                    builder: (context, _) {
+                                      final dur = _durationNotifier.value;
+                                      return SliderTheme(
+                                        data: SliderThemeData(
+                                          trackHeight: 3,
+                                          activeTrackColor: AppTheme.primaryColor,
+                                          secondaryActiveTrackColor:
+                                              Colors.white.withOpacity(0.3),
+                                          inactiveTrackColor:
+                                              Colors.white.withOpacity(0.12),
+                                          thumbColor: AppTheme.primaryColor,
+                                          thumbShape: const RoundSliderThumbShape(
+                                              enabledThumbRadius: 7),
+                                          overlayShape:
+                                              const RoundSliderOverlayShape(
+                                                  overlayRadius: 16),
+                                          overlayColor: AppTheme.primaryColor
+                                              .withOpacity(0.12),
+                                        ),
+                                        child: Slider(
+                                          value: _positionNotifier.value.inSeconds
+                                              .toDouble()
+                                              .clamp(
+                                                  0.0, dur.inSeconds.toDouble()),
+                                          secondaryTrackValue: _bufferNotifier
+                                              .value.inSeconds
+                                              .toDouble()
+                                              .clamp(
+                                                  0.0, dur.inSeconds.toDouble()),
+                                          min: 0.0,
+                                          max: dur.inSeconds.toDouble() > 0
+                                              ? dur.inSeconds.toDouble()
+                                              : 1.0,
+                                          onChangeStart: (val) {
+                                            _isDragging = true;
+                                          },
+                                          onChanged: (val) {
+                                            final d =
+                                                Duration(seconds: val.toInt());
+                                            _currentPosition = d;
+                                            _positionNotifier.value = d;
+                                          },
+                                          onChangeEnd: (val) {
+                                            _isDragging = false;
+                                            player.seek(
+                                                Duration(seconds: val.toInt()));
+                                            _syncMediaSessionPlaybackState();
+                                          },
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                  // Timestamps + next episode row
+                                  Padding(
+                                    padding:
+                                        const EdgeInsets.symmetric(horizontal: 8),
+                                    child: Row(
+                                      children: [
+                                        // Play / pause, ringed by the loading
+                                        // spinner while opening/buffering
+                                        SizedBox(
+                                          width: 40,
+                                          height: 40,
+                                          child: Stack(
+                                            alignment: Alignment.center,
+                                            children: [
+                                              if (!_switchingQuality &&
+                                                  (_isMediaOpening ||
+                                                      _isBuffering))
+                                                const Positioned.fill(
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                    valueColor:
+                                                        AlwaysStoppedAnimation<
+                                                                Color>(
+                                                            AppTheme
+                                                                .primaryColor),
+                                                    strokeWidth: 2.5,
+                                                  ),
+                                                ),
+                                              IconButton(
+                                                onPressed: _playPause,
+                                                visualDensity:
+                                                    VisualDensity.compact,
+                                                padding: EdgeInsets.zero,
+                                                icon: Icon(
+                                                  _isPlaying
+                                                      ? Icons.pause_rounded
+                                                      : Icons
+                                                          .play_arrow_rounded,
                                                   color: Colors.white,
-                                                  fontSize: 12,
-                                                  fontWeight: FontWeight.w600),
-                                            ),
-                                            const SizedBox(width: 4),
-                                            Text(
-                                              '/ ${_formatDuration(_durationNotifier.value)}',
-                                              style: TextStyle(
-                                                  color: Colors.white
-                                                      .withOpacity(0.35),
-                                                  fontSize: 12),
-                                            ),
-                                          ],
+                                                  size: 24,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ),
-                                      ),
-                                      const Spacer(),
-                                      // Quality Selector Button
-                                      TextButton.icon(
-                                        style: TextButton.styleFrom(
-                                          backgroundColor:
-                                              Colors.white.withOpacity(0.08),
-                                          shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(6)),
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 12, vertical: 6),
+                                        const SizedBox(width: 4),
+                                        ListenableBuilder(
+                                          listenable: Listenable.merge([
+                                            _positionNotifier,
+                                            _durationNotifier
+                                          ]),
+                                          builder: (context, _) => Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                _formatDuration(
+                                                    _positionNotifier.value),
+                                                style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w600),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                '/ ${_formatDuration(_durationNotifier.value)}',
+                                                style: TextStyle(
+                                                    color: Colors.white
+                                                        .withOpacity(0.35),
+                                                    fontSize: 12),
+                                              ),
+                                            ],
+                                          ),
                                         ),
-                                        icon: const Icon(Icons.hd_rounded,
-                                            color: Colors.white, size: 18),
-                                        label: Text(
-                                          _currentStream.quality ?? '1080p',
-                                          style: const TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 11),
-                                        ),
-                                        onPressed: () {
-                                          _controlsTimer?.cancel();
-                                          setState(() {
-                                            _showSettingsPanel = true;
-                                            _settingsPanelInitialView =
-                                                'quality';
-                                          });
-                                        },
-                                      ),
-                                      const SizedBox(width: 12),
-                                      // Subtitle Selector Button
-                                      TextButton.icon(
-                                        style: TextButton.styleFrom(
-                                          backgroundColor:
-                                              Colors.white.withOpacity(0.08),
-                                          shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(6)),
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 12, vertical: 6),
-                                        ),
-                                        icon: Icon(Icons.subtitles_rounded,
-                                            color: _selectedSubtitle != null
-                                                ? AppTheme.primaryColor
-                                                : Colors.white,
-                                            size: 18),
-                                        label: Text(
-                                          _selectedSubtitle != null
-                                              ? _getLanguageName(
-                                                  _selectedSubtitle!.lang)
-                                              : (_isLoadingSubtitles
-                                                  ? 'Loading...'
-                                                  : 'Subtitles'),
-                                          style: const TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 11),
-                                        ),
-                                        onPressed: _isLoadingSubtitles
-                                            ? null
-                                            : () {
-                                                _controlsTimer?.cancel();
-                                                setState(() {
-                                                  _showSettingsPanel = true;
-                                                  _settingsPanelInitialView =
-                                                      'subtitles';
-                                                });
-                                              },
-                                      ),
-                                      if (widget.details.type == 'tv') ...[
-                                        const SizedBox(width: 12),
+                                        const Spacer(),
+                                        // Settings Button — quality, subtitles and video size
                                         TextButton.icon(
                                           style: TextButton.styleFrom(
                                             backgroundColor:
@@ -2072,55 +2360,85 @@ class _PlayerScreenState extends State<PlayerScreen>
                                             padding: const EdgeInsets.symmetric(
                                                 horizontal: 12, vertical: 6),
                                           ),
-                                          icon: const Icon(
-                                              Icons.grid_view_rounded,
-                                              color: Colors.white,
-                                              size: 16),
+                                          icon: const Icon(Icons.tune_rounded,
+                                              color: Colors.white, size: 18),
                                           label: const Text(
-                                            'Episodes',
+                                            'Settings',
                                             style: TextStyle(
                                                 color: Colors.white,
                                                 fontWeight: FontWeight.w600,
                                                 fontSize: 11),
                                           ),
-                                          onPressed: _openEpisodeBrowser,
+                                          onPressed: () {
+                                            _controlsTimer?.cancel();
+                                            setState(() {
+                                              _showSettingsPanel = true;
+                                              _settingsPanelInitialView = 'main';
+                                            });
+                                          },
                                         ),
-                                      ],
-                                      if (widget.details.type == 'tv') ...[
-                                        const SizedBox(width: 12),
-                                        TextButton.icon(
-                                          style: TextButton.styleFrom(
-                                            backgroundColor:
-                                                Colors.white.withOpacity(0.08),
-                                            shape: RoundedRectangleBorder(
-                                                borderRadius:
-                                                    BorderRadius.circular(6)),
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 12, vertical: 6),
+                                        if (widget.details.type == 'tv') ...[
+                                          const SizedBox(width: 12),
+                                          TextButton.icon(
+                                            style: TextButton.styleFrom(
+                                              backgroundColor:
+                                                  Colors.white.withOpacity(0.08),
+                                              shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(6)),
+                                              padding: const EdgeInsets.symmetric(
+                                                  horizontal: 12, vertical: 6),
+                                            ),
+                                            icon: const Icon(
+                                                Icons.grid_view_rounded,
+                                                color: Colors.white,
+                                                size: 16),
+                                            label: const Text(
+                                              'Episodes',
+                                              style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 11),
+                                            ),
+                                            onPressed: _openEpisodeBrowser,
                                           ),
-                                          icon: Icon(Icons.skip_next_rounded,
-                                              color: nextEpisodePlayable
-                                                  ? Colors.white
-                                                  : Colors.white38,
-                                              size: 18),
-                                          label: Text(
-                                            'Next Episode',
-                                            style: TextStyle(
+                                        ],
+                                        if (widget.details.type == 'tv') ...[
+                                          const SizedBox(width: 12),
+                                          TextButton.icon(
+                                            style: TextButton.styleFrom(
+                                              backgroundColor:
+                                                  Colors.white.withOpacity(0.08),
+                                              shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(6)),
+                                              padding: const EdgeInsets.symmetric(
+                                                  horizontal: 12, vertical: 6),
+                                            ),
+                                            icon: Icon(Icons.skip_next_rounded,
                                                 color: nextEpisodePlayable
                                                     ? Colors.white
                                                     : Colors.white38,
-                                                fontWeight: FontWeight.w600,
-                                                fontSize: 11),
+                                                size: 18),
+                                            label: Text(
+                                              'Next Episode',
+                                              style: TextStyle(
+                                                  color: nextEpisodePlayable
+                                                      ? Colors.white
+                                                      : Colors.white38,
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 11),
+                                            ),
+                                            onPressed: nextEpisodePlayable
+                                                ? _playNextEpisode
+                                                : null,
                                           ),
-                                          onPressed: nextEpisodePlayable
-                                              ? _playNextEpisode
-                                              : null,
-                                        ),
+                                        ],
                                       ],
-                                    ],
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ],
@@ -2131,31 +2449,39 @@ class _PlayerScreenState extends State<PlayerScreen>
               ),
             ),
 
-            // Layer 2: Episode Browser (outside overlay)
-            if (_showEpisodeDrawer && widget.movie.type == 'tv')
+            // Layer 2: Episode Browser (outside overlay) — stays mounted
+            // through the slide-down animation (see _episodeDrawerMounted's
+            // doc), rather than disappearing the instant a close is
+            // requested.
+            if (_episodeDrawerMounted && widget.movie.type == 'tv')
               Positioned.fill(
-                child: EpisodeBrowser(
-                  episodes: _episodes,
-                  seasons: widget.details.seasons,
-                  movie: widget.movie,
-                  details: widget.details,
-                  imdbId: widget.details.imdbId ?? widget.details.id,
-                  currentSeason: _browsingSeason ?? 1,
-                  playingSeason: _currentSeason ?? 1,
-                  playingEpisode: _currentEpisode ?? 1,
-                  resolver: _resolver,
-                  onSeasonChanged: _switchSeason,
-                  onClose: _closeEpisodeBrowser,
-                  onTorrentChosen: (ep, season, stream) {
-                    _pausedForEpisodeBrowser = false;
-                    setState(() => _showEpisodeDrawer = false);
-                    _playEpisodeWithChosenStream(ep, season, stream);
-                  },
-                  onWebPlayerChosen: (ep, season, provider) {
-                    _pausedForEpisodeBrowser = false;
-                    setState(() => _showEpisodeDrawer = false);
-                    _openWebPlayerForEpisode(ep, season, provider);
-                  },
+                child: SlideTransition(
+                  position: _episodeDrawerOffset,
+                  child: EpisodeBrowser(
+                    episodes: _episodes,
+                    seasons: widget.details.seasons,
+                    movie: widget.movie,
+                    details: widget.details,
+                    imdbId: widget.details.imdbId ?? widget.details.id,
+                    currentSeason: _browsingSeason ?? 1,
+                    playingSeason: _currentSeason ?? 1,
+                    playingEpisode: _currentEpisode ?? 1,
+                    resolver: _resolver,
+                    onSeasonChanged: _switchSeason,
+                    onClose: _closeEpisodeBrowser,
+                    onTorrentChosen: (ep, season, stream) {
+                      _pausedForEpisodeBrowser = false;
+                      setState(() => _showEpisodeDrawer = false);
+                      _animateEpisodeDrawerClosed();
+                      _playEpisodeWithChosenStream(ep, season, stream);
+                    },
+                    onWebPlayerChosen: (ep, season, provider) {
+                      _pausedForEpisodeBrowser = false;
+                      setState(() => _showEpisodeDrawer = false);
+                      _animateEpisodeDrawerClosed();
+                      _openWebPlayerForEpisode(ep, season, provider);
+                    },
+                  ),
                 ),
               ),
 
@@ -2175,6 +2501,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                   onStreamSelected: (stream) {
                     _switchQuality(stream);
                   },
+                  videoFit: _videoFit,
+                  onVideoFitSelected: _selectVideoFit,
                   initialView: _settingsPanelInitialView,
                   onClose: () => setState(() {
                     _showSettingsPanel = false;

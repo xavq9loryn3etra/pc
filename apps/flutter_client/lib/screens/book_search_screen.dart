@@ -5,6 +5,9 @@ import '../services/books_service.dart';
 import '../widgets/book_card.dart';
 import 'book_details_screen.dart';
 import '../widgets/custom_loader.dart';
+import '../widgets/screen_scaffold.dart';
+import '../widgets/floating_bottom_nav_bar.dart';
+import '../services/movie_tab_service.dart';
 
 class BookSearchScreen extends StatefulWidget {
   const BookSearchScreen({super.key});
@@ -26,14 +29,20 @@ class _BookSearchScreenState extends State<BookSearchScreen> {
   @override
   void initState() {
     super.initState();
-    // Auto-focus the search field
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    MovieTabService().currentTab.addListener(_onActiveTabChanged);
+  }
+
+  void _onActiveTabChanged() {
+    if (MovieTabService().currentTab.value == BottomNavTab.search) {
       _focusNode.requestFocus();
-    });
+    } else {
+      _focusNode.unfocus();
+    }
   }
 
   @override
   void dispose() {
+    MovieTabService().currentTab.removeListener(_onActiveTabChanged);
     _searchController.dispose();
     _focusNode.dispose();
     _debounce?.cancel();
@@ -94,39 +103,48 @@ class _BookSearchScreenState extends State<BookSearchScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        title: TextField(
-          controller: _searchController,
-          focusNode: _focusNode,
-          onChanged: _onSearchChanged,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
-            hintText: "Search books, authors, ISBNs...",
-            hintStyle: TextStyle(color: Colors.white54),
-            border: InputBorder.none,
-          ),
-        ),
-        iconTheme: const IconThemeData(color: Colors.white),
-        actions: [
-          if (_isLoading)
-            const Padding(
-              padding: EdgeInsets.only(right: 16.0),
-              child: SizedBox(
-                width: 24,
-                height: 24,
-                child: CustomLoader(size: 24),
-              ),
-            ),
-        ],
+    return ScreenScaffold(
+      bottomNavTab: BottomNavTab.search,
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back, color: Colors.white),
+        onPressed: () =>
+            MovieTabService().currentTab.value = BottomNavTab.home,
       ),
-      body: _buildBody(),
+      title: TextField(
+        controller: _searchController,
+        focusNode: _focusNode,
+        onChanged: _onSearchChanged,
+        style: const TextStyle(color: Colors.white, fontSize: 18),
+        decoration: const InputDecoration(
+          hintText: "Search books, authors, ISBNs...",
+          hintStyle: TextStyle(color: Colors.white54),
+          border: InputBorder.none,
+        ),
+      ),
+      actions: [
+        if (_isLoading)
+          const Padding(
+            padding: EdgeInsets.only(right: 16.0),
+            child: SizedBox(
+              width: 24,
+              height: 24,
+              child: CustomLoader(size: 24),
+            ),
+          )
+        else if (_searchController.text.isNotEmpty)
+          IconButton(
+            icon: const Icon(Icons.clear, color: Colors.white54),
+            onPressed: () {
+              _searchController.clear();
+              _onSearchChanged('');
+            },
+          ),
+      ],
+      body: (context, isDesktop, padding) => _buildBody(padding),
     );
   }
 
-  Widget _buildBody() {
+  Widget _buildBody(EdgeInsets padding) {
     if (_errorMessage != null) {
       return Center(
         child: Text(
@@ -138,7 +156,6 @@ class _BookSearchScreenState extends State<BookSearchScreen> {
 
     if (_searchResults.isEmpty) {
       if (_searchController.text.isNotEmpty && !_isLoading) {
-        // Handled by errorMessage usually, but double check
         return const Center(
           child: Text("Use the search bar to find books",
               style: TextStyle(color: Colors.white24)),
@@ -158,9 +175,9 @@ class _BookSearchScreenState extends State<BookSearchScreen> {
     }
 
     return GridView.builder(
-      padding: const EdgeInsets.all(16),
+      padding: padding.copyWith(top: 16, left: 16, right: 16),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3, // Adjust based on screen width ideally
+        crossAxisCount: 3,
         childAspectRatio: 0.45,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
@@ -171,8 +188,7 @@ class _BookSearchScreenState extends State<BookSearchScreen> {
         return BookCard(
           book: book,
           onTap: () => _navigateToDetails(book),
-          width: double.infinity, // Fill grid cell width
-          // height: defaults to 180, which fits with aspect ratio 0.45
+          width: double.infinity,
         );
       },
     );

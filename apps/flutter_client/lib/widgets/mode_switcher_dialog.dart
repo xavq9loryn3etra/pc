@@ -1,6 +1,5 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:flutter_client/theme/app_theme.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
@@ -13,7 +12,7 @@ void showModeSwitcherDialog(BuildContext context) {
     context: context,
     barrierDismissible: true,
     barrierLabel: 'Dismiss',
-    barrierColor: Colors.black.withOpacity(0.5),
+    barrierColor: Colors.black.withValues(alpha: 0.5),
     transitionDuration: const Duration(milliseconds: 300),
     pageBuilder: (context, animation, secondaryAnimation) {
       return Stack(
@@ -66,7 +65,7 @@ class ModeSwitcherDialog extends StatelessWidget {
           decoration: BoxDecoration(
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.25),
+                color: Colors.black.withValues(alpha: 0.25),
                 blurRadius: 40,
                 spreadRadius: 4,
                 offset: const Offset(0, 12),
@@ -77,7 +76,7 @@ class ModeSwitcherDialog extends StatelessWidget {
             borderRadius:
                 const BorderRadius.vertical(bottom: Radius.circular(24)),
             child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
               child: Container(
                 width: double.infinity,
                 padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
@@ -86,7 +85,7 @@ class ModeSwitcherDialog extends StatelessWidget {
                     bottom: Radius.circular(24),
                   ),
                   border: Border.all(
-                    color: Colors.white.withOpacity(0.08), // subtle border
+                    color: Colors.white.withValues(alpha: 0.08),
                     width: 1,
                   ),
                 ),
@@ -101,7 +100,7 @@ class ModeSwitcherDialog extends StatelessWidget {
                             Theme.of(context).textTheme.titleMedium?.copyWith(
                                   color: Colors.white70,
                                   fontWeight: FontWeight.w500,
-                                ),
+                                  ),
                       ),
                       const SizedBox(height: 24),
                       LayoutBuilder(
@@ -116,23 +115,25 @@ class ModeSwitcherDialog extends StatelessWidget {
                                 isSvg: true,
                                 size: 32.0,
                                 label: "Popcorn",
-                                color: AppTheme.primaryColor,
+                                color: AppMode.movies.accentColor,
                               ),
                               _buildModeOption(
                                 context,
                                 mode: AppMode.music,
-                                assetPath: 'assets/music-app-logo.png',
-                                isSvg: false,
+                                assetPath: 'assets/music-app-logo.svg',
+                                isSvg: true,
+                                size: 32.0,
                                 label: "Groovy",
-                                color: AppTheme.primaryColor,
+                                color: AppMode.music.accentColor,
                               ),
                               _buildModeOption(
                                 context,
                                 mode: AppMode.books,
-                                assetPath: 'assets/book-app-logo.png',
-                                isSvg: false,
+                                assetPath: 'assets/book-app-logo.svg',
+                                isSvg: true,
+                                size: 32.0,
                                 label: "Library",
-                                color: AppTheme.primaryColor,
+                                color: AppMode.books.accentColor,
                               ),
                             ],
                           );
@@ -185,13 +186,24 @@ class ModeSwitcherDialog extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 12),
               decoration: BoxDecoration(
                 color: isSelected
-                    ? Colors.white.withOpacity(0.1)
+                    ? color.withValues(alpha: 0.15)
                     : Colors.transparent,
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                  color: isSelected ? Colors.white24 : Colors.transparent,
-                  width: 1,
+                  color: isSelected
+                      ? color.withValues(alpha: 0.5)
+                      : Colors.transparent,
+                  width: 1.5,
                 ),
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: color.withValues(alpha: 0.2),
+                          blurRadius: 16,
+                          spreadRadius: 1,
+                        ),
+                      ]
+                    : [],
               ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -227,7 +239,7 @@ class ModeSwitcherDialog extends StatelessWidget {
                   Text(
                     label,
                     style: TextStyle(
-                      color: isSelected ? Colors.white : Colors.white60,
+                      color: isSelected ? color : Colors.white60,
                       fontWeight:
                           isSelected ? FontWeight.bold : FontWeight.normal,
                       fontSize: 13,

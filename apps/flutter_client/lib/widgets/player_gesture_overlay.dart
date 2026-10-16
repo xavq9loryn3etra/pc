@@ -14,6 +14,11 @@ import 'package:screen_brightness/screen_brightness.dart';
 class PlayerGestureOverlay extends StatefulWidget {
   final Widget child;
   final VoidCallback? onTap;
+
+  /// Like [onTap], but with where the tap landed (global coordinates), for
+  /// callers that act differently depending on the area tapped. Called
+  /// instead of [onTap] when set.
+  final ValueChanged<Offset>? onTapAt;
   final VoidCallback? onSwipeUp;
   final ValueChanged<bool>? onDoubleTapSeek;
   
@@ -25,6 +30,7 @@ class PlayerGestureOverlay extends StatefulWidget {
     super.key,
     required this.child,
     this.onTap,
+    this.onTapAt,
     this.onSwipeUp,
     this.onDoubleTapSeek,
     this.enabled = true,
@@ -37,7 +43,7 @@ class PlayerGestureOverlay extends StatefulWidget {
 enum _GestureType { none, volume, brightness }
 
 class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   _GestureType _activeGesture = _GestureType.none;
   double _currentValue = 0.0;
   double _startValue = 0.0;
@@ -57,9 +63,26 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   // Double tap seeking state variables
   DateTime? _lastTapTime;
   Offset? _lastTapPosition;
-  bool _showLeftSeekIndicator = false;
-  bool _showRightSeekIndicator = false;
-  int _seekOverlayPulseCount = 0;
+
+  // Seek streak: after a double tap, every further tap on the same side
+  // within [_seekStreakWindow] seeks another 10s (YouTube-style), instead
+  // of needing a fresh double tap each time.
+  static const _seekStreakWindow = Duration(milliseconds: 700);
+  static const _seekStepSeconds = 10;
+  bool? _seekForward; // side of the active feedback; null when hidden
+  int _seekTaps = 0;
+  DateTime? _lastSeekTapTime;
+  Offset _rippleOrigin = Offset.zero; // in the feedback region's coordinates
+  Timer? _seekHideTimer;
+  late final AnimationController _seekFade = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 150),
+    reverseDuration: const Duration(milliseconds: 300),
+  );
+  late final AnimationController _ripple = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 450),
+  );
 
   @override
   void initState() {
@@ -74,6 +97,9 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   @override
   void dispose() {
     _fadeTimer?.cancel();
+    _seekHideTimer?.cancel();
+    _seekFade.dispose();
+    _ripple.dispose();
     _fadeController.dispose();
     _currentValueNotifier.dispose();
     VolumeController.instance.showSystemUI = true;
@@ -84,29 +110,45 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
     super.dispose();
   }
 
-  void _triggerDoubleTapAnimation(bool isForward) {
+  /// Region of the screen the seek feedback covers on each side.
+  double _seekRegionWidth(Size size) => size.width * 0.4;
+
+  /// One seek step: tells the player, then shows/extends the feedback with
+  /// a fresh ripple from the tap point.
+  void _seek(bool isForward, Offset localTap) {
+    widget.onDoubleTapSeek?.call(isForward);
+
+    final size = MediaQuery.of(context).size;
+    final regionLeft = isForward ? size.width - _seekRegionWidth(size) : 0.0;
     setState(() {
-      if (isForward) {
-        _showRightSeekIndicator = true;
-        _showLeftSeekIndicator = false;
-      } else {
-        _showLeftSeekIndicator = true;
-        _showRightSeekIndicator = false;
-      }
-      _seekOverlayPulseCount++;
+      // Switching sides starts the count over
+      if (_seekForward != isForward) _seekTaps = 0;
+      _seekForward = isForward;
+      _seekTaps++;
+      _rippleOrigin = localTap - Offset(regionLeft, 0);
     });
-    
-    final currentPulse = _seekOverlayPulseCount;
-    // Pulse animation/fade-out after 650ms
-    Future.delayed(const Duration(milliseconds: 650), () {
-      if (mounted && _seekOverlayPulseCount == currentPulse) {
-        setState(() {
-          _showLeftSeekIndicator = false;
-          _showRightSeekIndicator = false;
-        });
-      }
+    _lastSeekTapTime = DateTime.now();
+    _ripple.forward(from: 0);
+    _seekFade.forward();
+
+    _seekHideTimer?.cancel();
+    _seekHideTimer = Timer(_seekStreakWindow, () {
+      _lastSeekTapTime = null;
+      if (!mounted) return;
+      _seekFade.reverse().then((_) {
+        if (mounted && !_seekFade.isAnimating && _seekFade.value == 0) {
+          setState(() {
+            _seekForward = null;
+            _seekTaps = 0;
+          });
+        }
+      });
     });
   }
+
+  bool _isInSeekStreak(DateTime now) =>
+      _lastSeekTapTime != null &&
+      now.difference(_lastSeekTapTime!) < _seekStreakWindow;
 
   // ───────────────── Pointer Handlers ─────────────────
 
@@ -228,25 +270,31 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
     if (!_isDragging && _pointerStart != null && !_isBottomEdgeSwipe) {
       final now = DateTime.now();
       final tapPos = event.position;
+      final screenWidth = MediaQuery.of(context).size.width;
+      final isForward = tapPos.dx > screenWidth / 2;
 
-      if (_lastTapTime != null && 
+      if (_isInSeekStreak(now) && isForward == _seekForward) {
+        // Continuing a seek streak on the same side: another 10s, and no
+        // single-tap action (it isn't a play/pause tap).
+        _seek(isForward, event.localPosition);
+        _lastTapTime = null;
+      } else if (_lastTapTime != null &&
           now.difference(_lastTapTime!) < const Duration(milliseconds: 320) &&
           _lastTapPosition != null &&
           (tapPos - _lastTapPosition!).distance < 35.0) {
-        // Registered a beautiful double tap!
-        final screenWidth = MediaQuery.of(context).size.width;
-        final isForward = tapPos.dx > screenWidth / 2;
-
-        widget.onDoubleTapSeek?.call(isForward);
-        _triggerDoubleTapAnimation(isForward);
-
+        // Registered a double tap — starts a seek streak.
+        _seek(isForward, event.localPosition);
         _lastTapTime = null; // Avoid triple taps triggering immediately again
       } else {
         _lastTapTime = now;
         _lastTapPosition = tapPos;
 
         // Perform standard single-tap overlay toggle
-        widget.onTap?.call();
+        if (widget.onTapAt != null) {
+          widget.onTapAt!(tapPos);
+        } else {
+          widget.onTap?.call();
+        }
       }
     }
 
@@ -292,111 +340,70 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
           // The actual content (Video + custom controls)
           Positioned.fill(child: widget.child),
 
-          // Left Double Tap Seek Overlay
-          if (_showLeftSeekIndicator)
+          // Double-tap seek feedback: a tinted curved region on the tapped
+          // side, a ripple from the finger, chasing arrows and the running
+          // total. Fades in/out; each further tap in the streak re-ripples
+          // and bumps the total.
+          if (_seekForward != null)
             Positioned(
-              left: 0,
+              left: _seekForward! ? null : 0,
+              right: _seekForward! ? 0 : null,
               top: 0,
               bottom: 0,
-              width: size.width * 0.35,
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: ClipPath(
-                      clipper: LeftArcClipper(),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          gradient: RadialGradient(
-                            center: Alignment.centerLeft,
-                            radius: 1.0,
-                            colors: [
-                              Colors.white.withValues(alpha: 0.12),
-                              Colors.white.withValues(alpha: 0.0),
-                            ],
+              width: _seekRegionWidth(size),
+              child: IgnorePointer(
+                child: FadeTransition(
+                  opacity: _seekFade,
+                  child: ClipPath(
+                    clipper: _SeekRegionClipper(isForward: _seekForward!),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        ColoredBox(
+                            color: Colors.white.withValues(alpha: 0.1)),
+                        AnimatedBuilder(
+                          animation: _ripple,
+                          builder: (context, _) => CustomPaint(
+                            painter: _RipplePainter(
+                              origin: _rippleOrigin,
+                              progress: _ripple.value,
+                            ),
                           ),
                         ),
-                      ),
-                    ),
-                  ),
-                  Align(
-                    alignment: Alignment.center,
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 16.0), // push slightly away from center line
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const _DoubleTapArrows(isForward: false),
-                          const SizedBox(height: 8),
-                          const Text(
-                            '10 seconds',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              shadows: [
-                                Shadow(color: Colors.black54, blurRadius: 4),
+                        Center(
+                          child: Padding(
+                            // Nudge the label away from the region's
+                            // curved edge, towards the screen edge.
+                            padding: EdgeInsets.only(
+                              left: _seekForward! ? 24 : 0,
+                              right: _seekForward! ? 0 : 24,
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _DoubleTapArrows(isForward: _seekForward!),
+                                const SizedBox(height: 6),
+                                Text(
+                                  '${_seekTaps * _seekStepSeconds} seconds',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    shadows: [
+                                      Shadow(
+                                          color: Colors.black54,
+                                          blurRadius: 4),
+                                    ],
+                                  ),
+                                ),
                               ],
                             ),
                           ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-          // Right Double Tap Seek Overlay
-          if (_showRightSeekIndicator)
-            Positioned(
-              right: 0,
-              top: 0,
-              bottom: 0,
-              width: size.width * 0.35,
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: ClipPath(
-                      clipper: RightArcClipper(),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          gradient: RadialGradient(
-                            center: Alignment.centerRight,
-                            radius: 1.0,
-                            colors: [
-                              Colors.white.withValues(alpha: 0.12),
-                              Colors.white.withValues(alpha: 0.0),
-                            ],
-                          ),
                         ),
-                      ),
+                      ],
                     ),
                   ),
-                  Align(
-                    alignment: Alignment.center,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 16.0), // push slightly away from center line
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const _DoubleTapArrows(isForward: true),
-                          const SizedBox(height: 8),
-                          const Text(
-                            '10 seconds',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              shadows: [
-                                Shadow(color: Colors.black54, blurRadius: 4),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
 
@@ -491,41 +498,51 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
 
 // ───────────────── Custom Clippers ─────────────────
 
-class LeftArcClipper extends CustomClipper<Path> {
+/// The seek feedback region: the screen-edge side of a tall ellipse, so its
+/// inner edge is a gentle curve bulging towards the centre of the screen.
+class _SeekRegionClipper extends CustomClipper<Path> {
+  final bool isForward;
+
+  _SeekRegionClipper({required this.isForward});
+
   @override
   Path getClip(Size size) {
-    final path = Path();
-    path.lineTo(0, size.height);
-    path.quadraticBezierTo(
-      size.width,
-      size.height * 0.5,
-      0,
-      0,
-    );
-    return path;
+    final w = size.width, h = size.height;
+    return Path()
+      ..addOval(Rect.fromLTRB(
+        isForward ? 0 : -w,
+        -h * 0.3,
+        isForward ? w * 2 : w,
+        h * 1.3,
+      ));
   }
 
   @override
-  bool shouldReclip(CustomClipper<Path> oldClipper) => false;
+  bool shouldReclip(_SeekRegionClipper oldClipper) =>
+      oldClipper.isForward != isForward;
 }
 
-class RightArcClipper extends CustomClipper<Path> {
+/// A soft circle expanding and fading out from the tap point.
+class _RipplePainter extends CustomPainter {
+  final Offset origin;
+  final double progress;
+
+  _RipplePainter({required this.origin, required this.progress});
+
   @override
-  Path getClip(Size size) {
-    final path = Path();
-    path.moveTo(size.width, 0);
-    path.lineTo(size.width, size.height);
-    path.quadraticBezierTo(
-      0,
-      size.height * 0.5,
-      size.width,
-      0,
+  void paint(Canvas canvas, Size size) {
+    if (progress <= 0 || progress >= 1) return;
+    final eased = Curves.easeOutCubic.transform(progress);
+    canvas.drawCircle(
+      origin,
+      size.width * 0.9 * eased,
+      Paint()..color = Colors.white.withValues(alpha: 0.2 * (1 - progress)),
     );
-    return path;
   }
 
   @override
-  bool shouldReclip(CustomClipper<Path> oldClipper) => false;
+  bool shouldRepaint(_RipplePainter old) =>
+      old.progress != progress || old.origin != origin;
 }
 
 // ───────────────── Chasing Double-Tap Arrows Animation ─────────────────

@@ -1,11 +1,10 @@
 class ScraperService {
-  // VidKing URL Generation
   String getEmbedUrl(
     String tmdbId, {
     int? season,
     int? episode,
     String? imdbId,
-    String provider = 'vidking',
+    String provider = '2embed',
   }) {
     final primaryColor = 'FDEDAD'; // Match existing app theme
 
@@ -17,10 +16,14 @@ class ScraperService {
     }
 
     if (provider == 'moviesapi') {
+      // moviesapi.club is dead (NXDOMAIN as of Aug 2026) — the service
+      // moved to moviesapi.to, which also switched its TV path from
+      // hyphens to slashes (confirmed: the old hyphenated path 301s to
+      // this one on the new domain).
       if (season != null && episode != null) {
-        return 'https://moviesapi.club/tv/$tmdbId-$season-$episode';
+        return 'https://moviesapi.to/tv/$tmdbId/$season/$episode';
       }
-      return 'https://moviesapi.club/movie/$tmdbId';
+      return 'https://moviesapi.to/movie/$tmdbId';
     }
 
     if (provider == 'vsembed') {
@@ -30,19 +33,28 @@ class ScraperService {
       return 'https://vsembed.ru/embed/movie?tmdb=$tmdbId';
     }
 
-    // Default: VidKing, or explicit 'vidking'
-    // VidKing also supports IMDB: https://vidking.net/embed/imdb/{imdb_id}
-    // Prefer IMDB if available for better mapping accuracy
-    if (imdbId != null && (season == null || episode == null)) {
-      // Logic for movie with IMDB
-      return 'https://vidking.net/embed/imdb/$imdbId?color=$primaryColor';
-    }
-
-    // Fallback to TMDB
+    // Default: 2embed, or explicit '2embed'. Replaces the old default,
+    // vidking.net, which as of Aug 2026 is dead — its whole domain
+    // (including the homepage) returns a broken Google-infrastructure
+    // error page, not just a stale URL format like moviesapi.club above.
+    //
+    // Domain is 2embed.skin, NOT 2embed.cc — .cc's own page only works
+    // when actually loaded inside an iframe; loaded as the top-level
+    // document (exactly what happens when the WebView opens this URL
+    // directly), its JS checks `window === window.top` and immediately
+    // self-redirects to .skin, which the WebView's navigation whitelist
+    // then blocks as an unrecognized host, leaving a blank screen. .skin
+    // is the real destination and loads directly with no such check.
+    //
+    // Both /embed and /embedtv paths accept either a TMDB or an IMDB id
+    // interchangeably (confirmed against both), so — unlike vidking —
+    // there's no separate IMDB-specific path; just prefer whichever id
+    // we have.
+    final id = imdbId ?? tmdbId;
     if (season != null && episode != null) {
-      return 'https://vidking.net/embed/tv/$tmdbId/$season/$episode?color=$primaryColor';
+      return 'https://www.2embed.skin/embedtv/$id?s=$season&e=$episode';
     }
-    return 'https://vidking.net/embed/movie/$tmdbId?color=$primaryColor';
+    return 'https://www.2embed.skin/movie/$id';
   }
 
   // Legacy Future for backward compat if needed, but we prefer direct String for embeds

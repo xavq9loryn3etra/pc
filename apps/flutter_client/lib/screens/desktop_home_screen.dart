@@ -478,7 +478,9 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
             ClipRRect(
               borderRadius: BorderRadius.circular(4),
               child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                // See mode_switcher_dialog.dart's comment — lower sigma to
+                // cut GPU cost on weaker/high-refresh-rate devices.
+                filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                 child: ElevatedButton.icon(
                   onPressed: () => _onMovieSelect(widget.featuredMovie),
                   icon: const Icon(Icons.info_outline, color: Colors.white),

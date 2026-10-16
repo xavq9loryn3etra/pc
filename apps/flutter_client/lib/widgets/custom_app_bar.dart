@@ -103,9 +103,13 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
       flexibleSpace: opacity > 0.01
           ? ClipRect(
               child: BackdropFilter(
+                // Lower peak sigma than the original 20 — this blur is live
+                // while scrolling (recomputed every frame), the single
+                // highest-frequency BackdropFilter use in the app, so its
+                // cost matters most. See mode_switcher_dialog.dart's comment.
                 filter: ImageFilter.blur(
-                  sigmaX: 20 * opacity,
-                  sigmaY: 20 * opacity,
+                  sigmaX: 10 * opacity,
+                  sigmaY: 10 * opacity,
                 ),
                 child: Container(
                   color: Colors.black.withOpacity(

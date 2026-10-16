@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 
-import '../services/tmdb_service.dart';
-import '../services/books_service.dart';
 import '../theme/app_theme.dart';
 
 class WelcomeScreen extends StatefulWidget {
@@ -17,50 +14,39 @@ class WelcomeScreen extends StatefulWidget {
 
 class _WelcomeScreenState extends State<WelcomeScreen>
     with TickerProviderStateMixin {
-  // Hardcoded fallbacks — shown instantly, replaced silently if API responds
-  // Using w185 and -M.jpg sizes to dramatically speed up network load
-  static const _fallbackMoviePosters = [
-    'https://image.tmdb.org/t/p/w185/8cdWjvZQUExUUTzyp4t6EDMubfO.jpg',
-    'https://image.tmdb.org/t/p/w185/hZkgoQYus5dXo3H8T7CYV502Nmc.jpg',
-    'https://image.tmdb.org/t/p/w185/wWba3TaojhK7NdB0PiSfiy0JGUq.jpg',
-    'https://image.tmdb.org/t/p/w185/rktDFPbfHfUbArZ6OOOKsXcv0Bm.jpg',
-    'https://image.tmdb.org/t/p/w185/4m1Au3YkjqsxF8iwQy0fPYSxDSf.jpg',
-    'https://image.tmdb.org/t/p/w185/vpnVM9B6NMmQpWeZvzLvDESb2QY.jpg',
-    'https://image.tmdb.org/t/p/w185/ym1dxyOk4jFcSl4Q2zmRrA5BEEN.jpg',
-    'https://image.tmdb.org/t/p/w185/gKkl37BQuKTanygYQG1pyYgLVgf.jpg',
-    'https://image.tmdb.org/t/p/w185/xRWht48C2V8XNfzvPehyClOvDnI.jpg',
-    'https://image.tmdb.org/t/p/w185/6FfCtHgWpGLI7BzYQscykoHGOQn.jpg',
+  // Bundled curated local assets for instant, zero-latency offline loading
+  static const _movieAssets = [
+    'assets/welcome/movies/movie_1.jpg',
+    'assets/welcome/movies/movie_2.jpg',
+    'assets/welcome/movies/movie_3.jpg',
+    'assets/welcome/movies/movie_4.jpg',
+    'assets/welcome/movies/movie_5.jpg',
+    'assets/welcome/movies/movie_6.jpg',
+    'assets/welcome/movies/movie_7.jpg',
+    'assets/welcome/movies/movie_8.jpg',
   ];
 
-  static const _fallbackMusicCovers = [
-    'https://coverartarchive.org/release/b84ee12a-09ef-421b-82de-b9cc1e0e9d17/front-250', // Thriller - Michael Jackson
-    'https://coverartarchive.org/release/a4864e94-6d75-4ade-bc93-0b389f85a2a8/front-250', // Abbey Road - Beatles
-    'https://coverartarchive.org/release/17e5e955-1c39-4b48-be6b-decf6d695cd0/front-250', // Dark Side of the Moon - Pink Floyd
-    'https://coverartarchive.org/release/0b2835d5-75ef-4c25-8b4a-a7b0e1153974/front-250', // Back in Black - AC/DC
-    'https://coverartarchive.org/release/e8c8bbf8-15c1-477f-af5b-2c1479af037e/front-250', // Rumours - Fleetwood Mac
-    'https://coverartarchive.org/release/4e7e09c6-5e82-4cfc-8e00-7e8a3b3e8602/front-250', // 21 - Adele
-    'https://coverartarchive.org/release/375d75a4-744d-3d59-95ea-f712d8e2db87/front-250', // Nevermind - Nirvana
-    'https://coverartarchive.org/release/b3b7e934-445b-4c68-a097-730c6a6d47e5/front-250', // Random Access Memories - Daft Punk
-    'https://coverartarchive.org/release/cadd3eb7-86a6-3ff0-9e72-9d5273ada4a5/front-250', // Born to Run - Springsteen
-    'https://coverartarchive.org/release/1b022e01-4da6-387b-8658-8678046e4cef/front-250', // OK Computer - Radiohead
+  static const _musicAssets = [
+    'assets/welcome/music/music_1.jpg',
+    'assets/welcome/music/music_2.jpg',
+    'assets/welcome/music/music_3.jpg',
+    'assets/welcome/music/music_4.jpg',
+    'assets/welcome/music/music_5.jpg',
+    'assets/welcome/music/music_6.jpg',
+    'assets/welcome/music/music_7.jpg',
+    'assets/welcome/music/music_8.jpg',
   ];
 
-  static const _fallbackBookCovers = [
-    'https://covers.openlibrary.org/b/id/14845137-M.jpg',
-    'https://covers.openlibrary.org/b/id/14829188-M.jpg',
-    'https://covers.openlibrary.org/b/id/14807828-M.jpg',
-    'https://covers.openlibrary.org/b/id/14313084-M.jpg',
-    'https://covers.openlibrary.org/b/id/14350216-M.jpg',
-    'https://covers.openlibrary.org/b/id/13269612-M.jpg',
-    'https://covers.openlibrary.org/b/id/12818673-M.jpg',
-    'https://covers.openlibrary.org/b/id/14573bindery-M.jpg',
-    'https://covers.openlibrary.org/b/id/12547191-M.jpg',
-    'https://covers.openlibrary.org/b/id/10521270-M.jpg',
+  static const _bookAssets = [
+    'assets/welcome/books/book_1.jpg',
+    'assets/welcome/books/book_2.jpg',
+    'assets/welcome/books/book_3.jpg',
+    'assets/welcome/books/book_4.jpg',
+    'assets/welcome/books/book_5.jpg',
+    'assets/welcome/books/book_6.jpg',
+    'assets/welcome/books/book_7.jpg',
+    'assets/welcome/books/book_8.jpg',
   ];
-
-  late List<String> _moviePosters;
-  late List<String> _musicCovers;
-  late List<String> _bookCovers;
 
   // Fade-in animation
   late AnimationController _fadeController;
@@ -69,10 +55,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   @override
   void initState() {
     super.initState();
-
-    _moviePosters = List.from(_fallbackMoviePosters);
-    _musicCovers = List.from(_fallbackMusicCovers);
-    _bookCovers = List.from(_fallbackBookCovers);
 
     _fadeController = AnimationController(
       vsync: this,
@@ -86,37 +68,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _fadeController.forward();
     });
-
-    _loadTrendingData();
-  }
-
-  Future<void> _loadTrendingData() async {
-    try {
-      final tmdb = TMDBService();
-      final trendingMovies = await tmdb.getTrending();
-      final movieUrls = trendingMovies
-          .where((m) => m.image != null)
-          .take(10)
-          .map((m) => m.image!.replaceAll('w500', 'w185'))
-          .toList();
-
-      final booksService = BooksService();
-      final trendingBooks = await booksService.getTrendingBooks();
-      final bookUrls = trendingBooks
-          .where((b) => b.coverUrl != null)
-          .take(10)
-          .map((b) => b.coverUrl!.replaceAll('-L.jpg', '-M.jpg'))
-          .toList();
-
-      if (mounted) {
-        setState(() {
-          if (movieUrls.isNotEmpty) _moviePosters = movieUrls;
-          if (bookUrls.isNotEmpty) _bookCovers = bookUrls;
-        });
-      }
-    } catch (e) {
-      print('Welcome screen data load error: $e');
-    }
   }
 
   @override
@@ -125,36 +76,43 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     super.dispose();
   }
 
-  List<String> _getUrlsForRow(int rowIndex) {
+  List<String> _getAssetsForRow(int rowIndex) {
     switch (rowIndex % 3) {
       case 0:
-        return _moviePosters;
+        return _bookAssets;
       case 1:
-        return _musicCovers;
+        return _musicAssets;
       case 2:
-        return _bookCovers;
+        return _movieAssets;
       default:
-        return _moviePosters;
+        return _bookAssets;
     }
   }
 
   Widget _buildRow(int rowIndex) {
-    final urls = _getUrlsForRow(rowIndex);
-    if (urls.isEmpty) return const SizedBox.shrink();
+    final assets = _getAssetsForRow(rowIndex);
+    if (assets.isEmpty) return const SizedBox.shrink();
 
+    final isMusic = (rowIndex % 3 == 1);
     final scrollRight = rowIndex.isEven;
-    final speed = 1.0 + (rowIndex * 0.15); 
+    final speed = 1.0 + (rowIndex * 0.15);
+
+    // Music uses 1:1 square aspect ratio; movies and books use ~2:3 portrait
+    final double itemWidth = isMusic ? 135.0 : 105.0;
+    final double itemHeight = isMusic ? 135.0 : 155.0;
 
     return _ScrollingRow(
-      imageUrls: urls,
+      imageAssets: assets,
       scrollRight: scrollRight,
       speed: speed,
+      itemWidth: itemWidth,
+      itemHeight: itemHeight,
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    const rowCount = 6; 
+    const rowCount = 6;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -192,10 +150,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    Colors.black.withOpacity(0.3),
-                    Colors.black.withOpacity(0.1),
-                    Colors.black.withOpacity(0.6),
-                    Colors.black.withOpacity(0.95),
+                    Colors.black.withValues(alpha: 0.3),
+                    Colors.black.withValues(alpha: 0.1),
+                    Colors.black.withValues(alpha: 0.6),
+                    Colors.black.withValues(alpha: 0.95),
                     Colors.black,
                   ],
                   stops: const [0.0, 0.2, 0.55, 0.75, 0.9],
@@ -211,7 +169,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             child: FadeTransition(
               opacity: _fadeAnimation,
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -249,7 +208,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 14,
-                        color: Colors.white.withOpacity(0.6),
+                        color: Colors.white.withValues(alpha: 0.6),
                         height: 1.5,
                       ),
                     ),
@@ -289,14 +248,18 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 }
 
 class _ScrollingRow extends StatefulWidget {
-  final List<String> imageUrls;
+  final List<String> imageAssets;
   final bool scrollRight;
   final double speed;
+  final double itemWidth;
+  final double itemHeight;
 
   const _ScrollingRow({
-    required this.imageUrls,
+    required this.imageAssets,
     required this.scrollRight,
     required this.speed,
+    required this.itemWidth,
+    required this.itemHeight,
   });
 
   @override
@@ -310,7 +273,7 @@ class _ScrollingRowState extends State<_ScrollingRow>
   @override
   void initState() {
     super.initState();
-    final durationMs = (30000 / widget.speed).round();
+    final durationMs = (85000 / widget.speed).round();
     _controller = AnimationController(
       vsync: this,
       duration: Duration(milliseconds: durationMs),
@@ -325,14 +288,14 @@ class _ScrollingRowState extends State<_ScrollingRow>
 
   @override
   Widget build(BuildContext context) {
-    if (widget.imageUrls.isEmpty) return const SizedBox.shrink();
+    if (widget.imageAssets.isEmpty) return const SizedBox.shrink();
 
-    // 110 width + 8 total horizontal margin
-    const double itemWidth = 118.0; 
-    final double setWidth = itemWidth * widget.imageUrls.length;
+    // itemWidth + 8 total horizontal margin
+    final double totalItemWidth = widget.itemWidth + 8.0;
+    final double setWidth = totalItemWidth * widget.imageAssets.length;
 
     return SizedBox(
-      height: 160,
+      height: widget.itemHeight,
       child: AnimatedBuilder(
         animation: _controller,
         builder: (context, child) {
@@ -357,7 +320,7 @@ class _ScrollingRowState extends State<_ScrollingRow>
             children: [
               ..._buildItems(),
               ..._buildItems(),
-              ..._buildItems(), // 3 sets ensures we always cover screen and exits smoothly
+              ..._buildItems(), // 3 sets ensures continuous screen coverage and smooth loop
             ],
           ),
         ),
@@ -366,21 +329,18 @@ class _ScrollingRowState extends State<_ScrollingRow>
   }
 
   List<Widget> _buildItems() {
-    return widget.imageUrls.map((url) {
+    return widget.imageAssets.map((assetPath) {
       return Container(
-        width: 110,
-        height: 160,
+        width: widget.itemWidth,
+        height: widget.itemHeight,
         margin: const EdgeInsets.symmetric(horizontal: 4),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(12),
-          child: CachedNetworkImage(
-            imageUrl: url,
+          child: Image.asset(
+            assetPath,
             fit: BoxFit.cover,
-            memCacheWidth: 220, // Greatly reduces decoding overhead/memory usage
-            placeholder: (_, __) => Container(
-              color: Colors.grey[900],
-            ),
-            errorWidget: (_, __, ___) => Container(
+            filterQuality: FilterQuality.medium,
+            errorBuilder: (_, __, ___) => Container(
               color: Colors.grey[850],
               child: const Icon(Icons.broken_image, color: Colors.grey),
             ),

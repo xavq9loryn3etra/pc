@@ -58,11 +58,24 @@ class TorrentStorageService {
   /// current engine session, goes through the engine (also stops any stream
   /// and updates in-memory state); otherwise just deletes the directory
   /// (e.g. the app was restarted since this was last streamed).
-  static Future<void> delete(CachedTorrentEntry entry) async {
+  static Future<void> delete(CachedTorrentEntry entry) =>
+      _deleteByPath(entry.infoHash, entry.path);
+
+  /// Same as [delete], but for callers that only have an infoHash on hand
+  /// (e.g. the player recovering from a stalled stream mid-session) rather
+  /// than a [CachedTorrentEntry] from a directory listing. Resolves the
+  /// same deterministic per-infoHash path [TorrentEngineService] streams
+  /// into (see torrent_paths.dart) and wipes it the same way.
+  static Future<void> deleteByInfoHash(String infoHash) async {
+    final path = await TorrentPaths.savePathFor(infoHash);
+    await _deleteByPath(infoHash, path);
+  }
+
+  static Future<void> _deleteByPath(String infoHash, String path) async {
     final engine = TorrentEngineService.instance.engine;
     int? liveId;
     for (final t in engine.torrents.entries) {
-      if (t.value.savePath == entry.path) {
+      if (t.value.savePath == path) {
         liveId = t.key;
         break;
       }
@@ -71,13 +84,13 @@ class TorrentStorageService {
     if (liveId != null) {
       engine.removeTorrent(liveId, deleteFiles: true);
     } else {
-      final dir = Directory(entry.path);
+      final dir = Directory(path);
       if (await dir.exists()) {
         await dir.delete(recursive: true);
       }
     }
 
-    await TorrentDownloadRegistry.remove(entry.infoHash);
+    await TorrentDownloadRegistry.remove(infoHash);
   }
 
   static String formatBytes(int bytes) {

@@ -48,15 +48,13 @@ void main() async {
   // while still stuck in landscape.
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
-  // Android draws a translucent black scrim behind the status bar unless
-  // told otherwise (screens with an AppBar already clear it themselves).
-  // Make it transparent app-wide so full-bleed screens (status, welcome,
-  // splash) run edge to edge; the app is always dark, so icons stay light.
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.light, // Android
-    statusBarBrightness: Brightness.dark, // iOS
-  ));
+  // Draw behind the system bars from the start (Android 15+ enforces this
+  // anyway; the players already restore edgeToEdge when they close), and
+  // drop Android's default translucent status bar scrim. See
+  // AppTheme.systemUiStyle — it's also the root AnnotatedRegion below, so
+  // screens that override it (e.g. ModeSelectorScreen) revert on leave.
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(AppTheme.systemUiStyle);
 
   MediaKit.ensureInitialized();
   await SavedMoviesService().init();
@@ -316,17 +314,25 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         // session) instead of returning to where they were. Stacking the
         // overlay on top instead keeps the Navigator alive underneath —
         // it's just visually and interactively covered while offline.
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            if (child != null) child,
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 350),
-              child: _isOffline
-                  ? const NoInternetOverlay()
-                  : const SizedBox.shrink(),
-            ),
-          ],
+        //
+        // The root AnnotatedRegion sets the default system-bar style, so a
+        // screen's own region (e.g. the mode selector's transparent
+        // navigation bar) stops applying once that screen is gone instead
+        // of sticking app-wide.
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: AppTheme.systemUiStyle,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (child != null) child,
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 350),
+                child: _isOffline
+                    ? const NoInternetOverlay()
+                    : const SizedBox.shrink(),
+              ),
+            ],
+          ),
         );
       },
       home: Stack(

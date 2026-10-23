@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class AppTheme {
@@ -9,6 +10,17 @@ class AppTheme {
   static const Color accentColor = Color(
     0xFFB5966E,
   ); // Gold/Bronzish accent from Desktop
+
+  // System bars: transparent status bar (no Android scrim) with light
+  // icons, and a black navigation bar. Applied app-wide in main.dart;
+  // screens can override parts of it with an AnnotatedRegion.
+  static const SystemUiOverlayStyle systemUiStyle = SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light, // Android
+    statusBarBrightness: Brightness.dark, // iOS
+    systemNavigationBarColor: Colors.black,
+    systemNavigationBarIconBrightness: Brightness.light,
+  );
 
   // Gradients
   static const LinearGradient verticalFade = LinearGradient(

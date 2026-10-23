@@ -7,8 +7,11 @@ import '../models/movie.dart';
 
 class MovieHeroBanner extends StatelessWidget {
   final Movie movie;
-  /// Null hides the Play button (see FeatureFlagsService.hidePlayback).
+  /// The primary button is Play when [onPlay] is set, otherwise Trailer
+  /// when [onTrailer] is set (see FeatureFlagsService.hidePlayback), and
+  /// hidden when neither is.
   final VoidCallback? onPlay;
+  final VoidCallback? onTrailer;
   final VoidCallback onInfo;
   final ScrollController? scrollController;
 
@@ -16,12 +19,16 @@ class MovieHeroBanner extends StatelessWidget {
     super.key,
     required this.movie,
     this.onPlay,
+    this.onTrailer,
     required this.onInfo,
     this.scrollController,
   });
 
   @override
   Widget build(BuildContext context) {
+    final VoidCallback? primaryAction = onPlay ?? onTrailer;
+    final bool isTrailer = onPlay == null;
+
     return SizedBox(
       height: 500,
       child: Stack(
@@ -142,15 +149,17 @@ class MovieHeroBanner extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      if (onPlay != null) ...[
+                      if (primaryAction != null) ...[
                         ElevatedButton.icon(
-                          onPressed: onPlay,
-                          icon: const Icon(
-                            Icons.play_arrow_rounded,
+                          onPressed: primaryAction,
+                          icon: Icon(
+                            isTrailer
+                                ? Icons.movie_creation_outlined
+                                : Icons.play_arrow_rounded,
                             color: Colors.black,
-                            size: 28,
+                            size: isTrailer ? 24 : 28,
                           ),
-                          label: const Text('Play'),
+                          label: Text(isTrailer ? 'Trailer' : 'Play'),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.white,
                             foregroundColor: Colors.black,

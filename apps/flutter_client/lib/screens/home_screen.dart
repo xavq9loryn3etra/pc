@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'dart:math';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/movie.dart';
 import '../services/tmdb_service.dart';
 import 'details_screen.dart';
@@ -141,6 +142,11 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
     final hidePlayback = FeatureFlagsService().hidePlayback.value;
     final history =
         hidePlayback ? const <Movie>[] : SavedMoviesService().history;
+    // The hero's Play button becomes Trailer while playback is hidden.
+    final trailerUrl = _featuredMovie?.trailerUrl;
+    final VoidCallback? onTrailer = hidePlayback && trailerUrl != null
+        ? () => _openTrailer(trailerUrl)
+        : null;
 
     if (constraints.maxWidth > 800 && _featuredMovie != null) {
       return DesktopHomeScreen(
@@ -157,6 +163,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
                   heroTag: 'hero_${_featuredMovie!.id}',
                 );
               },
+        onTrailerHero: onTrailer,
         onInfoHero: () => _navigateToDetails(
           _featuredMovie!,
           heroTag: 'hero_${_featuredMovie!.id}',
@@ -205,6 +212,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
                           heroTag: 'hero_${_featuredMovie!.id}',
                         );
                       },
+                onTrailer: onTrailer,
                 onInfo: () => _navigateToDetails(
                   _featuredMovie!,
                   heroTag: 'hero_${_featuredMovie!.id}',
@@ -265,6 +273,13 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
         builder: (_) => DetailsScreen(movie: movie, heroTag: heroTag),
       ),
     );
+  }
+
+  Future<void> _openTrailer(String url) async {
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
   Future<void> _confirmRemoveHistory(Movie movie) async {

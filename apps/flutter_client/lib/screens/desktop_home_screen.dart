@@ -15,8 +15,11 @@ class DesktopHomeScreen extends StatefulWidget {
   final List<Movie> trendingMovies;
   final List<Movie> historyMovies;
   final List<Movie> topRatedMovies;
-  /// Null hides the Play button (see FeatureFlagsService.hidePlayback).
+  /// The primary hero button is Play when [onPlayHero] is set, otherwise
+  /// Trailer when [onTrailerHero] is set (see
+  /// FeatureFlagsService.hidePlayback), and hidden when neither is.
   final VoidCallback? onPlayHero;
+  final VoidCallback? onTrailerHero;
   final VoidCallback onInfoHero;
   final Function(Movie) onMovieTap;
   final Function(Movie)? onRemoveHistory;
@@ -28,6 +31,7 @@ class DesktopHomeScreen extends StatefulWidget {
     required this.historyMovies,
     required this.topRatedMovies,
     this.onPlayHero,
+    this.onTrailerHero,
     required this.onInfoHero,
     required this.onMovieTap,
     this.onRemoveHistory,
@@ -404,6 +408,10 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
   }
 
   Widget _buildHeroContent(BuildContext context) {
+    final VoidCallback? primaryAction =
+        widget.onPlayHero ?? widget.onTrailerHero;
+    final bool isTrailer = widget.onPlayHero == null;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -447,16 +455,18 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Play Button
-            if (widget.onPlayHero != null) ...[
+            // Play Button (Trailer while playback is hidden)
+            if (primaryAction != null) ...[
               ElevatedButton.icon(
-                onPressed: widget.onPlayHero,
-                icon: const Icon(
-                  Icons.play_arrow_rounded,
+                onPressed: primaryAction,
+                icon: Icon(
+                  isTrailer
+                      ? Icons.movie_creation_outlined
+                      : Icons.play_arrow_rounded,
                   color: Colors.black,
-                  size: 28,
+                  size: isTrailer ? 24 : 28,
                 ),
-                label: const Text("Play"),
+                label: Text(isTrailer ? "Trailer" : "Play"),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.white,
                   foregroundColor: Colors.black,

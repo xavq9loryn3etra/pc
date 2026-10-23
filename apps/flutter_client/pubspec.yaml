@@ -102,6 +102,7 @@ flutter:
     - assets/welcome/music/
     - assets/welcome/books/
     - assets/fonts/Yellowtail-LICENSE.txt
+    - assets/providers/
 
   # Bundled rather than fetched via google_fonts: the offline status
   # screen uses it, so it has to be available without a connection.

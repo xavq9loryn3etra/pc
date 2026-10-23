@@ -142,11 +142,10 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
     final hidePlayback = FeatureFlagsService().hidePlayback.value;
     final history =
         hidePlayback ? const <Movie>[] : SavedMoviesService().history;
-    // The hero's Play button becomes Trailer while playback is hidden.
+    // The hero shows More Info + Trailer (no Play button).
     final trailerUrl = _featuredMovie?.trailerUrl;
-    final VoidCallback? onTrailer = hidePlayback && trailerUrl != null
-        ? () => _openTrailer(trailerUrl)
-        : null;
+    final VoidCallback? onTrailer =
+        trailerUrl != null ? () => _openTrailer(trailerUrl) : null;
 
     if (constraints.maxWidth > 800 && _featuredMovie != null) {
       return DesktopHomeScreen(
@@ -154,15 +153,6 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
         trendingMovies: _trendingMovies,
         historyMovies: history,
         topRatedMovies: _topRatedMovies,
-        onPlayHero: hidePlayback
-            ? null
-            : () {
-                SavedMoviesService().addToHistory(_featuredMovie!);
-                _navigateToDetails(
-                  _featuredMovie!,
-                  heroTag: 'hero_${_featuredMovie!.id}',
-                );
-              },
         onTrailerHero: onTrailer,
         onInfoHero: () => _navigateToDetails(
           _featuredMovie!,
@@ -178,23 +168,14 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
 
     final scaffold = Scaffold(
       extendBodyBehindAppBar: true,
-      // Scoped to the scroll controller so the AppBar's scroll-fade rebuilds
-      // on its own — the rest of the screen (hero banner, carousels) no
-      // longer rebuilds on every scroll frame just to update this fade.
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: ListenableBuilder(
-          listenable: _scrollController,
-          builder: (context, _) => CustomAppBar(
-            scrollOffset: _scrollController.hasClients
-                ? _scrollController.offset
-                : 0.0,
-            showActions: false,
-            showModeSwitch: false,
-          ),
-        ),
+      // No glass background: the bar stays transparent and the top edge
+      // gets a scroll-in fade instead (see _withTopFade).
+      appBar: const CustomAppBar(
+        forceOpacity: 0,
+        showActions: false,
+        showModeSwitch: false,
       ),
-      body: SingleChildScrollView(
+      body: _withTopFade(SingleChildScrollView(
         controller: _scrollController,
         child: Column(
           children: [
@@ -203,15 +184,6 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
               MovieHeroBanner(
                 scrollController: _scrollController,
                 movie: _featuredMovie!,
-                onPlay: hidePlayback
-                    ? null
-                    : () {
-                        SavedMoviesService().addToHistory(_featuredMovie!);
-                        _navigateToDetails(
-                          _featuredMovie!,
-                          heroTag: 'hero_${_featuredMovie!.id}',
-                        );
-                      },
                 onTrailer: onTrailer,
                 onInfo: () => _navigateToDetails(
                   _featuredMovie!,
@@ -251,13 +223,58 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
             SizedBox(height: 110 + MediaQuery.of(context).padding.bottom),
           ],
         ),
-      ),
+      )),
     );
 
     return Stack(
       children: [
         scaffold,
         const FloatingBottomNavBar(activeTab: BottomNavTab.home),
+      ],
+    );
+  }
+
+  /// Top-edge fade over the scrolling content — the floating nav bar's
+  /// bottom fade mirrored — fading in over the first 200px of scroll (the
+  /// old glass app bar's timing) so the hero stays clear at the top. It's
+  /// part of the body, so the Scaffold still paints the app bar's logo on
+  /// top of it.
+  Widget _withTopFade(Widget scrollView) {
+    return Stack(
+      children: [
+        scrollView,
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: IgnorePointer(
+            child: ListenableBuilder(
+              listenable: _scrollController,
+              builder: (context, _) {
+                final offset =
+                    _scrollController.hasClients ? _scrollController.offset : 0.0;
+                return Opacity(
+                  opacity: (offset / 200).clamp(0.0, 1.0),
+                  child: Container(
+                    height: MediaQuery.paddingOf(context).top +
+                        kToolbarHeight +
+                        40,
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        // FloatingBottomNavBar's [transparent, black] at
+                        // [0.0, 0.6], flipped.
+                        colors: [Colors.black, Colors.transparent],
+                        stops: [0.4, 1.0],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
       ],
     );
   }

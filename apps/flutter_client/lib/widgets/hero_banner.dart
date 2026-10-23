@@ -7,28 +7,21 @@ import '../models/movie.dart';
 
 class MovieHeroBanner extends StatelessWidget {
   final Movie movie;
-  /// The primary button is Play when [onPlay] is set, otherwise Trailer
-  /// when [onTrailer] is set (see FeatureFlagsService.hidePlayback), and
-  /// hidden when neither is.
-  final VoidCallback? onPlay;
-  final VoidCallback? onTrailer;
   final VoidCallback onInfo;
+  /// Null hides the Trailer button (no trailer for this title).
+  final VoidCallback? onTrailer;
   final ScrollController? scrollController;
 
   const MovieHeroBanner({
     super.key,
     required this.movie,
-    this.onPlay,
-    this.onTrailer,
     required this.onInfo,
+    this.onTrailer,
     this.scrollController,
   });
 
   @override
   Widget build(BuildContext context) {
-    final VoidCallback? primaryAction = onPlay ?? onTrailer;
-    final bool isTrailer = onPlay == null;
-
     return SizedBox(
       height: 500,
       child: Stack(
@@ -149,70 +142,68 @@ class MovieHeroBanner extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      if (primaryAction != null) ...[
-                        ElevatedButton.icon(
-                          onPressed: primaryAction,
-                          icon: Icon(
-                            isTrailer
-                                ? Icons.movie_creation_outlined
-                                : Icons.play_arrow_rounded,
-                            color: Colors.black,
-                            size: isTrailer ? 24 : 28,
-                          ),
-                          label: Text(isTrailer ? 'Trailer' : 'Play'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: Colors.black,
-                            elevation: 0,
-                            padding: const EdgeInsets.symmetric(horizontal: 32),
-                            fixedSize: const Size.fromHeight(50),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(30),
-                            ),
-                            textStyle: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                      ElevatedButton.icon(
+                        onPressed: onInfo,
+                        icon: const Icon(
+                          Icons.info_outline,
+                          color: Colors.black,
+                          size: 26,
                         ),
-                        const SizedBox(width: 16),
-                      ],
-                      // Frosted glass, same recipe as CustomAppBar/the
-                      // floating nav bar: clip to the button's own rounded
-                      // shape and blur what's behind it.
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(30),
-                        child: BackdropFilter(
-                          // See mode_switcher_dialog.dart's comment — lower
-                          // sigma to cut GPU cost on weaker/high-refresh-rate
-                          // devices.
-                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                          child: ElevatedButton.icon(
-                            onPressed: onInfo,
-                            icon: const Icon(
-                              Icons.info_outline,
-                              color: Colors.white,
-                              size: 28,
-                            ),
-                            label: const Text('More Info'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.white10,
-                              foregroundColor: Colors.white,
-                              elevation: 0,
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 32),
-                              fixedSize: const Size.fromHeight(50),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(30),
-                              ),
-                              textStyle: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
+                        label: const Text('More Info'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: Colors.black,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(horizontal: 32),
+                          fixedSize: const Size.fromHeight(50),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(30),
+                          ),
+                          textStyle: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
                       ),
+                      if (onTrailer != null) ...[
+                        const SizedBox(width: 16),
+                        // Frosted glass, same recipe as CustomAppBar/the
+                        // floating nav bar: clip to the button's own rounded
+                        // shape and blur what's behind it.
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(30),
+                          child: BackdropFilter(
+                            // See mode_switcher_dialog.dart's comment — lower
+                            // sigma to cut GPU cost on weaker/high-refresh-rate
+                            // devices.
+                            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                            child: ElevatedButton.icon(
+                              onPressed: onTrailer,
+                              icon: const Icon(
+                                Icons.movie_creation_outlined,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                              label: const Text('Trailer'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.white10,
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 32),
+                                fixedSize: const Size.fromHeight(50),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                ),
+                                textStyle: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ).animate().fadeIn(delay: 400.ms).slideY(begin: 0.2, end: 0),
                 ],

@@ -20,6 +20,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   final bool showModeSwitch;
   final bool automaticallyImplyLeading;
   final bool centerTitle;
+  final double? titleSpacing;
 
   const CustomAppBar({
     super.key,
@@ -36,6 +37,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.showModeSwitch = true,
     this.automaticallyImplyLeading = true,
     this.centerTitle = false,
+    this.titleSpacing,
   });
 
   @override
@@ -95,6 +97,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
       automaticallyImplyLeading: automaticallyImplyLeading,
       leading: leading,
       centerTitle: centerTitle,
+      titleSpacing: titleSpacing,
       title: GestureDetector(
         onLongPress: onLogoLongPress,
         child: title ?? _buildDefaultLogo(),

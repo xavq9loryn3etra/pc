@@ -29,6 +29,20 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     super.initState();
     _scrollController.addListener(_onScroll);
     _loadFavorites();
+    // This screen stays mounted as a MovieTabShell tab, so a one-off read
+    // went stale: titles liked from Home/Search/Details never showed up
+    // until it happened to reload. Follow the service's changes instead.
+    SavedMoviesService().addListener(_onSavedMoviesChanged);
+  }
+
+  void _onSavedMoviesChanged() {
+    // The service also notifies for watch-history updates; only rebuild
+    // when the favorites themselves changed.
+    final latest = SavedMoviesService().favorites;
+    final changed = latest.length != _favorites.length ||
+        Iterable.generate(latest.length)
+            .any((i) => latest[i].id != _favorites[i].id);
+    if (changed && mounted) _loadFavorites();
   }
 
   void _onScroll() {
@@ -41,6 +55,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
 
   @override
   void dispose() {
+    SavedMoviesService().removeListener(_onSavedMoviesChanged);
     _scrollController.dispose();
     _opacityNotifier.dispose();
     super.dispose();

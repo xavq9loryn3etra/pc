@@ -41,8 +41,16 @@ class FloatingBottomNavBar extends StatefulWidget {
 }
 
 class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _entranceController;
+
+  // Packed (Search active) ⇄ normal layout transition. Driven here rather
+  // than by AnimatedPositioned so the shared glass clip (see build) knows
+  // every item's in-between rect on each frame.
+  late final AnimationController _layoutController;
+  late bool _fromSearchActive;
+
+  bool get _isSearchActive => widget.activeTab == BottomNavTab.search;
 
   @override
   void initState() {
@@ -50,12 +58,60 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
     _entranceController =
         AnimationController(vsync: this, duration: _kEntranceDuration)
           ..forward();
+    _layoutController = AnimationController(
+      vsync: this,
+      duration: _kBounceDuration,
+      value: 1,
+    );
+    _fromSearchActive = _isSearchActive;
+  }
+
+  @override
+  void didUpdateWidget(FloatingBottomNavBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final wasSearchActive = oldWidget.activeTab == BottomNavTab.search;
+    if (wasSearchActive != _isSearchActive) {
+      _fromSearchActive = wasSearchActive;
+      _layoutController.forward(from: 0);
+    }
   }
 
   @override
   void dispose() {
     _entranceController.dispose();
+    _layoutController.dispose();
     super.dispose();
+  }
+
+  /// Each item's rect (within the bar's row) for one layout state.
+  List<Rect> _slots(List<BottomNavTab> tabs, double totalWidth, bool packed) {
+    final itemCount = tabs.length;
+    if (packed) {
+      // Search-active layout: every item becomes an equal circle, packed
+      // tightly together and centered as one group.
+      final step = _kCircleSize + _kGap;
+      final groupWidth = _kCircleSize * itemCount + _kGap * (itemCount - 1);
+      final groupStart =
+          ((totalWidth - groupWidth) / 2).clamp(0.0, totalWidth);
+      return [
+        for (var i = 0; i < itemCount; i++)
+          Rect.fromLTWH(groupStart + i * step, 0, _kCircleSize, _kCircleSize),
+      ];
+    }
+    // Normal layout: Search fills whatever's left after every other
+    // (fixed-size) item, in whatever order/count `tabs` is.
+    final wideSearchWidth = (totalWidth -
+            _kCircleSize * (itemCount - 1) -
+            _kGap * (itemCount - 1))
+        .clamp(_kCircleSize, double.infinity);
+    final slots = <Rect>[];
+    double x = 0;
+    for (final tab in tabs) {
+      final w = tab == BottomNavTab.search ? wideSearchWidth : _kCircleSize;
+      slots.add(Rect.fromLTWH(x, 0, w, _kCircleSize));
+      x += w + _kGap;
+    }
+    return slots;
   }
 
   /// This item's 0..1 entrance progress at the controller's current value —
@@ -68,6 +124,28 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
     final end = (start + _kEntranceWindow).clamp(0.0, 1.0);
     return Interval(start, end, curve: Curves.easeOutBack)
         .transform(_entranceController.value);
+  }
+
+  /// Interpolates an item's slot. The bouncy curve overshoots, which would
+  /// briefly squeeze the collapsing Search pill narrower than a circle —
+  /// so position overshoots (the spring) but width never drops below one.
+  Rect _lerpSlot(Rect from, Rect to, double p) {
+    final r = Rect.lerp(from, to, p)!;
+    if (r.width >= _kCircleSize) return r;
+    return Rect.fromLTWH(r.left, r.top, _kCircleSize, r.height);
+  }
+
+  /// An item's glass shape during its entrance: slides up with the item and
+  /// grows in from its centre — the shared blur can't be faded like the
+  /// item's content is, so it scales in instead. Empty before it starts.
+  Rect _entranceGlassRect(Rect slot, double t) {
+    final s = t.clamp(0.0, 1.0);
+    if (s <= 0.01) return Rect.zero;
+    return Rect.fromCenter(
+      center: slot.center.translate(0, (1 - t) * _kEntranceTravel),
+      width: slot.width * s,
+      height: slot.height * s,
+    );
   }
 
   void _navigate(BuildContext context, BottomNavTab tab) {
@@ -123,7 +201,6 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
   @override
   Widget build(BuildContext context) {
     final bottomPadding = MediaQuery.of(context).padding.bottom;
-    final isSearchActive = widget.activeTab == BottomNavTab.search;
 
     final tabs = [
       BottomNavTab.home,
@@ -166,67 +243,67 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
                   builder: (context, constraints) {
                     final totalWidth = constraints.maxWidth;
                     final itemCount = tabs.length;
-                    final step = _kCircleSize + _kGap;
-
-                    // Normal layout: Search fills whatever's left after every
-                    // other (fixed-size) item, in whatever order/count `tabs` is.
-                    final wideSearchWidth = (totalWidth -
-                            _kCircleSize * (itemCount - 1) -
-                            _kGap * (itemCount - 1))
-                        .clamp(_kCircleSize, double.infinity);
-                    final normalX = <double>[];
-                    double x = 0;
-                    for (final tab in tabs) {
-                      normalX.add(x);
-                      x += (tab == BottomNavTab.search
-                              ? wideSearchWidth
-                              : _kCircleSize) +
-                          _kGap;
-                    }
-
-                    // Search-active layout: every item becomes an equal circle,
-                    // packed tightly together and centered as one group.
-                    final groupWidth =
-                        _kCircleSize * itemCount + _kGap * (itemCount - 1);
-                    final groupStart =
-                        ((totalWidth - groupWidth) / 2).clamp(0.0, totalWidth);
 
                     return SizedBox(
                       width: totalWidth,
                       height: _kCircleSize,
                       child: AnimatedBuilder(
-                        animation: _entranceController,
+                        animation: Listenable.merge(
+                            [_entranceController, _layoutController]),
                         builder: (context, _) {
+                          final from =
+                              _slots(tabs, totalWidth, _fromSearchActive);
+                          final to =
+                              _slots(tabs, totalWidth, _isSearchActive);
+                          final p =
+                              _kBounceCurve.transform(_layoutController.value);
+                          final rects = [
+                            for (var i = 0; i < itemCount; i++)
+                              _lerpSlot(from[i], to[i], p),
+                          ];
+                          final entrance = [
+                            for (var i = 0; i < itemCount; i++)
+                              _entranceProgress(i),
+                          ];
+
                           return Stack(
                             children: [
+                              // One live blur for the whole bar, cut to every
+                              // item's shape — instead of a BackdropFilter per
+                              // item (four re-blurring the same strip of
+                              // content on every scroll frame). Items keep
+                              // their own tint and border on top of it.
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: ClipPath(
+                                    clipper: _GlassShapesClipper([
+                                      for (var i = 0; i < itemCount; i++)
+                                        _entranceGlassRect(
+                                            rects[i], entrance[i]),
+                                    ]),
+                                    child: BackdropFilter(
+                                      filter: ImageFilter.blur(
+                                          sigmaX: 10, sigmaY: 10),
+                                      child: const SizedBox.expand(),
+                                    ),
+                                  ),
+                                ),
+                              ),
                               for (var i = 0; i < itemCount; i++)
-                                AnimatedPositioned(
-                                  duration: _kBounceDuration,
-                                  curve: _kBounceCurve,
-                                  left: isSearchActive
-                                      ? groupStart + i * step
-                                      : normalX[i],
-                                  top: 0,
-                                  width: tabs[i] == BottomNavTab.search &&
-                                          !isSearchActive
-                                      ? wideSearchWidth
-                                      : _kCircleSize,
-                                  height: _kCircleSize,
-                                  child: Builder(builder: (context) {
-                                    final t = _entranceProgress(i);
-                                    return Opacity(
-                                      opacity: t.clamp(0.0, 1.0),
-                                      child: Transform.translate(
-                                        offset: Offset(
-                                            0, (1 - t) * _kEntranceTravel),
-                                        child: _circleFor(
-                                          context,
-                                          tabs[i],
-                                          activeColor,
-                                        ),
+                                Positioned.fromRect(
+                                  rect: rects[i],
+                                  child: Opacity(
+                                    opacity: entrance[i].clamp(0.0, 1.0),
+                                    child: Transform.translate(
+                                      offset: Offset(0,
+                                          (1 - entrance[i]) * _kEntranceTravel),
+                                      child: _circleFor(
+                                        context,
+                                        tabs[i],
+                                        activeColor,
                                       ),
-                                    );
-                                  }),
+                                    ),
+                                  ),
                                 ),
                             ],
                           );
@@ -257,62 +334,67 @@ class _SearchPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(26),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Material(
-          color: AppTheme.scaffoldColor.withValues(alpha: 0.35),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(26),
-            side: BorderSide(
-              color: isActive
-                  ? activeColor.withValues(alpha: 0.45)
-                  : Colors.white.withValues(alpha: 0.14),
-              width: isActive ? 1.5 : 1,
-            ),
-          ),
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(26),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 15),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  AnimatedSwitcher(
-                    duration: _kTransitionDuration,
-                    child: Icon(
-                      isActive ? Icons.search_rounded : Icons.search_outlined,
-                      key: ValueKey(isActive),
-                      color: isActive ? activeColor : Colors.white,
-                      size: 22,
-                    ),
+    // Blur comes from the bar's shared glass layer behind it; this paints
+    // just the tint, border and ink (clipped to the pill).
+    return Material(
+      color: AppTheme.scaffoldColor.withValues(alpha: 0.35),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(26),
+        side: BorderSide(
+          color: isActive
+              ? activeColor.withValues(alpha: 0.45)
+              : Colors.white.withValues(alpha: 0.14),
+          width: isActive ? 1.5 : 1,
+        ),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(26),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 15),
+          // Mid-collapse the pill reaches circle size a moment before its
+          // "Search" label has finished shrinking away; OverflowBox lets the
+          // row run over into the (clipped) edge instead of flagging a
+          // RenderFlex overflow for those few frames.
+          child: OverflowBox(
+            minWidth: 0,
+            maxWidth: double.infinity,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedSwitcher(
+                  duration: _kTransitionDuration,
+                  child: Icon(
+                    isActive ? Icons.search_rounded : Icons.search_outlined,
+                    key: ValueKey(isActive),
+                    color: isActive ? activeColor : Colors.white,
+                    size: 22,
                   ),
-                  AnimatedSize(
-                    duration: _kBounceDuration,
-                    curve: _kBounceCurve,
-                    child: isActive
-                        ? const SizedBox(height: 22)
-                        : Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: const [
-                              SizedBox(width: 10),
-                              Text(
-                                'Search',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w500,
-                                  fontSize: 15,
-                                ),
+                ),
+                AnimatedSize(
+                  duration: _kBounceDuration,
+                  curve: _kBounceCurve,
+                  child: isActive
+                      ? const SizedBox(height: 22)
+                      : Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: const [
+                            SizedBox(width: 10),
+                            Text(
+                              'Search',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w500,
+                                fontSize: 15,
                               ),
-                            ],
-                          ),
-                  ),
-                ],
-              ),
-            ),
+                            ),
+                          ],
+                        ),
+                ),
+              ],
+          ),
           ),
         ),
       ),
@@ -337,40 +419,66 @@ class _NavCircle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipOval(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Material(
-          color: AppTheme.scaffoldColor.withValues(alpha: 0.35),
-          shape: CircleBorder(
-            side: BorderSide(
-              color: isActive
-                  ? activeColor.withValues(alpha: 0.45)
-                  : Colors.white.withValues(alpha: 0.14),
-              width: isActive ? 1.5 : 1,
-            ),
-          ),
-          child: InkWell(
-            onTap: onTap,
-            customBorder: const CircleBorder(),
-            child: SizedBox(
-              width: _kCircleSize,
-              height: _kCircleSize,
-              child: Center(
-                child: AnimatedSwitcher(
-                  duration: _kTransitionDuration,
-                  child: Icon(
-                    isActive ? activeIcon : icon,
-                    key: ValueKey(isActive),
-                    color: isActive ? activeColor : Colors.white,
-                    size: 24,
-                  ),
-                ),
+    // Blur comes from the bar's shared glass layer behind it; this paints
+    // just the tint, border and ink (clipped to the circle).
+    return Material(
+      color: AppTheme.scaffoldColor.withValues(alpha: 0.35),
+      clipBehavior: Clip.antiAlias,
+      shape: CircleBorder(
+        side: BorderSide(
+          color: isActive
+              ? activeColor.withValues(alpha: 0.45)
+              : Colors.white.withValues(alpha: 0.14),
+          width: isActive ? 1.5 : 1,
+        ),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: SizedBox(
+          width: _kCircleSize,
+          height: _kCircleSize,
+          child: Center(
+            child: AnimatedSwitcher(
+              duration: _kTransitionDuration,
+              child: Icon(
+                isActive ? activeIcon : icon,
+                key: ValueKey(isActive),
+                color: isActive ? activeColor : Colors.white,
+                size: 24,
               ),
             ),
           ),
         ),
       ),
     );
+  }
+}
+
+/// Union of rounded shapes (each fully rounded: circles and pills) for the
+/// nav bar's shared glass blur. Empty rects (items not yet entered) skip.
+class _GlassShapesClipper extends CustomClipper<Path> {
+  final List<Rect> shapes;
+
+  const _GlassShapesClipper(this.shapes);
+
+  @override
+  Path getClip(Size size) {
+    final path = Path();
+    for (final r in shapes) {
+      if (r.isEmpty) continue;
+      path.addRRect(
+          RRect.fromRectAndRadius(r, Radius.circular(r.shortestSide / 2)));
+    }
+    return path;
+  }
+
+  @override
+  bool shouldReclip(_GlassShapesClipper old) {
+    if (old.shapes.length != shapes.length) return true;
+    for (var i = 0; i < shapes.length; i++) {
+      if (old.shapes[i] != shapes[i]) return true;
+    }
+    return false;
   }
 }

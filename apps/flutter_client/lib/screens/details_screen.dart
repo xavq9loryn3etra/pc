@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -22,6 +23,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:ui'; // For BackdropFilter
 import '../widgets/custom_app_bar.dart';
+import '../widgets/glass_bubble_bar.dart';
+import '../widgets/details_overview.dart';
 
 class DetailsScreen extends StatefulWidget {
   final Movie movie;
@@ -44,7 +47,30 @@ class DetailsScreen extends StatefulWidget {
 class _DetailsScreenState extends State<DetailsScreen> {
   Movie? _details;
   bool _loading = true;
+  // Skeleton reveal stages after _loading turns false: fading out, then
+  // removed (see _revealOverSkeleton).
+  bool _skeletonFading = false;
+  bool _skeletonDone = false;
   final ScrollController _scrollController = ScrollController();
+  // The page's vertical scroll offset, for the parallax backdrop and the
+  // app bar. Fed from scroll notifications rather than a _scrollController
+  // listener: when the content shrinks (e.g. the synopsis collapsing) the
+  // position is corrected *without* notifying controller listeners, which
+  // left the backdrop frozen at its old parallax offset. Scroll-metrics
+  // notifications do report those corrections.
+  final ValueNotifier<double> _scrollOffset = ValueNotifier(0);
+
+  bool _onPageScroll(Notification notification) {
+    // depth 0 = the page's own scroll view, not nested ones (the cast row).
+    if (notification is ScrollUpdateNotification &&
+        notification.depth == 0) {
+      _scrollOffset.value = notification.metrics.pixels;
+    } else if (notification is ScrollMetricsNotification &&
+        notification.depth == 0) {
+      _scrollOffset.value = notification.metrics.pixels;
+    }
+    return false;
+  }
   final Dio _shareDio = Dio();
   final CancelToken _detailsCancelToken = CancelToken();
 
@@ -113,6 +139,47 @@ class _DetailsScreenState extends State<DetailsScreen> {
     await SavedMoviesService().toggleFavorite(_details ?? widget.movie);
   }
 
+  Future<void> _openTrailer(String url) async {
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  /// Opens the streaming service's page for this title — in its app when
+  /// installed (Android App Links / iOS Universal Links), else the browser.
+  Future<void> _openProvider(StreamingProvider provider) async {
+    try {
+      await launchUrl(
+        Uri.parse(provider.url),
+        mode: LaunchMode.externalApplication,
+      );
+    } catch (e) {
+      debugPrint('Failed to open ${provider.name}: $e');
+    }
+  }
+
+  /// Splits the Play pill so [provider]'s logo sits at its right end,
+  /// behind a thin divider; unchanged when there's no provider.
+  Widget _withProviderSegment(StreamingProvider? provider, Widget play) {
+    if (provider == null) return play;
+    return Row(
+      children: [
+        Expanded(child: play),
+        Container(width: 1, height: 26, color: Colors.black12),
+        InkWell(
+          onTap: () => _openProvider(provider),
+          borderRadius:
+              const BorderRadius.horizontal(right: Radius.circular(30)),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 0, 14, 0),
+            child: _ProviderLogo(provider: provider, size: 28),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   void dispose() {
     // Aborts the in-flight TMDB request if the screen is closed before it
@@ -120,9 +187,22 @@ class _DetailsScreenState extends State<DetailsScreen> {
     // in the background — saves bandwidth/battery on a quick back-out.
     _detailsCancelToken.cancel();
     _scrollController.dispose();
+    _scrollOffset.dispose();
     FeatureFlagsService().hidePlayback.removeListener(_onFlagsChanged);
     super.dispose();
   }
+
+  // The header images, shared by build() and _preloadHeader() so the
+  // preload warms exactly what the screen will request. Full-resolution
+  // sources: the header is large enough that TMDB's standard tiers look soft.
+  static String _backdropUrlFor(Movie m) =>
+      m.backdropHighRes ?? m.backdrop ?? m.posterUrl ?? '';
+  static String? _logoUrlFor(Movie m) =>
+      m.logoUrl == null ? null : (m.logoHighRes ?? m.logoUrl!);
+
+  // Longest the skeleton waits on header images / the first season before
+  // showing the page anyway; anything slower finishes loading in place.
+  static const _maxPreloadWait = Duration(seconds: 4);
 
   Future<void> _loadDetails() async {
     Movie? d;
@@ -136,26 +216,78 @@ class _DetailsScreenState extends State<DetailsScreen> {
       if (e is DioException && CancelToken.isCancel(e)) return;
       rethrow;
     }
-    if (mounted) {
-      setState(() {
-        _details = d ?? widget.movie;
-        _loading = false;
+    if (!mounted) return;
 
-        // Init Season 1 if TV
-        if (_details?.type == 'tv' &&
-            _details?.seasons != null &&
-            _details!.seasons!.isNotEmpty) {
-          _selectedSeason = _details!.seasons!.firstWhere(
-            (s) => s.seasonNumber == 1,
-            orElse: () => _details!.seasons!.firstWhere(
-              (s) => s.seasonNumber > 0,
-              orElse: () => _details!.seasons!.first,
-            ),
-          );
-          _loadSeasonDetails(_selectedSeason!.seasonNumber);
-        }
-      });
+    // Still behind the skeleton (_loading stays true): store the details
+    // and pick the starting season, then keep the skeleton up while the
+    // header images and first season's episodes load, so the page appears
+    // complete instead of filling in piece by piece.
+    setState(() {
+      _details = d ?? widget.movie;
+
+      // Init Season 1 if TV
+      if (_details?.type == 'tv' &&
+          _details?.seasons != null &&
+          _details!.seasons!.isNotEmpty) {
+        _selectedSeason = _details!.seasons!.firstWhere(
+          (s) => s.seasonNumber == 1,
+          orElse: () => _details!.seasons!.firstWhere(
+            (s) => s.seasonNumber > 0,
+            orElse: () => _details!.seasons!.first,
+          ),
+        );
+      }
+    });
+
+    try {
+      await Future.wait([
+        _preloadHeader(_details!),
+        if (_selectedSeason != null)
+          _loadSeasonDetails(_selectedSeason!.seasonNumber),
+      ]).timeout(_maxPreloadWait);
+    } catch (_) {
+      // Timed out or an image failed: show the page regardless.
     }
+
+    if (!mounted) return;
+    // Build the page under the skeleton, give it a few frames to settle,
+    // then fade the skeleton off it (see _revealOverSkeleton).
+    setState(() => _loading = false);
+    await Future.delayed(const Duration(milliseconds: 120));
+    if (mounted) setState(() => _skeletonFading = true);
+  }
+
+  /// Downloads and decodes the header backdrop and logo into Flutter's
+  /// image cache, keyed exactly as the CachedNetworkImage widgets in
+  /// build() will look them up (same URL and memCache size), so they
+  /// paint on the first frame.
+  Future<void> _preloadHeader(Movie m) async {
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final backdrop = _backdropUrlFor(m);
+    final logo = _logoUrlFor(m);
+    final jobs = <Future<void>>[];
+    // SVGs render through SvgPicture, not the image cache — skip them.
+    if (backdrop.isNotEmpty && !backdrop.toLowerCase().endsWith('.svg')) {
+      jobs.add(precacheImage(
+        ResizeImage.resizeIfNeeded(
+          null,
+          (450 * dpr).toInt(),
+          CachedNetworkImageProvider(backdrop),
+        ),
+        context,
+      ));
+    }
+    if (logo != null && !logo.toLowerCase().endsWith('.svg')) {
+      jobs.add(precacheImage(
+        ResizeImage.resizeIfNeeded(
+          (200 * dpr).toInt(),
+          null,
+          CachedNetworkImageProvider(logo),
+        ),
+        context,
+      ));
+    }
+    await Future.wait(jobs);
   }
 
   Future<void> _loadSeasonDetails(int seasonNum) async {
@@ -353,9 +485,16 @@ class _DetailsScreenState extends State<DetailsScreen> {
       // decoding — only on first load, since after that it's served
       // synchronously from Flutter's image cache. A tight box keeps the
       // space stable from the very first frame, loaded or not.
+      //
+      // The box is sized to the logo's own aspect ratio (from TMDB) rather
+      // than a flat 120 wide: the title bubble wraps this box, so a squarer
+      // logo contain-fitted into 120×28 left the bubble with a long empty
+      // tail. Capped at 120 wide; unknown ratio falls back to 120.
+      final ratio = m.logoAspectRatio;
+      final width = ratio == null ? 120.0 : math.min(120.0, 28 * ratio);
       if (m.logoUrl!.toLowerCase().endsWith('.svg')) {
         return SizedBox(
-          width: 120,
+          width: width,
           height: 28,
           child: SvgPicture.network(
             m.logoUrl!,
@@ -365,7 +504,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
         );
       } else {
         return SizedBox(
-          width: 120,
+          width: width,
           height: 28,
           child: CachedNetworkImage(
             imageUrl: m.logoUrl!,
@@ -405,64 +544,42 @@ class _DetailsScreenState extends State<DetailsScreen> {
         // on scroll stays local to the AppBar instead of the whole screen.
         appBar: PreferredSize(
           preferredSize: const Size.fromHeight(kToolbarHeight),
-          child: ListenableBuilder(
-            listenable: _scrollController,
-            builder: (context, _) {
-              final offset =
-                  _scrollController.hasClients ? _scrollController.offset : 0.0;
+          child: ValueListenableBuilder<double>(
+            valueListenable: _scrollOffset,
+            builder: (context, offset, _) {
               // Logo reveal point — unchanged from before.
               final showTitle = offset > 350;
-              // The background used to fade in continuously over 0-200px of
-              // scroll — well before the logo showed up at offset > 350 —
-              // and, scrolling back up, disappear at that earlier point too
-              // instead of together with the logo. TweenAnimationBuilder
-              // re-targets to 0/1 on the same showTitle flip the logo's
-              // AnimatedOpacity below reacts to, with the same 300ms/linear
-              // timing, so the two now move in lockstep.
+              // No full-width bar background: the back button and the logo
+              // form one frosted "water bubble" (GlassBubbleBar) — the logo's
+              // bubble grows out of the back button at showTitle and
+              // shrinks back into it, over 300ms.
               return TweenAnimationBuilder<double>(
                 tween: Tween<double>(end: showTitle ? 1.0 : 0.0),
                 duration: const Duration(milliseconds: 300),
-                builder: (context, bgOpacity, child) {
+                builder: (context, reveal, child) {
                   return CustomAppBar(
-                    forceOpacity: bgOpacity,
-                    leading: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      // Frosted glass, same recipe as the floating nav bar's
-                      // circular buttons: clip to the circle and blur behind it.
-                      child: ClipOval(
-                        child: BackdropFilter(
-                          // See mode_switcher_dialog.dart's comment — lower
-                          // sigma to cut GPU cost on weaker/high-refresh-rate
-                          // devices.
-                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                          child: CircleAvatar(
-                            backgroundColor: Colors.black.withOpacity(0.35),
-                            child: widget.isSidePanel
-                                ? IconButton(
-                                    icon: const Icon(Icons.close,
-                                        color: Colors.white),
-                                    onPressed: widget.onClose,
-                                    iconSize: 20,
-                                    padding: EdgeInsets.zero,
-                                  )
-                                : const BackButton(color: Colors.white),
-                          ),
-                        ),
+                    forceOpacity: 0,
+                    automaticallyImplyLeading: false,
+                    // Puts the bubble's circle exactly where the old 56px
+                    // leading slot's padded back button sat.
+                    titleSpacing: 8,
+                    // The logo stays mounted while hidden, so its image has
+                    // usually finished loading by the time it's revealed.
+                    title: GlassBubbleBar(
+                      reveal: reveal,
+                      leading: CircleAvatar(
+                        backgroundColor: Colors.transparent,
+                        child: widget.isSidePanel
+                            ? IconButton(
+                                icon: const Icon(Icons.close,
+                                    color: Colors.white),
+                                onPressed: widget.onClose,
+                                iconSize: 20,
+                                padding: EdgeInsets.zero,
+                              )
+                            : const BackButton(color: Colors.white),
                       ),
-                    ),
-                    title: AnimatedOpacity(
-                      opacity: showTitle ? 1.0 : 0.0,
-                      duration: const Duration(milliseconds: 300),
-                      // Always mounted (not swapped to null when hidden) —
-                      // an AnimatedOpacity can only fade a child that's
-                      // actually still there. Swapping to null in lockstep
-                      // with the opacity used to yank the logo out on the
-                      // exact same frame the fade-out started, instead of
-                      // fading like it does coming in. Keeping it mounted
-                      // (just invisible before first reveal) also means its
-                      // image has usually already finished loading by the
-                      // time it's first scrolled into view.
-                      child: _buildAppBarTitle(m),
+                      title: _buildAppBarTitle(m),
                     ),
                     showActions: false,
                     // Favorite/like toggle moved down to the action button row
@@ -474,8 +591,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
             },
           ),
         ),
-        body: _loading
-            ? const SkeletonDetails()
+        body: _revealOverSkeleton(_loading
+            ? const SizedBox.shrink()
             : Stack(
                 children: [
                   // Parallax background image — kept OUTSIDE the sliver tree.
@@ -498,13 +615,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          ListenableBuilder(
-                            listenable: _scrollController,
-                            builder: (context, child) {
-                              double offset = 0;
-                              if (_scrollController.hasClients) {
-                                offset = _scrollController.offset;
-                              }
+                          ValueListenableBuilder<double>(
+                            // See _scrollOffset — a plain controller listener
+                            // missed position corrections (e.g. after the
+                            // synopsis collapses) and left this stuck.
+                            valueListenable: _scrollOffset,
+                            builder: (context, offset, child) {
                               return Transform.translate(
                                 offset: Offset(0, -offset * 0.5),
                                 child: Stack(
@@ -517,24 +633,18 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                       // enough that TMDB's standard w1280
                                       // backdrop tier can look soft, so it
                                       // uses the full-resolution source.
-                                      child: (m.backdropHighRes ??
-                                                      m.backdrop ??
-                                                      m.posterUrl ??
-                                                      '')
+                                      child: _backdropUrlFor(m)
                                               .toLowerCase()
                                               .endsWith('.svg')
                                           ? SvgPicture.network(
-                                              m.backdropHighRes ??
-                                                  m.backdrop ??
-                                                  m.posterUrl ??
-                                                  '',
+                                              _backdropUrlFor(m),
                                               fit: BoxFit.cover,
                                             )
                                           : CachedNetworkImage(
-                                              imageUrl: m.backdropHighRes ??
-                                                  m.backdrop ??
-                                                  m.posterUrl ??
-                                                  '',
+                                              // Preloaded behind the skeleton
+                                              // (_preloadHeader) — keep the URL
+                                              // and memCacheHeight in sync.
+                                              imageUrl: _backdropUrlFor(m),
                                               fit: BoxFit.cover,
                                               // Only constrain height, not width — specifying
                                               // both distorts the image whenever the source's
@@ -592,19 +702,21 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    m.logoUrl != null
-                                        ? ((m.logoHighRes ?? m.logoUrl!)
+                                    _logoUrlFor(m) != null
+                                        ? (_logoUrlFor(m)!
                                                 .toLowerCase()
                                                 .endsWith('.svg')
                                             ? SvgPicture.network(
-                                                m.logoHighRes ?? m.logoUrl!,
+                                                _logoUrlFor(m)!,
                                                 width: 200,
                                                 fit: BoxFit.contain,
                                                 alignment: Alignment.centerLeft,
                                               )
                                             : CachedNetworkImage(
-                                                imageUrl:
-                                                    m.logoHighRes ?? m.logoUrl!,
+                                                // Preloaded behind the skeleton
+                                                // (_preloadHeader) — keep the
+                                                // URL and memCacheWidth in sync.
+                                                imageUrl: _logoUrlFor(m)!,
                                                 width: 200,
                                                 memCacheWidth: (200 *
                                                         MediaQuery.of(context)
@@ -652,6 +764,25 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         ),
                                       ],
                                     ),
+                                    // Genres as quiet metadata under the
+                                    // year/rating/runtime line, the way
+                                    // streaming apps show them, instead of
+                                    // chips competing with the buttons.
+                                    if (m.genres != null &&
+                                        m.genres!.isNotEmpty) ...[
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        m.genres!.join('  ·  '),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.white
+                                              .withValues(alpha: 0.55),
+                                        ),
+                                      ),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -723,6 +854,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                     Platform.isIOS ? 'vidlink' : 'vsembed';
                                 final altLabel =
                                     Platform.isIOS ? 'Server 1' : 'Server 4';
+                                // Streaming service carrying this title in
+                                // the user's country, if any: attached to
+                                // the Play pill, or replacing it while
+                                // playback is hidden.
+                                final provider = m.streamingProvider;
 
                                 return Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -735,7 +871,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                           if (!isTv)
                                             // Premium Direct Torrent Play Button
                                             Expanded(
-                                              flex: 3,
+                                              flex: provider != null ? 4 : 3,
                                               child: Container(
                                                 height: 50,
                                                 decoration: BoxDecoration(
@@ -757,7 +893,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                           ),
                                                         ],
                                                 ),
-                                                child: InkWell(
+                                                child: _withProviderSegment(provider, InkWell(
                                                   onTap: movieUnreleased
                                                       ? null
                                                       : _playWithTorrent,
@@ -812,12 +948,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                     ],
                                                   ),
                                                 ),
+                                                ),
                                               ),
                                             )
                                           else
                                             // TV Show Play/Resume direct Button
                                             Expanded(
-                                              flex: 3,
+                                              flex: provider != null ? 4 : 3,
                                               child: Container(
                                                 height: 50,
                                                 decoration: BoxDecoration(
@@ -839,7 +976,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                           ),
                                                         ],
                                                 ),
-                                                child: InkWell(
+                                                child: _withProviderSegment(provider, InkWell(
                                                   onTap: tvUnreleased
                                                       ? null
                                                       : () async {
@@ -929,12 +1066,50 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                     ],
                                                   ),
                                                 ),
+                                                ),
                                               ),
                                             ),
                                           const SizedBox(width: 12),
+                                        ] else if (provider != null) ...[
+                                          // Playback hidden: the pill becomes
+                                          // a link to the service instead.
+                                          Expanded(
+                                            flex: 4,
+                                            child: _WatchOnProviderButton(
+                                              provider: provider,
+                                              onTap: () =>
+                                                  _openProvider(provider),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 12),
                                         ],
-                                        // Trailer Button
-                                        if (m.trailerUrl != null)
+                                        // Trailer Button — icon-only (like the
+                                        // Like button) when a streaming service
+                                        // shares the row, so the Play / Watch
+                                        // on pill keeps room for its label.
+                                        if (m.trailerUrl != null &&
+                                            provider != null)
+                                          Container(
+                                            height: 50,
+                                            width: 50,
+                                            decoration: BoxDecoration(
+                                              color: Colors.white10,
+                                              borderRadius:
+                                                  BorderRadius.circular(30),
+                                            ),
+                                            child: InkWell(
+                                              onTap: () =>
+                                                  _openTrailer(m.trailerUrl!),
+                                              borderRadius:
+                                                  BorderRadius.circular(30),
+                                              child: const Icon(
+                                                Icons.movie_creation_outlined,
+                                                color: Colors.white,
+                                                semanticLabel: 'Trailer',
+                                              ),
+                                            ),
+                                          )
+                                        else if (m.trailerUrl != null)
                                           Expanded(
                                             flex: 2,
                                             child: Container(
@@ -945,17 +1120,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                     BorderRadius.circular(30),
                                               ),
                                               child: InkWell(
-                                                onTap: () async {
-                                                  final uri =
-                                                      Uri.parse(m.trailerUrl!);
-                                                  if (await canLaunchUrl(uri)) {
-                                                    await launchUrl(
-                                                      uri,
-                                                      mode: LaunchMode
-                                                          .externalApplication,
-                                                    );
-                                                  }
-                                                },
+                                                onTap: () =>
+                                                    _openTrailer(m.trailerUrl!),
                                                 borderRadius:
                                                     BorderRadius.circular(30),
                                                 child: const Row(
@@ -1032,76 +1198,42 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         ),
                                       ],
                                     ),
+                                    // TMDB requires crediting JustWatch for
+                                    // watch-provider data.
+                                    if (provider != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                            top: 10, left: 4),
+                                        child: Text(
+                                          'Streaming info by JustWatch',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.white
+                                                .withValues(alpha: 0.4),
+                                          ),
+                                        ),
+                                      ),
                                   ],
                                 );
                               },
                             ),
                             const SizedBox(height: 24),
 
-                            Text(
-                              m.description,
-                              style: const TextStyle(
-                                fontSize: 15,
-                                height: 1.5,
-                                color: Colors.white70,
-                              ),
+                            // Series: the cast lives inside the synopsis's
+                            // More, keeping the page compact above the
+                            // episode list. Movies have nothing below, so
+                            // everything is shown up front.
+                            ExpandableSynopsis(
+                              text: m.description,
+                              collapsible: isTv,
+                              extra: m.castMembers != null &&
+                                      m.castMembers!.isNotEmpty
+                                  // Bleeds 24px each side, matching this
+                                  // list's horizontal padding, so it
+                                  // scrolls edge to edge.
+                                  ? CastRow(cast: m.castMembers!, bleed: 24)
+                                  : null,
                             ),
-
-                            if (m.cast != null && m.cast!.isNotEmpty) ...[
-                              const SizedBox(height: 16),
-                              RichText(
-                                text: TextSpan(
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    height: 1.5,
-                                  ),
-                                  children: [
-                                    const TextSpan(
-                                      text: "Starring: ",
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    TextSpan(
-                                      text: m.cast!.join(", "),
-                                      style: const TextStyle(
-                                        color: Colors.white70,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-
-                            const SizedBox(height: 32),
-
-                            // Genres
-                            if (m.genres != null)
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: m.genres!
-                                    .map(
-                                      (g) => Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 6,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          border:
-                                              Border.all(color: Colors.white24),
-                                          borderRadius:
-                                              BorderRadius.circular(20),
-                                        ),
-                                        child: Text(
-                                          g,
-                                          style: const TextStyle(fontSize: 12),
-                                        ),
-                                      ),
-                                    )
-                                    .toList(),
-                              ),
 
                             // TV Show: Seasons & Episodes
                             if (isTv) ...[
@@ -1469,9 +1601,45 @@ class _DetailsScreenState extends State<DetailsScreen> {
                     ],
                   ),
                 ],
-              ),
+              )),
       );
     })();
+  }
+
+  /// Skeleton → page reveal, same approach as the startup splash in
+  /// main.dart: once loaded, the page is built *underneath* the still-
+  /// opaque skeleton (so its expensive first frames — layout, uploading the
+  /// big header images — happen out of sight), then the skeleton fades off
+  /// it, instead of hard-cutting between the two in one heavy frame.
+  Widget _revealOverSkeleton(Widget page) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // Catches the page scroll view's notifications (see _scrollOffset).
+        NotificationListener<Notification>(
+          onNotification: _onPageScroll,
+          child: page,
+        ),
+        if (!_skeletonDone)
+          IgnorePointer(
+            ignoring: !_loading,
+            child: AnimatedOpacity(
+              opacity: _skeletonFading ? 0 : 1,
+              duration: const Duration(milliseconds: 350),
+              curve: Curves.easeOut,
+              onEnd: () {
+                if (_skeletonFading && mounted) {
+                  setState(() => _skeletonDone = true);
+                }
+              },
+              child: const ColoredBox(
+                color: AppTheme.scaffoldColor,
+                child: SkeletonDetails(),
+              ),
+            ),
+          ),
+      ],
+    );
   }
 }
 
@@ -2130,6 +2298,114 @@ class _TorrentQualitySelectorSheetState
           ),
         );
       },
+    );
+  }
+}
+
+/// A streaming service's square app-icon logo, rounded like an app icon:
+/// bundled for the major services (instant), otherwise loaded from TMDB,
+/// falling back to its initial if the image can't load.
+class _ProviderLogo extends StatelessWidget {
+  final StreamingProvider provider;
+  final double size;
+
+  const _ProviderLogo({required this.provider, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      color: Colors.black,
+      child: Text(
+        provider.name.characters.first,
+        style: TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.bold,
+          fontSize: size * 0.5,
+        ),
+      ),
+    );
+    final asset = provider.bundledLogoAsset;
+    final logo = provider.logoUrl;
+    final Widget image;
+    if (asset != null) {
+      image = Image.asset(
+        asset,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => fallback,
+      );
+    } else if (logo != null) {
+      image = CachedNetworkImage(
+        imageUrl: logo,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        placeholder: (_, __) => fallback,
+        errorWidget: (_, __, ___) => fallback,
+      );
+    } else {
+      image = fallback;
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(size * 0.22),
+      child: image,
+    );
+  }
+}
+
+/// Stand-in for the Play pill while playback is hidden: same white pill,
+/// with the service's logo and "Watch on {service}".
+class _WatchOnProviderButton extends StatelessWidget {
+  final StreamingProvider provider;
+  final VoidCallback onTap;
+
+  const _WatchOnProviderButton({required this.provider, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 50,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(30),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.white.withValues(alpha: 0.15),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(30),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _ProviderLogo(provider: provider, size: 26),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'Watch on ${provider.name}',
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                  style: const TextStyle(
+                    color: Colors.black,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

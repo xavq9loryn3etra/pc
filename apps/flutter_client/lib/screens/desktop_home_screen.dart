@@ -15,10 +15,7 @@ class DesktopHomeScreen extends StatefulWidget {
   final List<Movie> trendingMovies;
   final List<Movie> historyMovies;
   final List<Movie> topRatedMovies;
-  /// The primary hero button is Play when [onPlayHero] is set, otherwise
-  /// Trailer when [onTrailerHero] is set (see
-  /// FeatureFlagsService.hidePlayback), and hidden when neither is.
-  final VoidCallback? onPlayHero;
+  /// Null hides the hero's Trailer button (no trailer for this title).
   final VoidCallback? onTrailerHero;
   final VoidCallback onInfoHero;
   final Function(Movie) onMovieTap;
@@ -30,7 +27,6 @@ class DesktopHomeScreen extends StatefulWidget {
     required this.trendingMovies,
     required this.historyMovies,
     required this.topRatedMovies,
-    this.onPlayHero,
     this.onTrailerHero,
     required this.onInfoHero,
     required this.onMovieTap,
@@ -408,10 +404,6 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
   }
 
   Widget _buildHeroContent(BuildContext context) {
-    final VoidCallback? primaryAction =
-        widget.onPlayHero ?? widget.onTrailerHero;
-    final bool isTrailer = widget.onPlayHero == null;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -455,69 +447,70 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Play Button (Trailer while playback is hidden)
-            if (primaryAction != null) ...[
-              ElevatedButton.icon(
-                onPressed: primaryAction,
-                icon: Icon(
-                  isTrailer
-                      ? Icons.movie_creation_outlined
-                      : Icons.play_arrow_rounded,
-                  color: Colors.black,
-                  size: isTrailer ? 24 : 28,
-                ),
-                label: Text(isTrailer ? "Trailer" : "Play"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 32,
-                    vertical: 20,
-                  ),
-                  fixedSize: const Size.fromHeight(56),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  textStyle: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
-                ),
+            // More Info — opens the side details panel.
+            ElevatedButton.icon(
+              onPressed: () => _onMovieSelect(widget.featuredMovie),
+              icon: const Icon(
+                Icons.info_outline,
+                color: Colors.black,
+                size: 26,
               ),
-              const SizedBox(width: 16),
-            ],
-            // Info Button — frosted glass, same recipe as the mobile hero
-            // banner's More Info button.
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: BackdropFilter(
-                // See mode_switcher_dialog.dart's comment — lower sigma to
-                // cut GPU cost on weaker/high-refresh-rate devices.
-                filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                child: ElevatedButton.icon(
-                  onPressed: () => _onMovieSelect(widget.featuredMovie),
-                  icon: const Icon(Icons.info_outline, color: Colors.white),
-                  label: const Text("More Info"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color.fromRGBO(109, 109, 109, 0.7),
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 32, // Match Play button
-                      vertical: 20,
-                    ),
-                    fixedSize: const Size.fromHeight(56),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    textStyle: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
+              label: const Text("More Info"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 32,
+                  vertical: 20,
+                ),
+                fixedSize: const Size.fromHeight(56),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                textStyle: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
                 ),
               ),
             ),
+            if (widget.onTrailerHero != null) ...[
+              const SizedBox(width: 16),
+              // Trailer — frosted glass, same recipe as the mobile hero
+              // banner's Trailer button.
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: BackdropFilter(
+                  // See mode_switcher_dialog.dart's comment — lower sigma to
+                  // cut GPU cost on weaker/high-refresh-rate devices.
+                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  child: ElevatedButton.icon(
+                    onPressed: widget.onTrailerHero,
+                    icon: const Icon(
+                      Icons.movie_creation_outlined,
+                      color: Colors.white,
+                    ),
+                    label: const Text("Trailer"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color.fromRGBO(109, 109, 109, 0.7),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 32, // Match More Info button
+                        vertical: 20,
+                      ),
+                      fixedSize: const Size.fromHeight(56),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      textStyle: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ],
         ).animate().fadeIn(delay: 400.ms),
       ],

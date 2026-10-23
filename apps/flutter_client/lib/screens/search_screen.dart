@@ -10,6 +10,7 @@ import '../widgets/screen_scaffold.dart';
 import '../widgets/shimmer_loader.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../services/movie_tab_service.dart';
+import '../services/search_history_service.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -47,6 +48,23 @@ class _SearchScreenState extends State<SearchScreen> {
     // the keyboard when the user switches to Search, dismissing it when
     // they switch away.
     MovieTabService().currentTab.addListener(_onActiveTabChanged);
+    SearchHistoryService().load();
+  }
+
+  /// Runs [query] right away (no debounce) and records it as a deliberate
+  /// search — used for keyboard submit and tapping a recent search.
+  void _searchNow(String query) {
+    final q = query.trim();
+    if (q.isEmpty) return;
+    _debounce?.cancel();
+    if (_controller.text != q) {
+      _controller.value = TextEditingValue(
+        text: q,
+        selection: TextSelection.collapsed(offset: q.length),
+      );
+    }
+    SearchHistoryService().add(q);
+    _performSearch(q);
   }
 
   void _onActiveTabChanged() {
@@ -152,7 +170,9 @@ class _SearchScreenState extends State<SearchScreen> {
           hintStyle: TextStyle(color: Colors.white54),
           border: InputBorder.none,
         ),
+        textInputAction: TextInputAction.search,
         onChanged: _onSearchChanged,
+        onSubmitted: _searchNow,
       ),
       actions: [
         if (_controller.text.isNotEmpty)
@@ -192,18 +212,26 @@ class _SearchScreenState extends State<SearchScreen> {
     }
 
     if (_results.isEmpty && _controller.text.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.search, size: 64, color: Colors.white12),
-            SizedBox(height: 16),
-            Text(
-              'Find your next favorite.',
-              style: TextStyle(color: Colors.white24),
-            ),
-          ],
-        ),
+      return ValueListenableBuilder<List<String>>(
+        valueListenable: SearchHistoryService().entries,
+        builder: (context, history, _) {
+          if (history.isEmpty) {
+            return const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.search, size: 64, color: Colors.white12),
+                  SizedBox(height: 16),
+                  Text(
+                    'Find your next favorite.',
+                    style: TextStyle(color: Colors.white24),
+                  ),
+                ],
+              ),
+            );
+          }
+          return _buildRecentSearches(history, isDesktop, padding);
+        },
       );
     }
 
@@ -231,6 +259,8 @@ class _SearchScreenState extends State<SearchScreen> {
           height: double.infinity,
           showTitle: true,
           onTap: () {
+            // Opening a result marks the query as a real search.
+            SearchHistoryService().add(_controller.text);
             if (isDesktop) {
               setState(() {
                 _selectedMovie = movie;
@@ -246,6 +276,66 @@ class _SearchScreenState extends State<SearchScreen> {
           },
         );
       },
+    );
+  }
+
+  /// "Recent" list shown while the search box is empty: tap to search
+  /// again, ✕ to forget.
+  Widget _buildRecentSearches(
+    List<String> history,
+    bool isDesktop,
+    EdgeInsets padding,
+  ) {
+    final horizontalPadding = isDesktop ? 60.0 : 8.0;
+    return ListView(
+      padding: padding.copyWith(
+        left: horizontalPadding,
+        right: horizontalPadding,
+        top: 100,
+      ),
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: Text(
+            'RECENT SEARCHES',
+            style: TextStyle(
+              color: Colors.white38,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1,
+            ),
+          ),
+        ),
+        for (final query in history)
+          InkWell(
+            onTap: () => _searchNow(query),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.only(left: 16, right: 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.history, color: Colors.white38, size: 22),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(
+                      query,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 16),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close,
+                        color: Colors.white38, size: 18),
+                    tooltip: 'Remove',
+                    onPressed: () => SearchHistoryService().remove(query),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

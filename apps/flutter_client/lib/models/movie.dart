@@ -14,14 +14,23 @@ class Movie {
   // Extra Details
   final String? director;
   final List<String>? cast;
+  // Billed cast with photos and character names, for the details screen's
+  // cast row (details only, not persisted — `cast` keeps the plain names).
+  final List<CastMember>? castMembers;
   final List<String>? genres;
   final String? logoUrl;
+  // Width ÷ height of [logoUrl]'s image, from TMDB (details only), so
+  // layouts can size a box to the logo before it has loaded.
+  final double? logoAspectRatio;
   final String? runtime;
   final String? mpaa;
   final String? certification;
   final List<Season>? seasons;
   final String? trailerUrl;
   final String? imdbId;
+  // Subscription service streaming this title in the user's country (from
+  // TMDB's watch providers). Details-only, not persisted.
+  final StreamingProvider? streamingProvider;
 
   // History / Progress
   final int? currentSeason;
@@ -73,14 +82,17 @@ class Movie {
     this.releaseDateRaw,
     this.director,
     this.cast,
+    this.castMembers,
     this.genres,
     this.logoUrl,
+    this.logoAspectRatio,
     this.runtime,
     this.mpaa,
     this.certification,
     this.seasons,
     this.trailerUrl,
     this.imdbId,
+    this.streamingProvider,
     this.currentSeason,
     this.currentEpisode,
     this.progress,
@@ -183,4 +195,64 @@ class Episode {
     required this.voteAverage,
     this.progress,
   });
+}
+
+/// A subscription streaming service that carries a title, as reported by
+/// TMDB's watch providers (data from JustWatch).
+class StreamingProvider {
+  final int id;
+  final String name;
+  final String? logoUrl;
+
+  /// Where tapping the provider goes: the service's own search for the
+  /// title where its URL format is known (the OS hands it to the installed
+  /// app), otherwise TMDB's watch page for the title, which links out to
+  /// every service carrying it.
+  final String url;
+
+  const StreamingProvider({
+    required this.id,
+    required this.name,
+    required this.url,
+    this.logoUrl,
+  });
+
+  // Logos bundled in assets/providers/ (TMDB's own logo images) so the
+  // major services' icons show instantly instead of loading from the
+  // network on first view. Keyed by TMDB provider ID.
+  static const _bundledLogoIds = {
+    8, // Netflix
+    9, // Amazon Prime Video
+    337, // Disney Plus
+    350, // Apple TV
+    15, // Hulu
+    1899, // HBO Max
+    531, // Paramount Plus
+    2336, // JioHotstar
+    232, // Zee5
+    237, // Sony Liv
+    283, // Crunchyroll
+  };
+  // Other IDs TMDB uses for the same services and logos.
+  static const _logoAliases = {
+    1796: 8, // Netflix Standard with Ads
+    119: 9, // Amazon Prime Video (other regions)
+  };
+
+  /// Bundled logo asset for this service, or null to load [logoUrl].
+  String? get bundledLogoAsset {
+    final logoId = _logoAliases[id] ?? id;
+    return _bundledLogoIds.contains(logoId)
+        ? 'assets/providers/$logoId.png'
+        : null;
+  }
+}
+
+/// One billed cast member, from TMDB credits.
+class CastMember {
+  final String name;
+  final String? character;
+  final String? profileUrl;
+
+  const CastMember({required this.name, this.character, this.profileUrl});
 }

@@ -1,3 +1,4 @@
+import 'dart:ui' show PlatformDispatcher;
 import 'package:dio/dio.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/movie.dart';
@@ -120,6 +121,57 @@ class TMDBService {
     }
   }
 
+  // Original languages written in the Latin alphabet, whose logos read fine
+  // alongside the app's English UI (e.g. Lupin's French "LUPIN").
+  static const _latinScriptLanguages = {
+    'fr', 'es', 'de', 'it', 'pt', 'nl', 'sv', 'da', 'no', 'nb', 'nn', 'fi',
+    'is', 'pl', 'cs', 'sk', 'sl', 'hr', 'bs', 'sr', 'hu', 'ro', 'tr', 'et',
+    'lv', 'lt', 'ga', 'cy', 'ca', 'eu', 'gl', 'id', 'ms', 'tl', 'vi', 'sq',
+    'af', 'sw', 'mt', 'lb',
+  };
+
+  /// Details are fetched with English / language-neutral images only, so a
+  /// non-English production with no English-tagged logo (e.g. Lupin: 34
+  /// logos, none English) fell back to a plain text title. When that
+  /// happens and its original language uses the Latin alphabet, fetch the
+  /// original-language logos and add them to [data]'s images. Other
+  /// scripts (Japanese, Korean, …) keep the English text title.
+  Future<void> _addOriginalLanguageLogos(
+    dynamic data,
+    String type,
+    String id,
+    CancelToken? cancelToken,
+  ) async {
+    if (data is! Map) return;
+    final images = data['images'];
+    final logos = images is Map ? images['logos'] : null;
+    if (logos is List && logos.isNotEmpty) return;
+    final language = data['original_language'];
+    if (language is! String || !_latinScriptLanguages.contains(language)) {
+      return;
+    }
+    try {
+      final response = await _dio.get(
+        '$_baseUrl/$type/$id/images',
+        queryParameters: {
+          'api_key': _apiKey,
+          'include_image_language': language,
+        },
+        cancelToken: cancelToken,
+      );
+      final found = response.data is Map ? response.data['logos'] : null;
+      if (found is List && found.isNotEmpty) {
+        data['images'] = {
+          ...(images is Map ? images : const {}),
+          'logos': found,
+        };
+      }
+    } catch (e) {
+      if (e is DioException && CancelToken.isCancel(e)) rethrow;
+      // No logo is fine — the text title is shown instead.
+    }
+  }
+
   Future<Movie?> getDetails(String id,
       {String? type, CancelToken? cancelToken}) async {
     final key = 'details_${id}_$type';
@@ -134,11 +186,13 @@ class TMDBService {
           '$_baseUrl/movie/$id',
           queryParameters: {
             'api_key': _apiKey,
-            'append_to_response': 'credits,videos,images,release_dates,external_ids',
+            'append_to_response':
+                'credits,videos,images,release_dates,external_ids,watch/providers',
             'include_image_language': 'en,null',
           },
           cancelToken: cancelToken,
         );
+        await _addOriginalLanguageLogos(response.data, 'movie', id, cancelToken);
         final movie = _formatMovieDetails(response.data, isTv: false);
         _cache[key] = _CacheEntry(movie);
         return movie;
@@ -155,11 +209,12 @@ class TMDBService {
         queryParameters: {
           'api_key': _apiKey,
           'append_to_response':
-              'credits,videos,images,content_ratings,external_ids',
+              'credits,videos,images,content_ratings,external_ids,watch/providers',
           'include_image_language': 'en,null',
         },
         cancelToken: cancelToken,
       );
+      await _addOriginalLanguageLogos(response.data, 'tv', id, cancelToken);
       final movie = _formatMovieDetails(response.data, isTv: true);
       _cache[key] = _CacheEntry(movie);
       return movie;
@@ -246,6 +301,7 @@ class TMDBService {
     final credits = m['credits'];
     String? director;
     List<String> cast = [];
+    List<CastMember> castMembers = [];
     if (credits != null) {
       director = (credits['crew'] as List?)?.firstWhere(
         (c) => c['job'] == 'Director',
@@ -256,6 +312,22 @@ class TMDBService {
               .map((c) => c['name'].toString())
               .toList() ??
           [];
+      castMembers = (credits['cast'] as List? ?? const [])
+          .whereType<Map>()
+          .where((c) => c['name'] is String)
+          .take(15)
+          .map((c) {
+        final character = c['character'];
+        final profile = c['profile_path'];
+        return CastMember(
+          name: c['name'] as String,
+          character:
+              character is String && character.isNotEmpty ? character : null,
+          profileUrl: profile is String
+              ? 'https://image.tmdb.org/t/p/w185$profile'
+              : null,
+        );
+      }).toList();
     }
 
     // Genres
@@ -264,6 +336,7 @@ class TMDBService {
 
     // Logo
     String? logoUrl;
+    double? logoAspectRatio;
     final images = m['images'];
     if (images != null &&
         images['logos'] != null &&
@@ -273,7 +346,21 @@ class TMDBService {
         (l) => l['iso_639_1'] == 'en',
         orElse: () => logos.first,
       );
-      if (enLogo != null) logoUrl = '$_imageBase${enLogo['file_path']}';
+      if (enLogo != null) {
+        // TMDB also serves every SVG logo as a rasterized PNG (same path,
+        // .png extension) — use that. flutter_svg ignores <style> CSS, which
+        // Illustrator-exported SVGs often use for fills (e.g. Stranger
+        // Things' `.st0{fill:#EA2A2D}`), so those logos rendered solid
+        // black. PNG also goes through the image cache and the details
+        // screen's header preload, which SvgPicture doesn't.
+        String path = enLogo['file_path'];
+        if (path.toLowerCase().endsWith('.svg')) {
+          path = '${path.substring(0, path.length - 4)}.png';
+        }
+        logoUrl = '$_imageBase$path';
+        final ratio = enLogo['aspect_ratio'];
+        if (ratio is num && ratio > 0) logoAspectRatio = ratio.toDouble();
+      }
     }
 
     // Backdrop — prefer the best-rated entry from images.backdrops (already
@@ -344,14 +431,71 @@ class TMDBService {
       releaseDateRaw: base.releaseDateRaw,
       director: director,
       cast: cast,
+      castMembers: castMembers,
       genres: genres,
       logoUrl: logoUrl,
+      logoAspectRatio: logoAspectRatio,
       runtime: runtime,
       certification: certification,
       mpaa: isTv ? certification : (m['adult'] == true ? 'R' : certification),
       seasons: seasons,
       trailerUrl: trailerUrl,
       imdbId: imdbId,
+      streamingProvider:
+          _pickStreamingProvider(m['watch/providers'], base.title),
+    );
+  }
+
+  // TMDB provider IDs → the service's public search URL, which Android App
+  // Links / iOS Universal Links open in the service's app when installed.
+  // Only services whose search URL format is known; others fall back to
+  // TMDB's own watch page for the title.
+  static const _netflixIds = {8, 1796}; // Netflix, Netflix Standard with Ads
+  static final Map<int, String Function(String)> _providerSearchUrls = {
+    for (final id in _netflixIds)
+      id: (q) => 'https://www.netflix.com/search?q=$q',
+    9: (q) => 'https://www.primevideo.com/search?phrase=$q', // Prime Video
+    119: (q) => 'https://www.primevideo.com/search?phrase=$q', // Prime Video
+    350: (q) => 'https://tv.apple.com/search?term=$q', // Apple TV+
+  };
+
+  /// The subscription ("flatrate") service streaming a title in the
+  /// device's country — Netflix when it's one of several, otherwise TMDB's
+  /// top-ranked one. Null when there's none, or no country to check.
+  StreamingProvider? _pickStreamingProvider(dynamic watchProviders, String title) {
+    final country = PlatformDispatcher.instance.locale.countryCode;
+    if (country == null || watchProviders is! Map) return null;
+    final results = watchProviders['results'];
+    if (results is! Map) return null;
+    final regional = results[country.toUpperCase()];
+    if (regional is! Map) return null;
+    final flatrate = regional['flatrate'];
+    if (flatrate is! List || flatrate.isEmpty) return null;
+
+    // Already sorted by TMDB's display_priority.
+    final providers = flatrate.whereType<Map>().toList();
+    final chosen = providers.firstWhere(
+      (p) => _netflixIds.contains(p['provider_id']),
+      orElse: () => providers.first,
+    );
+    final id = chosen['provider_id'];
+    final name = chosen['provider_name'];
+    if (id is! int || name is! String) return null;
+
+    final search = _providerSearchUrls[id];
+    final fallback = regional['link'];
+    final url = search != null
+        ? search(Uri.encodeQueryComponent(title))
+        : (fallback is String ? fallback : null);
+    if (url == null) return null;
+
+    final logo = chosen['logo_path'];
+    return StreamingProvider(
+      id: id,
+      // "Netflix Standard with Ads" → "Netflix" for the button label.
+      name: _netflixIds.contains(id) ? 'Netflix' : name,
+      url: url,
+      logoUrl: logo is String ? 'https://image.tmdb.org/t/p/w92$logo' : null,
     );
   }
 

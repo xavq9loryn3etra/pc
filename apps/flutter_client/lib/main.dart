@@ -1,4 +1,6 @@
 import 'dart:ui';
+import 'package:flutter/foundation.dart'
+    show LicenseRegistry, LicenseEntryWithLineBreaks;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -27,6 +29,14 @@ import 'services/trending_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Apache 2.0 attribution for the bundled Yellowtail font.
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(
+      ['Yellowtail font'],
+      await rootBundle.loadString('assets/fonts/Yellowtail-LICENSE.txt'),
+    );
+  });
+
   // Always start in portrait, regardless of whatever orientation the OS
   // Activity was left in. PlayerScreen/WebPlayer lock to landscape and only
   // reset back to portrait in their own dispose() — but if Android kills the
@@ -37,6 +47,16 @@ void main() async {
   // reopening from Recents cold-starts fresh into the mode selector screen
   // while still stuck in landscape.
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+
+  // Android draws a translucent black scrim behind the status bar unless
+  // told otherwise (screens with an AppBar already clear it themselves).
+  // Make it transparent app-wide so full-bleed screens (status, welcome,
+  // splash) run edge to edge; the app is always dark, so icons stay light.
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light, // Android
+    statusBarBrightness: Brightness.dark, // iOS
+  ));
 
   MediaKit.ensureInitialized();
   await SavedMoviesService().init();
@@ -300,7 +320,12 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           fit: StackFit.expand,
           children: [
             if (child != null) child,
-            if (_isOffline) const NoInternetOverlay(),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 350),
+              child: _isOffline
+                  ? const NoInternetOverlay()
+                  : const SizedBox.shrink(),
+            ),
           ],
         );
       },

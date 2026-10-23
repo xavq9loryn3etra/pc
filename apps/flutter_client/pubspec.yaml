@@ -101,6 +101,14 @@ flutter:
     - assets/welcome/movies/
     - assets/welcome/music/
     - assets/welcome/books/
+    - assets/fonts/Yellowtail-LICENSE.txt
+
+  # Bundled rather than fetched via google_fonts: the offline status
+  # screen uses it, so it has to be available without a connection.
+  fonts:
+    - family: Yellowtail
+      fonts:
+        - asset: assets/fonts/Yellowtail-Regular.ttf
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

@@ -466,7 +466,17 @@ class TMDBService {
   /// in their app are considered: the button never falls back to TMDB, a
   /// search page or any other website. Null when there's none.
   StreamingProvider? _pickStreamingProvider(dynamic watchProviders) {
-    final country = PlatformDispatcher.instance.locale.countryCode;
+    // The first preferred locale can lack a region (iOS reports a plain
+    // "English" language setting as `en`), which left iPhones with no
+    // country to look up — so take the first locale that has one.
+    String? country;
+    for (final locale in PlatformDispatcher.instance.locales) {
+      final code = locale.countryCode;
+      if (code != null && code.isNotEmpty) {
+        country = code;
+        break;
+      }
+    }
     if (country == null || watchProviders is! Map) return null;
     final results = watchProviders['results'];
     if (results is! Map) return null;

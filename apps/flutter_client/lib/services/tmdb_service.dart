@@ -2,6 +2,7 @@ import 'dart:ui' show PlatformDispatcher;
 import 'package:dio/dio.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/movie.dart';
+import 'streaming_link_service.dart';
 
 // ... imports
 
@@ -417,6 +418,12 @@ class TMDBService {
       imdbId = m['external_ids']['imdb_id'];
     }
 
+    // Wikidata ID — the key for looking up the Netflix title ID.
+    final externalIds = m['external_ids'];
+    final wikidata = externalIds is Map ? externalIds['wikidata_id'] : null;
+    final String? wikidataId =
+        wikidata is String && wikidata.isNotEmpty ? wikidata : null;
+
     return Movie(
       id: base.id,
       title: base.title,
@@ -441,8 +448,9 @@ class TMDBService {
       seasons: seasons,
       trailerUrl: trailerUrl,
       imdbId: imdbId,
+      wikidataId: wikidataId,
       streamingProvider:
-          _pickStreamingProvider(m['watch/providers'], base.title),
+          _pickStreamingProvider(m['watch/providers']),
     );
   }
 
@@ -451,18 +459,13 @@ class TMDBService {
   // Only services whose search URL format is known; others fall back to
   // TMDB's own watch page for the title.
   static const _netflixIds = {8, 1796}; // Netflix, Netflix Standard with Ads
-  static final Map<int, String Function(String)> _providerSearchUrls = {
-    for (final id in _netflixIds)
-      id: (q) => 'https://www.netflix.com/search?q=$q',
-    9: (q) => 'https://www.primevideo.com/search?phrase=$q', // Prime Video
-    119: (q) => 'https://www.primevideo.com/search?phrase=$q', // Prime Video
-    350: (q) => 'https://tv.apple.com/search?term=$q', // Apple TV+
-  };
 
   /// The subscription ("flatrate") service streaming a title in the
   /// device's country — Netflix when it's one of several, otherwise TMDB's
-  /// top-ranked one. Null when there's none, or no country to check.
-  StreamingProvider? _pickStreamingProvider(dynamic watchProviders, String title) {
+  /// top-ranked one. Only services StreamingLinkService can open directly
+  /// in their app are considered: the button never falls back to TMDB, a
+  /// search page or any other website. Null when there's none.
+  StreamingProvider? _pickStreamingProvider(dynamic watchProviders) {
     final country = PlatformDispatcher.instance.locale.countryCode;
     if (country == null || watchProviders is! Map) return null;
     final results = watchProviders['results'];
@@ -473,28 +476,26 @@ class TMDBService {
     if (flatrate is! List || flatrate.isEmpty) return null;
 
     // Already sorted by TMDB's display_priority.
-    final providers = flatrate.whereType<Map>().toList();
+    final providers = flatrate
+        .whereType<Map>()
+        .where((p) =>
+            p['provider_id'] is int &&
+            p['provider_name'] is String &&
+            StreamingLinkService().supports(p['provider_id'] as int))
+        .toList();
+    if (providers.isEmpty) return null;
     final chosen = providers.firstWhere(
       (p) => _netflixIds.contains(p['provider_id']),
       orElse: () => providers.first,
     );
-    final id = chosen['provider_id'];
-    final name = chosen['provider_name'];
-    if (id is! int || name is! String) return null;
-
-    final search = _providerSearchUrls[id];
-    final fallback = regional['link'];
-    final url = search != null
-        ? search(Uri.encodeQueryComponent(title))
-        : (fallback is String ? fallback : null);
-    if (url == null) return null;
+    final id = chosen['provider_id'] as int;
+    final name = chosen['provider_name'] as String;
 
     final logo = chosen['logo_path'];
     return StreamingProvider(
       id: id,
       // "Netflix Standard with Ads" → "Netflix" for the button label.
       name: _netflixIds.contains(id) ? 'Netflix' : name,
-      url: url,
       logoUrl: logo is String ? 'https://image.tmdb.org/t/p/w92$logo' : null,
     );
   }

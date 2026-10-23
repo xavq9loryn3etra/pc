@@ -4,5 +4,5 @@
   "update_url": "https://drive.google.com/drive/folders/1ftzQcKIUkB2sKwInoSdMG7-SH4rPf96i?usp=sharing",
   "maintenance_mode_enabled": false,
   "maintenance_message": "We are currently performing a scheduled maintenance. Please check back later.",
-  "hide_playback": true
+  "hide_playback": false
 }

@@ -28,6 +28,10 @@ class Movie {
   final List<Season>? seasons;
   final String? trailerUrl;
   final String? imdbId;
+  // Wikidata entity ID (e.g. "Q104082429") from TMDB external_ids —
+  // used to resolve direct streaming-service links (see
+  // StreamingLinkService).
+  final String? wikidataId;
   // Subscription service streaming this title in the user's country (from
   // TMDB's watch providers). Details-only, not persisted.
   final StreamingProvider? streamingProvider;
@@ -92,6 +96,7 @@ class Movie {
     this.seasons,
     this.trailerUrl,
     this.imdbId,
+    this.wikidataId,
     this.streamingProvider,
     this.currentSeason,
     this.currentEpisode,
@@ -199,21 +204,18 @@ class Episode {
 
 /// A subscription streaming service that carries a title, as reported by
 /// TMDB's watch providers (data from JustWatch).
+///
+/// Deliberately has no web URL: tapping it opens the title only in the
+/// service's own app, via StreamingLinkService — never TMDB, a search page
+/// or any other website.
 class StreamingProvider {
   final int id;
   final String name;
   final String? logoUrl;
 
-  /// Where tapping the provider goes: the service's own search for the
-  /// title where its URL format is known (the OS hands it to the installed
-  /// app), otherwise TMDB's watch page for the title, which links out to
-  /// every service carrying it.
-  final String url;
-
   const StreamingProvider({
     required this.id,
     required this.name,
-    required this.url,
     this.logoUrl,
   });
 
@@ -237,6 +239,7 @@ class StreamingProvider {
   static const _logoAliases = {
     1796: 8, // Netflix Standard with Ads
     119: 9, // Amazon Prime Video (other regions)
+    2100: 9, // Amazon Prime Video with Ads
   };
 
   /// Bundled logo asset for this service, or null to load [logoUrl].

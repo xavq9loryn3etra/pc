@@ -14,6 +14,7 @@ import '../services/tmdb_service.dart';
 import '../services/scraper_service.dart';
 import '../services/saved_movies_service.dart';
 import '../services/feature_flags_service.dart';
+import '../services/streaming_link_service.dart';
 import '../services/torrent/torrent_index_service.dart';
 import '../services/torrent/stream_resolver.dart';
 import '../services/torrent/torrent_download_registry.dart';
@@ -148,15 +149,50 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   /// Opens the streaming service's page for this title — in its app when
   /// installed (Android App Links / iOS Universal Links), else the browser.
+  /// Opens this title in the streaming service's own app — and nowhere
+  /// else. Never falls back to TMDB, a search page or a browser: if there's
+  /// no direct link for the title, or no app on the device can open it, the
+  /// user is told instead.
   Future<void> _openProvider(StreamingProvider provider) async {
+    final m = _details ?? widget.movie;
+    // Usually already resolved and cached by the prefetch in _loadDetails.
+    final url = m.wikidataId == null
+        ? null
+        : await StreamingLinkService()
+            .directUrl(
+              wikidataId: m.wikidataId!,
+              providerId: provider.id,
+              isTv: m.type == 'tv',
+            )
+            .timeout(const Duration(seconds: 3), onTimeout: () => null);
+    if (!mounted) return;
+    if (url == null) {
+      _showProviderMessage("Couldn't find ${m.title} on ${provider.name}.");
+      return;
+    }
+
+    var opened = false;
     try {
-      await launchUrl(
-        Uri.parse(provider.url),
-        mode: LaunchMode.externalApplication,
+      // Non-browser only: the OS opens the link in the service's app, or
+      // refuses (returns false / throws) rather than falling back to a
+      // browser.
+      opened = await launchUrl(
+        Uri.parse(url),
+        mode: LaunchMode.externalNonBrowserApplication,
       );
     } catch (e) {
       debugPrint('Failed to open ${provider.name}: $e');
     }
+    if (!opened && mounted) {
+      _showProviderMessage(
+          "Couldn't open ${provider.name}. Make sure the app is installed.");
+    }
+  }
+
+  void _showProviderMessage(String message) {
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// Splits the Play pill so [provider]'s logo sits at its right end,
@@ -217,6 +253,17 @@ class _DetailsScreenState extends State<DetailsScreen> {
       rethrow;
     }
     if (!mounted) return;
+
+    // Resolve the streaming service's direct link in the background now, so
+    // it's ready (and cached) before its button is tapped — see
+    // _openProvider.
+    final loaded = d ?? widget.movie;
+    final provider = loaded.streamingProvider;
+    if (provider != null &&
+        loaded.wikidataId != null &&
+        StreamingLinkService().supports(provider.id)) {
+      StreamingLinkService().prefetch(loaded.wikidataId!);
+    }
 
     // Still behind the skeleton (_loading stays true): store the details
     // and pick the starting season, then keep the skeleton up while the

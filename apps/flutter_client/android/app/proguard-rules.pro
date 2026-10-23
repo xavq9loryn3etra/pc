@@ -11,10 +11,6 @@
 -keep class com.libtorrent.** { *; }
 -keep class libtorrent_flutter.** { *; }
 
-# Firebase (Remote Config / Core) reflection-based config parsing
--keep class com.google.firebase.** { *; }
--dontwarn com.google.firebase.**
-
 # webview_flutter JS bridge objects
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;

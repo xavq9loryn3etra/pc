@@ -15,7 +15,8 @@ class DesktopHomeScreen extends StatefulWidget {
   final List<Movie> trendingMovies;
   final List<Movie> historyMovies;
   final List<Movie> topRatedMovies;
-  final VoidCallback onPlayHero;
+  /// Null hides the Play button (see FeatureFlagsService.hidePlayback).
+  final VoidCallback? onPlayHero;
   final VoidCallback onInfoHero;
   final Function(Movie) onMovieTap;
   final Function(Movie)? onRemoveHistory;
@@ -26,7 +27,7 @@ class DesktopHomeScreen extends StatefulWidget {
     required this.trendingMovies,
     required this.historyMovies,
     required this.topRatedMovies,
-    required this.onPlayHero,
+    this.onPlayHero,
     required this.onInfoHero,
     required this.onMovieTap,
     this.onRemoveHistory,
@@ -447,32 +448,34 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             // Play Button
-            ElevatedButton.icon(
-              onPressed: widget.onPlayHero,
-              icon: const Icon(
-                Icons.play_arrow_rounded,
-                color: Colors.black,
-                size: 28,
+            if (widget.onPlayHero != null) ...[
+              ElevatedButton.icon(
+                onPressed: widget.onPlayHero,
+                icon: const Icon(
+                  Icons.play_arrow_rounded,
+                  color: Colors.black,
+                  size: 28,
+                ),
+                label: const Text("Play"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 32,
+                    vertical: 20,
+                  ),
+                  fixedSize: const Size.fromHeight(56),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  textStyle: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
               ),
-              label: const Text("Play"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: Colors.black,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 20,
-                ),
-                fixedSize: const Size.fromHeight(56),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                textStyle: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-            ),
-            const SizedBox(width: 16),
+              const SizedBox(width: 16),
+            ],
             // Info Button — frosted glass, same recipe as the mobile hero
             // banner's More Info button.
             ClipRRect(

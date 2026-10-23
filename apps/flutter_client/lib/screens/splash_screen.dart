@@ -1,14 +1,8 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
-/// Startup intro shown while main.dart's config/first-launch checks run.
-/// The popcorn icon behaves like a lump of jelly, straight out of the
-/// (plain black) native launch screen:
-///
-///  1. It drops in from above, stretching slightly as it falls.
-///  2. It lands with a squash, bounces once and wobbles (squash/stretch
-///     plus a side-to-side sway anchored at its base) until it settles.
+/// Startup intro shown while main.dart's config/first-launch checks run,
+/// straight out of the (plain black) native launch screen: the popcorn icon
+/// fades in while easing up from slightly smaller than full size.
 ///
 /// The icon then stays put until the intro has played *and* [ready] is
 /// true, when [onFinished] fires and main.dart cross-fades to the next
@@ -34,15 +28,18 @@ class SplashScreen extends StatefulWidget {
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   static const _iconSize = 130.0;
-  static const _fallSeconds = 0.35;
-  // The wobble has died down by about here.
-  static const _settledSeconds = 1.1;
+  static const _fadeInSeconds = 0.9;
   // Short hold so the finished frame registers before moving on.
-  static const _introSeconds = _settledSeconds + 0.4;
+  static const _introSeconds = _fadeInSeconds + 0.4;
 
   late final AnimationController _intro = AnimationController(
     vsync: this,
     duration: Duration(milliseconds: (_introSeconds * 1000).round()),
+  );
+  late final Animation<double> _reveal = CurvedAnimation(
+    parent: _intro,
+    curve: const Interval(0, _fadeInSeconds / _introSeconds,
+        curve: Curves.easeOutCubic),
   );
 
   bool _started = false;
@@ -90,69 +87,20 @@ class _SplashScreenState extends State<SplashScreen>
     super.dispose();
   }
 
-  /// Icon pose for the current frame: vertical offset, horizontal/vertical
-  /// scale and sway (horizontal skew), all pivoting on the icon's base.
-  _Pose _pose(double screenHeight) {
-    final t = _intro.value * _introSeconds;
-
-    // 1. Falling: accelerates under "gravity", stretched along the fall.
-    if (t < _fallSeconds) {
-      final p = t / _fallSeconds;
-      final dropFrom = screenHeight / 2 + _iconSize;
-      return _Pose(dy: -dropFrom * (1 - p * p), sx: 0.9, sy: 1.12);
-    }
-
-    // 2. Landed: damped squash/stretch, one small bounce and a sway that
-    // lags slightly behind, which is what sells it as jelly rather than
-    // a rigid bouncing ball.
-    final s = t - _fallSeconds;
-    final squash = 0.3 * math.exp(-5 * s) * math.cos(2 * math.pi * 3.2 * s);
-    final sway = 0.14 * math.exp(-4.2 * s) * math.sin(2 * math.pi * 2.3 * s);
-    const hopSeconds = 0.3;
-    final hop = s < hopSeconds ? 22 * math.sin(math.pi * s / hopSeconds) : 0.0;
-
-    return _Pose(dy: -hop, sx: 1 + 0.8 * squash, sy: 1 - squash, skew: sway);
-  }
-
   @override
   Widget build(BuildContext context) {
-    final screenHeight = MediaQuery.sizeOf(context).height;
-
     return Center(
-      child: AnimatedBuilder(
-        animation: _intro,
-        builder: (context, child) {
-          final pose = _pose(screenHeight);
-          return Transform.translate(
-            offset: Offset(0, pose.dy),
-            child: Transform(
-              alignment: Alignment.bottomCenter,
-              transform: Matrix4.diagonal3Values(pose.sx, pose.sy, 1)
-                ..setEntry(0, 1, pose.skew),
-              child: child,
-            ),
-          );
-        },
-        child: Image.asset(
-          'assets/icon-transparent.png',
-          width: _iconSize,
-          height: _iconSize,
+      child: FadeTransition(
+        opacity: _reveal,
+        child: ScaleTransition(
+          scale: Tween(begin: 0.92, end: 1.0).animate(_reveal),
+          child: Image.asset(
+            'assets/icon-transparent.png',
+            width: _iconSize,
+            height: _iconSize,
+          ),
         ),
       ),
     );
   }
-}
-
-class _Pose {
-  final double dy;
-  final double sx;
-  final double sy;
-  final double skew;
-
-  const _Pose({
-    required this.dy,
-    required this.sx,
-    required this.sy,
-    this.skew = 0,
-  });
 }

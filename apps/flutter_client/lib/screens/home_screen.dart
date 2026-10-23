@@ -8,6 +8,7 @@ import 'details_screen.dart';
 import '../widgets/hero_banner.dart';
 import '../widgets/movie_poster.dart';
 import '../services/saved_movies_service.dart';
+import '../services/feature_flags_service.dart';
 import '../widgets/skeletons.dart';
 import 'desktop_home_screen.dart';
 import '../widgets/desktop_skeletons.dart';
@@ -126,7 +127,10 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
         // actually changes, instead of after every single navigation
         // return regardless of whether anything changed.
         return ListenableBuilder(
-          listenable: SavedMoviesService(),
+          listenable: Listenable.merge([
+            SavedMoviesService(),
+            FeatureFlagsService().hidePlayback,
+          ]),
           builder: (context, _) => _buildContent(context, constraints),
         );
       },
@@ -134,19 +138,25 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
   }
 
   Widget _buildContent(BuildContext context, BoxConstraints constraints) {
+    final hidePlayback = FeatureFlagsService().hidePlayback.value;
+    final history =
+        hidePlayback ? const <Movie>[] : SavedMoviesService().history;
+
     if (constraints.maxWidth > 800 && _featuredMovie != null) {
       return DesktopHomeScreen(
         featuredMovie: _featuredMovie!,
         trendingMovies: _trendingMovies,
-        historyMovies: SavedMoviesService().history,
+        historyMovies: history,
         topRatedMovies: _topRatedMovies,
-        onPlayHero: () {
-          SavedMoviesService().addToHistory(_featuredMovie!);
-          _navigateToDetails(
-            _featuredMovie!,
-            heroTag: 'hero_${_featuredMovie!.id}',
-          );
-        },
+        onPlayHero: hidePlayback
+            ? null
+            : () {
+                SavedMoviesService().addToHistory(_featuredMovie!);
+                _navigateToDetails(
+                  _featuredMovie!,
+                  heroTag: 'hero_${_featuredMovie!.id}',
+                );
+              },
         onInfoHero: () => _navigateToDetails(
           _featuredMovie!,
           heroTag: 'hero_${_featuredMovie!.id}',
@@ -186,13 +196,15 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
               MovieHeroBanner(
                 scrollController: _scrollController,
                 movie: _featuredMovie!,
-                onPlay: () {
-                  SavedMoviesService().addToHistory(_featuredMovie!);
-                  _navigateToDetails(
-                    _featuredMovie!,
-                    heroTag: 'hero_${_featuredMovie!.id}',
-                  );
-                },
+                onPlay: hidePlayback
+                    ? null
+                    : () {
+                        SavedMoviesService().addToHistory(_featuredMovie!);
+                        _navigateToDetails(
+                          _featuredMovie!,
+                          heroTag: 'hero_${_featuredMovie!.id}',
+                        );
+                      },
                 onInfo: () => _navigateToDetails(
                   _featuredMovie!,
                   heroTag: 'hero_${_featuredMovie!.id}',
@@ -202,14 +214,14 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
             const SizedBox(height: 20),
 
             // Continue Watching (History)
-            if (SavedMoviesService().history.isNotEmpty)
+            if (history.isNotEmpty)
               _buildSection(
                 title: "Continue Watching",
-                movies: SavedMoviesService().history,
+                movies: history,
                 heroPrefix: "history",
               ),
 
-            if (SavedMoviesService().history.isNotEmpty)
+            if (history.isNotEmpty)
               const SizedBox(height: 24),
 
             // Trending Section

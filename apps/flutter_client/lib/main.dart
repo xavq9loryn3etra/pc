@@ -1,17 +1,13 @@
-import 'dart:io' show Platform;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:media_kit/media_kit.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_remote_config/firebase_remote_config.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'dart:async';
 
-import 'firebase_options.dart';
 import 'screens/welcome_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/mode_selector_screen.dart';
@@ -24,6 +20,7 @@ import 'theme/app_theme.dart';
 import 'services/app_mode_service.dart';
 import 'services/saved_movies_service.dart';
 import 'services/deep_link_service.dart';
+import 'services/feature_flags_service.dart';
 import 'services/torrent/torrent_engine_service.dart';
 import 'services/trending_service.dart';
 
@@ -41,30 +38,10 @@ void main() async {
   // while still stuck in landscape.
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
-  // Firebase C++ SDK on Windows only ships Debug libs, causing linker
-  // errors in Release builds. The desktop Electron app handles Firebase
-  // separately, so we only initialise on mobile.
-  //
-  // iOS: Currently skipped because firebase_options.dart has a *web* appId
-  // for iOS (no iOS app is registered in the Firebase Console and there is
-  // no GoogleService-Info.plist). The Firebase iOS native SDK validates the
-  // appId format at the Obj-C level, throwing an NSException that kills
-  // the process before Dart's try-catch can intercept it.
-  // When you register a proper iOS app in Firebase Console, replace the
-  // ios FirebaseOptions and add GoogleService-Info.plist, then re-enable.
-  if (Platform.isAndroid) {
-    try {
-      await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform,
-      );
-    } catch (e) {
-      print("Warning: Firebase initialization failed: $e");
-    }
-  }
-
   MediaKit.ensureInitialized();
   await SavedMoviesService().init();
   await AppModeService().init();
+  await FeatureFlagsService().init();
   // Not awaited: this spins up the native libtorrent engine (DHT bootstrap,
   // tracker connections), which isn't needed until the user actually starts
   // streaming something. Awaiting it here delayed the first frame on every
@@ -121,6 +98,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   bool _selectorWarm = false;
   String _maintenanceMsg = "";
   String _updateMsg = "";
+  String _updateUrl = "";
 
   final _navigatorKey = GlobalKey<NavigatorState>();
   late StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
@@ -156,6 +134,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.detached) {
       TorrentEngineService.instance.dispose();
     }
+    // Picks up flag edits (e.g. hide_playback) without a cold restart.
+    if (state == AppLifecycleState.resumed) {
+      FeatureFlagsService().refreshIfStale();
+    }
   }
 
   @override
@@ -181,59 +163,36 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   }
 
   Future<void> _checkConfig() async {
-    // Only check Remote Config on Android — Windows uses the Electron app's
-    // own Firebase integration and the C++ SDK doesn't link in Release.
-    // iOS is skipped because Firebase initialization is skipped until
-    // native iOS configuration is added.
-    if (Platform.isAndroid) {
-      try {
-        final remoteConfig = FirebaseRemoteConfig.instance;
-        await remoteConfig.setConfigSettings(RemoteConfigSettings(
-          fetchTimeout: const Duration(minutes: 1),
-          minimumFetchInterval: const Duration(seconds: 1),
-        ));
+    // Flags come from docs/flags.json on GitHub Pages (see
+    // FeatureFlagsService). If the fetch fails (offline, slow network),
+    // the last fetched values are used instead.
+    final flags = FeatureFlagsService();
+    await flags.refresh();
 
-        await remoteConfig.setDefaults(const {
-          "min_required_version": "1.0.0",
-          "update_required_message":
-              "A new update is available. Please update the app.",
-          "maintenance_mode_enabled": false,
-          "maintenance_message":
-              "We are currently performing a scheduled maintenance. Please check back later."
+    if (flags.maintenanceEnabled) {
+      if (mounted) {
+        setState(() {
+          _currentScreen = _AppScreen.maintenance;
+          _maintenanceMsg = flags.maintenanceMessage;
         });
-
-        await remoteConfig.fetchAndActivate();
-
-        final maintenance = remoteConfig.getBool("maintenance_mode_enabled");
-        final maintenanceMsg = remoteConfig.getString("maintenance_message");
-        if (maintenance) {
-          if (mounted) {
-            setState(() {
-              _currentScreen = _AppScreen.maintenance;
-              _maintenanceMsg = maintenanceMsg;
-            });
-          }
-          return;
-        }
-
-        final minVersion = remoteConfig.getString("min_required_version");
-        final updateMsg = remoteConfig.getString("update_required_message");
-
-        final packageInfo = await PackageInfo.fromPlatform();
-        final currentVersion = packageInfo.version;
-
-        if (_isVersionLessThan(currentVersion, minVersion)) {
-          if (mounted) {
-            setState(() {
-              _currentScreen = _AppScreen.updateRequired;
-              _updateMsg = updateMsg;
-            });
-          }
-          return;
-        }
-      } catch (e) {
-        print("Failed to fetch remote config: $e");
       }
+      return;
+    }
+
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      if (_isVersionLessThan(packageInfo.version, flags.minRequiredVersion)) {
+        if (mounted) {
+          setState(() {
+            _currentScreen = _AppScreen.updateRequired;
+            _updateMsg = flags.updateRequiredMessage;
+            _updateUrl = flags.updateUrl;
+          });
+        }
+        return;
+      }
+    } catch (e) {
+      print("Failed to check app version: $e");
     }
 
     // Determine which screen to show based on first-launch state
@@ -307,7 +266,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       case _AppScreen.checking:
         return null;
       case _AppScreen.updateRequired:
-        return UpdateOverlay(message: _updateMsg);
+        return UpdateOverlay(message: _updateMsg, url: _updateUrl);
       case _AppScreen.maintenance:
         return MaintenanceOverlay(message: _maintenanceMsg);
       case _AppScreen.welcome:

@@ -53,8 +53,6 @@ dependencies:
   animations: ^2.1.1
   path_provider: ^2.1.5
   internet_file: ^1.2.0
-  firebase_core: ^4.5.0
-  firebase_remote_config: ^6.2.0
   package_info_plus: ^9.0.0
   lottie: ^3.3.2
   volume_controller: ^3.4.4

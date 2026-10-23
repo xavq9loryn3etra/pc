@@ -12,6 +12,7 @@ import '../models/movie.dart';
 import '../services/tmdb_service.dart';
 import '../services/scraper_service.dart';
 import '../services/saved_movies_service.dart';
+import '../services/feature_flags_service.dart';
 import '../services/torrent/torrent_index_service.dart';
 import '../services/torrent/stream_resolver.dart';
 import '../services/torrent/torrent_download_registry.dart';
@@ -95,7 +96,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
   @override
   void initState() {
     super.initState();
+    FeatureFlagsService().hidePlayback.addListener(_onFlagsChanged);
     _loadDetails();
+  }
+
+  void _onFlagsChanged() {
+    if (mounted) setState(() {});
   }
 
   // No local _isFavorite field/setState needed — toggleFavorite() below
@@ -114,6 +120,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     // in the background — saves bandwidth/battery on a quick back-out.
     _detailsCancelToken.cancel();
     _scrollController.dispose();
+    FeatureFlagsService().hidePlayback.removeListener(_onFlagsChanged);
     super.dispose();
   }
 
@@ -390,6 +397,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     return (() {
       final m = _details ?? widget.movie;
       final bool isTv = m.type == 'tv';
+      final bool hidePlayback = FeatureFlagsService().hidePlayback.value;
 
       return Scaffold(
         extendBodyBehindAppBar: true,
@@ -721,206 +729,210 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                   children: [
                                     Row(
                                       children: [
-                                        if (!isTv)
-                                          // Premium Direct Torrent Play Button
-                                          Expanded(
-                                            flex: 3,
-                                            child: Container(
-                                              height: 50,
-                                              decoration: BoxDecoration(
-                                                color: movieUnreleased
-                                                    ? Colors.white10
-                                                    : Colors.white,
-                                                borderRadius:
-                                                    BorderRadius.circular(30),
-                                                boxShadow: movieUnreleased
-                                                    ? null
-                                                    : [
-                                                        BoxShadow(
-                                                          color: Colors.white
-                                                              .withOpacity(
-                                                                  0.15),
-                                                          blurRadius: 12,
-                                                          offset: const Offset(
-                                                              0, 4),
-                                                        ),
-                                                      ],
-                                              ),
-                                              child: InkWell(
-                                                onTap: movieUnreleased
-                                                    ? null
-                                                    : _playWithTorrent,
-                                                borderRadius:
-                                                    BorderRadius.circular(30),
-                                                child: Row(
-                                                  mainAxisAlignment:
-                                                      MainAxisAlignment.center,
-                                                  children: [
-                                                    Icon(
-                                                      movieUnreleased
-                                                          ? Icons
-                                                              .event_available
-                                                          : Icons
-                                                              .play_arrow_rounded,
-                                                      color: movieUnreleased
-                                                          ? Colors.white54
-                                                          : Colors.black,
-                                                      size: movieUnreleased
-                                                          ? 20
-                                                          : 28,
-                                                    ),
-                                                    const SizedBox(width: 8),
-                                                    Flexible(
-                                                      child: Text(
+                                        // Hidden entirely (not just disabled) when
+                                        // FeatureFlagsService.hidePlayback is on.
+                                        if (!hidePlayback) ...[
+                                          if (!isTv)
+                                            // Premium Direct Torrent Play Button
+                                            Expanded(
+                                              flex: 3,
+                                              child: Container(
+                                                height: 50,
+                                                decoration: BoxDecoration(
+                                                  color: movieUnreleased
+                                                      ? Colors.white10
+                                                      : Colors.white,
+                                                  borderRadius:
+                                                      BorderRadius.circular(30),
+                                                  boxShadow: movieUnreleased
+                                                      ? null
+                                                      : [
+                                                          BoxShadow(
+                                                            color: Colors.white
+                                                                .withOpacity(
+                                                                    0.15),
+                                                            blurRadius: 12,
+                                                            offset: const Offset(
+                                                                0, 4),
+                                                          ),
+                                                        ],
+                                                ),
+                                                child: InkWell(
+                                                  onTap: movieUnreleased
+                                                      ? null
+                                                      : _playWithTorrent,
+                                                  borderRadius:
+                                                      BorderRadius.circular(30),
+                                                  child: Row(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment.center,
+                                                    children: [
+                                                      Icon(
                                                         movieUnreleased
-                                                            ? (movieReleaseText ??
-                                                                'Not yet released')
-                                                            : (historyMovie?.progress !=
-                                                                        null &&
-                                                                    historyMovie!
-                                                                            .progress! >
-                                                                        0
-                                                                ? 'Resume'
-                                                                : 'Play Movie'),
-                                                        overflow: TextOverflow
-                                                            .ellipsis,
-                                                        maxLines: 1,
-                                                        style: TextStyle(
-                                                          color: movieUnreleased
-                                                              ? Colors.white54
-                                                              : Colors.black,
-                                                          fontWeight:
-                                                              FontWeight.bold,
-                                                          fontSize:
-                                                              movieUnreleased
-                                                                  ? 11
-                                                                  : 16,
+                                                            ? Icons
+                                                                .event_available
+                                                            : Icons
+                                                                .play_arrow_rounded,
+                                                        color: movieUnreleased
+                                                            ? Colors.white54
+                                                            : Colors.black,
+                                                        size: movieUnreleased
+                                                            ? 20
+                                                            : 28,
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      Flexible(
+                                                        child: Text(
+                                                          movieUnreleased
+                                                              ? (movieReleaseText ??
+                                                                  'Not yet released')
+                                                              : (historyMovie?.progress !=
+                                                                          null &&
+                                                                      historyMovie!
+                                                                              .progress! >
+                                                                          0
+                                                                  ? 'Resume'
+                                                                  : 'Play Movie'),
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          maxLines: 1,
+                                                          style: TextStyle(
+                                                            color: movieUnreleased
+                                                                ? Colors.white54
+                                                                : Colors.black,
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                            fontSize:
+                                                                movieUnreleased
+                                                                    ? 11
+                                                                    : 16,
+                                                          ),
                                                         ),
                                                       ),
-                                                    ),
-                                                  ],
+                                                    ],
+                                                  ),
                                                 ),
                                               ),
-                                            ),
-                                          )
-                                        else
-                                          // TV Show Play/Resume direct Button
-                                          Expanded(
-                                            flex: 3,
-                                            child: Container(
-                                              height: 50,
-                                              decoration: BoxDecoration(
-                                                color: tvUnreleased
-                                                    ? Colors.white10
-                                                    : Colors.white,
-                                                borderRadius:
-                                                    BorderRadius.circular(30),
-                                                boxShadow: tvUnreleased
-                                                    ? null
-                                                    : [
-                                                        BoxShadow(
-                                                          color: Colors.white
-                                                              .withOpacity(
-                                                                  0.15),
-                                                          blurRadius: 12,
-                                                          offset: const Offset(
-                                                              0, 4),
-                                                        ),
-                                                      ],
-                                              ),
-                                              child: InkWell(
-                                                onTap: tvUnreleased
-                                                    ? null
-                                                    : () async {
-                                                        int s = historyMovie
-                                                                ?.currentSeason ??
-                                                            1;
-                                                        int e = historyMovie
-                                                                ?.currentEpisode ??
-                                                            1;
-                                                        if (_details?.seasons !=
-                                                                null &&
-                                                            _details!.seasons!
-                                                                .isNotEmpty) {
-                                                          setState(() {
-                                                            _selectedSeason =
-                                                                _details!
-                                                                    .seasons!
-                                                                    .firstWhere(
-                                                              (sea) =>
-                                                                  sea.seasonNumber ==
-                                                                  s,
-                                                              orElse: () =>
+                                            )
+                                          else
+                                            // TV Show Play/Resume direct Button
+                                            Expanded(
+                                              flex: 3,
+                                              child: Container(
+                                                height: 50,
+                                                decoration: BoxDecoration(
+                                                  color: tvUnreleased
+                                                      ? Colors.white10
+                                                      : Colors.white,
+                                                  borderRadius:
+                                                      BorderRadius.circular(30),
+                                                  boxShadow: tvUnreleased
+                                                      ? null
+                                                      : [
+                                                          BoxShadow(
+                                                            color: Colors.white
+                                                                .withOpacity(
+                                                                    0.15),
+                                                            blurRadius: 12,
+                                                            offset: const Offset(
+                                                                0, 4),
+                                                          ),
+                                                        ],
+                                                ),
+                                                child: InkWell(
+                                                  onTap: tvUnreleased
+                                                      ? null
+                                                      : () async {
+                                                          int s = historyMovie
+                                                                  ?.currentSeason ??
+                                                              1;
+                                                          int e = historyMovie
+                                                                  ?.currentEpisode ??
+                                                              1;
+                                                          if (_details?.seasons !=
+                                                                  null &&
+                                                              _details!.seasons!
+                                                                  .isNotEmpty) {
+                                                            setState(() {
+                                                              _selectedSeason =
                                                                   _details!
                                                                       .seasons!
-                                                                      .first,
-                                                            );
-                                                            _selectedEpisode =
-                                                                e;
-                                                          });
-                                                        } else {
-                                                          _selectedEpisode = e;
-                                                        }
-
-                                                        await _loadSeasonDetails(
-                                                            s);
-                                                        _playWithTorrent();
-                                                      },
-                                                borderRadius:
-                                                    BorderRadius.circular(30),
-                                                child: Row(
-                                                  mainAxisAlignment:
-                                                      MainAxisAlignment.center,
-                                                  children: [
-                                                    Icon(
-                                                      tvUnreleased
-                                                          ? Icons
-                                                              .event_available
-                                                          : (historyMovie?.currentSeason !=
-                                                                  null
-                                                              ? Icons
-                                                                  .play_circle_filled
-                                                              : Icons
-                                                                  .play_arrow_rounded),
-                                                      color: tvUnreleased
-                                                          ? Colors.white54
-                                                          : Colors.black,
-                                                      size: tvUnreleased
-                                                          ? 20
-                                                          : 28,
-                                                    ),
-                                                    const SizedBox(width: 8),
-                                                    Flexible(
-                                                      child: Text(
+                                                                      .firstWhere(
+                                                                (sea) =>
+                                                                    sea.seasonNumber ==
+                                                                    s,
+                                                                orElse: () =>
+                                                                    _details!
+                                                                        .seasons!
+                                                                        .first,
+                                                              );
+                                                              _selectedEpisode =
+                                                                  e;
+                                                            });
+                                                          } else {
+                                                            _selectedEpisode = e;
+                                                          }
+  
+                                                          await _loadSeasonDetails(
+                                                              s);
+                                                          _playWithTorrent();
+                                                        },
+                                                  borderRadius:
+                                                      BorderRadius.circular(30),
+                                                  child: Row(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment.center,
+                                                    children: [
+                                                      Icon(
                                                         tvUnreleased
-                                                            ? (tvReleaseText ??
-                                                                'Not yet released')
-                                                            : (historyMovie
-                                                                        ?.currentSeason !=
+                                                            ? Icons
+                                                                .event_available
+                                                            : (historyMovie?.currentSeason !=
                                                                     null
-                                                                ? 'Resume S${historyMovie!.currentSeason} E${historyMovie.currentEpisode}'
-                                                                : 'Play S1 E1'),
-                                                        overflow: TextOverflow
-                                                            .ellipsis,
-                                                        maxLines: 1,
-                                                        style: TextStyle(
-                                                          color: tvUnreleased
-                                                              ? Colors.white54
-                                                              : Colors.black,
-                                                          fontWeight:
-                                                              FontWeight.bold,
-                                                          fontSize: tvUnreleased
-                                                              ? 11
-                                                              : 16,
+                                                                ? Icons
+                                                                    .play_circle_filled
+                                                                : Icons
+                                                                    .play_arrow_rounded),
+                                                        color: tvUnreleased
+                                                            ? Colors.white54
+                                                            : Colors.black,
+                                                        size: tvUnreleased
+                                                            ? 20
+                                                            : 28,
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      Flexible(
+                                                        child: Text(
+                                                          tvUnreleased
+                                                              ? (tvReleaseText ??
+                                                                  'Not yet released')
+                                                              : (historyMovie
+                                                                          ?.currentSeason !=
+                                                                      null
+                                                                  ? 'Resume S${historyMovie!.currentSeason} E${historyMovie.currentEpisode}'
+                                                                  : 'Play S1 E1'),
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          maxLines: 1,
+                                                          style: TextStyle(
+                                                            color: tvUnreleased
+                                                                ? Colors.white54
+                                                                : Colors.black,
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                            fontSize: tvUnreleased
+                                                                ? 11
+                                                                : 16,
+                                                          ),
                                                         ),
                                                       ),
-                                                    ),
-                                                  ],
+                                                    ],
+                                                  ),
                                                 ),
                                               ),
                                             ),
-                                          ),
-                                        const SizedBox(width: 12),
+                                          const SizedBox(width: 12),
+                                        ],
                                         // Trailer Button
                                         if (m.trailerUrl != null)
                                           Expanded(
@@ -970,7 +982,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                               ),
                                             ),
                                           ),
-                                        const SizedBox(width: 12),
+                                        if (!hidePlayback || m.trailerUrl != null)
+                                          const SizedBox(width: 12),
                                         // Share Button — functionality kept, just not shown right now.
                                         // Container(
                                         //   height: 50,
@@ -1254,8 +1267,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
                               itemCount: _episodes.length,
                               itemBuilder: (context, index) {
                                 final ep = _episodes[index];
-                                final currentProgress =
-                                    SavedMoviesService().getEpisodeProgress(
+                                final currentProgress = hidePlayback
+                                    ? null
+                                    : SavedMoviesService().getEpisodeProgress(
                                           widget.movie.id,
                                           _selectedSeason?.seasonNumber ?? 1,
                                           ep.episodeNumber,
@@ -1279,7 +1293,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                 return Container(
                                   margin: const EdgeInsets.only(bottom: 16),
                                   child: InkWell(
-                                    onTap: isFuture
+                                    onTap: isFuture || hidePlayback
                                         ? null
                                         : () {
                                             setState(() {
@@ -1337,17 +1351,19 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                         size: 24,
                                                       ),
                                                     )
-                                                  : Container(
-                                                      color: Colors.black26,
-                                                      child: const Center(
-                                                        child: Icon(
-                                                          Icons
-                                                              .play_circle_outline,
-                                                          color: Colors.white,
-                                                          size: 32,
+                                                  : hidePlayback
+                                                      ? const SizedBox.shrink()
+                                                      : Container(
+                                                          color: Colors.black26,
+                                                          child: const Center(
+                                                            child: Icon(
+                                                              Icons
+                                                                  .play_circle_outline,
+                                                              color: Colors.white,
+                                                              size: 32,
+                                                            ),
+                                                          ),
                                                         ),
-                                                      ),
-                                                    ),
                                               // Progress Bar
                                               if (currentProgress != null &&
                                                   currentProgress > 0)
@@ -1498,6 +1514,9 @@ class _TorrentQualitySelectorSheetState
   bool _loading = true;
   String? _error;
   String? _resolvingMessage;
+  // Why the last tapped stream failed to start. Shown inside the sheet —
+  // a SnackBar would land on the details screen *behind* this modal sheet.
+  String? _resolveError;
   String? _lastPlayedHash;
 
   @override
@@ -1560,6 +1579,7 @@ class _TorrentQualitySelectorSheetState
 
     setState(() {
       _resolvingMessage = 'Connecting to peers & starting stream...';
+      _resolveError = null;
     });
 
     try {
@@ -1638,16 +1658,10 @@ class _TorrentQualitySelectorSheetState
       if (mounted) {
         setState(() {
           _resolvingMessage = null;
+          _resolveError = 'Couldn\'t start this source: '
+              '${e.toString().replaceFirst(RegExp(r'^(Exception|Bad state): '), '')}\n'
+              'Try another source, or use "Alternative Web Servers" below.';
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.red[900],
-            content: Text(
-              'Failed to resolve torrent: $e\nTry another source, or use "Alternative Web Servers" below.',
-              style: const TextStyle(color: Colors.white),
-            ),
-          ),
-        );
       }
     }
   }
@@ -1724,6 +1738,40 @@ class _TorrentQualitySelectorSheetState
                 ],
               ),
               SizedBox(height: isLandscape ? 8 : 16),
+
+              if (_resolveError != null && _resolvingMessage == null)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
+                  decoration: BoxDecoration(
+                    color: Colors.red[900]!.withValues(alpha: 0.85),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 2),
+                        child: Icon(Icons.error_outline_rounded,
+                            color: Colors.white, size: 18),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _resolveError!,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 13, height: 1.35),
+                        ),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.close_rounded,
+                            color: Colors.white70, size: 18),
+                        onPressed: () => setState(() => _resolveError = null),
+                      ),
+                    ],
+                  ),
+                ),
 
               if (_resolvingMessage != null)
                 Expanded(

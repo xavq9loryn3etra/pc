@@ -8,6 +8,7 @@ import '../widgets/mode_switch_row.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import '../services/backup_service.dart';
+import '../services/feature_flags_service.dart';
 import '../services/torrent/torrent_storage_service.dart';
 import '../services/torrent/torrent_download_registry.dart';
 import '../services/movie_tab_service.dart';
@@ -36,10 +37,15 @@ class SettingsScreen extends StatelessWidget {
       bottomNavTab: BottomNavTab.settings,
       actions: const [_AppVersionLabel()],
       body: (context, isDesktop, padding) {
-        return ValueListenableBuilder<AppMode>(
-          valueListenable: AppModeService().currentMode,
-          builder: (context, mode, _) {
-            final showStorage = mode == AppMode.movies;
+        return ListenableBuilder(
+          listenable: Listenable.merge([
+            AppModeService().currentMode,
+            FeatureFlagsService().hidePlayback,
+          ]),
+          builder: (context, _) {
+            final showStorage =
+                AppModeService().currentMode.value == AppMode.movies &&
+                    !FeatureFlagsService().hidePlayback.value;
 
             return ListView(
               padding: padding.copyWith(top: 100),

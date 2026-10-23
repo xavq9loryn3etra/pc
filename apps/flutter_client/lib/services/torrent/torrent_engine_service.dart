@@ -8,6 +8,10 @@ class TorrentEngineService {
   TorrentEngineService._();
 
   bool _initialized = false;
+  // Why the last init() attempt failed, if it did — surfaced by
+  // streamMagnet() instead of the much vaguer "init() not called" that
+  // LibtorrentFlutter.instance throws afterwards.
+  Object? _initError;
 
   static const int _downloadLimitBytesPerSec = 10 * 1024 * 1024; // 10 MB/s
   static const int _uploadLimitBytesPerSec = 1 * 1024 * 1024; // 1 MB/s
@@ -50,7 +54,9 @@ class TorrentEngineService {
       ));
 
       _initialized = true;
+      _initError = null;
     } catch (e) {
+      _initError = e;
       print('Error initializing Torrent Engine: $e');
     }
   }
@@ -76,6 +82,10 @@ class TorrentEngineService {
   Future<StreamResult> streamMagnet(String infoHash, {int? fileIndex}) async {
     if (!_initialized) {
       await init();
+    }
+    if (!_initialized) {
+      throw StateError(
+          'The torrent engine failed to start on this device ($_initError)');
     }
 
     // Build magnet with tracker list for instant swarm discovery

@@ -7,14 +7,15 @@ import '../models/movie.dart';
 
 class MovieHeroBanner extends StatelessWidget {
   final Movie movie;
-  final VoidCallback onPlay;
+  /// Null hides the Play button (see FeatureFlagsService.hidePlayback).
+  final VoidCallback? onPlay;
   final VoidCallback onInfo;
   final ScrollController? scrollController;
 
   const MovieHeroBanner({
     super.key,
     required this.movie,
-    required this.onPlay,
+    this.onPlay,
     required this.onInfo,
     this.scrollController,
   });
@@ -141,30 +142,32 @@ class MovieHeroBanner extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      ElevatedButton.icon(
-                        onPressed: onPlay,
-                        icon: const Icon(
-                          Icons.play_arrow_rounded,
-                          color: Colors.black,
-                          size: 28,
-                        ),
-                        label: const Text('Play'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: Colors.black,
-                          elevation: 0,
-                          padding: const EdgeInsets.symmetric(horizontal: 32),
-                          fixedSize: const Size.fromHeight(50),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(30),
+                      if (onPlay != null) ...[
+                        ElevatedButton.icon(
+                          onPressed: onPlay,
+                          icon: const Icon(
+                            Icons.play_arrow_rounded,
+                            color: Colors.black,
+                            size: 28,
                           ),
-                          textStyle: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
+                          label: const Text('Play'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: Colors.black,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(horizontal: 32),
+                            fixedSize: const Size.fromHeight(50),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(30),
+                            ),
+                            textStyle: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 16),
+                        const SizedBox(width: 16),
+                      ],
                       // Frosted glass, same recipe as CustomAppBar/the
                       // floating nav bar: clip to the button's own rounded
                       // shape and blur what's behind it.

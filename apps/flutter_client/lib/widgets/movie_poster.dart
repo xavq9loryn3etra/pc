@@ -5,6 +5,7 @@ import 'package:shimmer/shimmer.dart';
 import '../models/movie.dart';
 import '../theme/app_theme.dart';
 import '../services/saved_movies_service.dart';
+import '../services/feature_flags_service.dart';
 
 class MoviePoster extends StatefulWidget {
   final Movie movie;
@@ -53,12 +54,24 @@ class _MoviePosterState extends State<MoviePoster> {
         ),
         clipBehavior: Clip.antiAlias,
         child: ListenableBuilder(
-          listenable: SavedMoviesService(),
+          listenable: Listenable.merge([
+            SavedMoviesService(),
+            FeatureFlagsService().hidePlayback,
+          ]),
           builder: (context, _) {
-            final historyMovie = SavedMoviesService().getMovieFromHistory(widget.movie.id);
-            final progress = historyMovie?.progress ?? widget.movie.progress;
-            final currentSeason = historyMovie?.currentSeason ?? widget.movie.currentSeason;
-            final currentEpisode = historyMovie?.currentEpisode ?? widget.movie.currentEpisode;
+            final hidePlayback = FeatureFlagsService().hidePlayback.value;
+            final historyMovie = hidePlayback
+                ? null
+                : SavedMoviesService().getMovieFromHistory(widget.movie.id);
+            final progress = hidePlayback
+                ? null
+                : historyMovie?.progress ?? widget.movie.progress;
+            final currentSeason = hidePlayback
+                ? null
+                : historyMovie?.currentSeason ?? widget.movie.currentSeason;
+            final currentEpisode = hidePlayback
+                ? null
+                : historyMovie?.currentEpisode ?? widget.movie.currentEpisode;
 
             return Stack(
               fit: StackFit.expand,

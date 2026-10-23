@@ -4,8 +4,9 @@ import '../theme/app_theme.dart';
 
 class UpdateOverlay extends StatelessWidget {
   final String message;
+  final String url;
 
-  const UpdateOverlay({super.key, required this.message});
+  const UpdateOverlay({super.key, required this.message, required this.url});
 
   @override
   Widget build(BuildContext context) {
@@ -48,8 +49,7 @@ class UpdateOverlay extends StatelessWidget {
                       const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
                 ),
                 onPressed: () {
-                  launchUrl(Uri.parse(
-                      'https://drive.google.com/drive/folders/1ftzQcKIUkB2sKwInoSdMG7-SH4rPf96i?usp=sharing'));
+                  launchUrl(Uri.parse(url));
                 },
                 child: const Text('Download Update',
                     style: TextStyle(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../theme/app_theme.dart';
+import '../services/feature_flags_service.dart';
 
 class OnboardingScreen extends StatefulWidget {
   final VoidCallback onComplete;
@@ -22,6 +23,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       subtitle: 'Stream the latest movies & TV shows',
       description:
           'Discover trending blockbusters, timeless classics, and hidden gems — all completely free. Your personal cinema, always in your pocket.',
+      hidePlaybackSubtitle: 'Discover movies & TV shows',
+      hidePlaybackDescription:
+          'Explore trending blockbusters, timeless classics, and hidden gems. Save your favorites and find what to watch next.',
       assetPath: 'assets/logo.svg',
       isSvg: true,
       iconSize: 80,
@@ -259,6 +263,7 @@ class _OnboardingPageItemState extends State<_OnboardingPageItem>
   @override
   Widget build(BuildContext context) {
     final page = widget.page;
+    final hidePlayback = FeatureFlagsService().hidePlayback.value;
 
     return AnimatedBuilder(
       animation: _gradientAnimation,
@@ -317,7 +322,9 @@ class _OnboardingPageItemState extends State<_OnboardingPageItem>
 
               // Subtitle
               Text(
-                page.subtitle,
+                hidePlayback
+                    ? page.hidePlaybackSubtitle ?? page.subtitle
+                    : page.subtitle,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 22,
@@ -330,7 +337,9 @@ class _OnboardingPageItemState extends State<_OnboardingPageItem>
 
               // Description
               Text(
-                page.description,
+                hidePlayback
+                    ? page.hidePlaybackDescription ?? page.description
+                    : page.description,
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 15,
@@ -357,6 +366,9 @@ class _OnboardingPageData {
   final double iconSize;
   final Color gradientColor;
   final Color accentColor;
+  // Alternate copy shown while FeatureFlagsService.hidePlayback is on.
+  final String? hidePlaybackSubtitle;
+  final String? hidePlaybackDescription;
 
   const _OnboardingPageData({
     required this.title,
@@ -367,5 +379,7 @@ class _OnboardingPageData {
     required this.iconSize,
     required this.gradientColor,
     required this.accentColor,
+    this.hidePlaybackSubtitle,
+    this.hidePlaybackDescription,
   });
 }

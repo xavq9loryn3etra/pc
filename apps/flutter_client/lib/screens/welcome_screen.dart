@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../theme/app_theme.dart';
+import '../services/feature_flags_service.dart';
 
 class WelcomeScreen extends StatefulWidget {
   final VoidCallback onGetStarted;
@@ -204,7 +205,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                     ),
                     const SizedBox(height: 16),
                     Text(
-                      'Stream the latest movies, discover trending music,\nand dive into your next great read — all for free.',
+                      FeatureFlagsService().hidePlayback.value
+                          ? 'Discover the latest movies, trending music,\nand your next great read.'
+                          : 'Stream the latest movies, discover trending music,\nand dive into your next great read — all for free.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 14,

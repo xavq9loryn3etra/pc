@@ -1,7 +1,7 @@
 import 'dart:math' as math;
-import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
+import 'glass_blur.dart';
 import 'package:flutter/rendering.dart';
 
 /// A frosted-glass back button with a title "bubble" that grows out of it,
@@ -72,8 +72,7 @@ class _GlassBubbleBarState extends State<GlassBubbleBar> {
                     pillWidth: pillWidth,
                     grow: grow,
                   ),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  child: GlassBlur(
                     child: ColoredBox(
                       color: Colors.black.withValues(alpha: 0.35),
                     ),

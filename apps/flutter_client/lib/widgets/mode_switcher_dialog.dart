@@ -1,5 +1,5 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'glass_blur.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
@@ -75,8 +75,7 @@ class ModeSwitcherDialog extends StatelessWidget {
           child: ClipRRect(
             borderRadius:
                 const BorderRadius.vertical(bottom: Radius.circular(24)),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: GlassBlur(
               child: Container(
                 width: double.infinity,
                 padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),

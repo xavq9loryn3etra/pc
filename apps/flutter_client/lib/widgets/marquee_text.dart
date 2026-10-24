@@ -133,47 +133,52 @@ class _MarqueeTextState extends State<MarqueeText>
       Widget line(String text) =>
           Text(text, style: style, maxLines: 1, softWrap: false);
 
-      return SizedBox(
-        width: width,
-        height: height,
-        child: ClipRect(
-          child: AnimatedBuilder(
-            animation: _controller,
-            builder: (context, child) {
-              final dx = _controller.value * cycle;
-              // The left fade eases in as the start leaves the edge and out
-              // as the repeat arrives, so the first word reads clearly
-              // while resting there.
-              final left =
-                  math.min(widget.fadeWidth, math.min(dx, cycle - dx)) / width;
-              final right = widget.fadeWidth / width;
-              return ShaderMask(
-                blendMode: BlendMode.dstIn,
-                shaderCallback: (rect) => LinearGradient(
-                  colors: const [
-                    Colors.transparent,
-                    Colors.white,
-                    Colors.white,
-                    Colors.transparent,
+      // Behind a RepaintBoundary: it animates every frame, and shouldn't
+      // drag whatever it sits in (e.g. the details header) into repainting.
+      return RepaintBoundary(
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: ClipRect(
+            child: AnimatedBuilder(
+              animation: _controller,
+              builder: (context, child) {
+                final dx = _controller.value * cycle;
+                // The left fade eases in as the start leaves the edge and out
+                // as the repeat arrives, so the first word reads clearly
+                // while resting there.
+                final left =
+                    math.min(widget.fadeWidth, math.min(dx, cycle - dx)) /
+                        width;
+                final right = widget.fadeWidth / width;
+                return ShaderMask(
+                  blendMode: BlendMode.dstIn,
+                  shaderCallback: (rect) => LinearGradient(
+                    colors: const [
+                      Colors.transparent,
+                      Colors.white,
+                      Colors.white,
+                      Colors.transparent,
+                    ],
+                    stops: [0, left, 1 - right, 1],
+                  ).createShader(rect),
+                  child: Transform.translate(
+                    offset: Offset(-dx, 0),
+                    child: child,
+                  ),
+                );
+              },
+              child: OverflowBox(
+                alignment: Alignment.centerLeft,
+                maxWidth: double.infinity,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    line(widget.text),
+                    line(widget.separator),
+                    ExcludeSemantics(child: line(widget.text)),
                   ],
-                  stops: [0, left, 1 - right, 1],
-                ).createShader(rect),
-                child: Transform.translate(
-                  offset: Offset(-dx, 0),
-                  child: child,
                 ),
-              );
-            },
-            child: OverflowBox(
-              alignment: Alignment.centerLeft,
-              maxWidth: double.infinity,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  line(widget.text),
-                  line(widget.separator),
-                  ExcludeSemantics(child: line(widget.text)),
-                ],
               ),
             ),
           ),

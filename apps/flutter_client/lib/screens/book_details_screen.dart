@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -165,11 +164,12 @@ class _BookDetailsScreenState extends State<BookDetailsScreen> {
                                 'PC_Flutter_Client/1.0 (megha@example.com)',
                           },
                           fit: BoxFit.cover,
-                          // This copy is blurred (BackdropFilter below), so a
-                          // reduced decode resolution costs nothing visually.
-                          memCacheWidth: (MediaQuery.of(context).size.width *
-                                  MediaQuery.of(context).devicePixelRatio)
-                              .toInt(),
+                          // Decoded tiny and stretched: a soft blur of the
+                          // cover for free. It used to be a full-screen
+                          // BackdropFilter, re-blurred every frame the screen
+                          // was up.
+                          memCacheWidth: 24,
+                          filterQuality: FilterQuality.medium,
                         ),
                         Container(
                           decoration: const BoxDecoration(
@@ -184,11 +184,8 @@ class _BookDetailsScreenState extends State<BookDetailsScreen> {
                             ),
                           ),
                         ),
-                        BackdropFilter(
-                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                          child: Container(
-                            color: Colors.black.withOpacity(0.3),
-                          ),
+                        Container(
+                          color: Colors.black.withOpacity(0.3),
                         ),
                       ],
                     ),

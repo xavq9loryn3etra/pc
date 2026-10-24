@@ -1,5 +1,5 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'glass_blur.dart';
 import '../theme/app_theme.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
@@ -281,10 +281,11 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
                                         _entranceGlassRect(
                                             rects[i], entrance[i]),
                                     ]),
-                                    child: BackdropFilter(
-                                      filter: ImageFilter.blur(
-                                          sigmaX: 10, sigmaY: 10),
-                                      child: const SizedBox.expand(),
+                                    // Grouped with the app bar's glass
+                                    // (they never overlap).
+                                    child: const GlassBlur(
+                                      grouped: true,
+                                      child: SizedBox.expand(),
                                     ),
                                   ),
                                 ),

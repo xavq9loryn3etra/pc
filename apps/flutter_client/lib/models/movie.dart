@@ -183,7 +183,22 @@ class Episode {
   final String? stillPath;
   final String? airDate;
   final double voteAverage;
+  // Length in minutes, from TMDB; null when unknown.
+  final int? runtime;
   final double? progress;
+
+  /// A copy of this episode with [progress] (watch history) attached.
+  Episode withProgress(double? progress) => Episode(
+        id: id,
+        episodeNumber: episodeNumber,
+        name: name,
+        overview: overview,
+        stillPath: stillPath,
+        airDate: airDate,
+        voteAverage: voteAverage,
+        runtime: runtime,
+        progress: progress,
+      );
 
   /// Whether this episode's air date is in the future — see
   /// Movie.isUnreleased for why this matters for playback.
@@ -203,6 +218,7 @@ class Episode {
     this.stillPath,
     this.airDate,
     required this.voteAverage,
+    this.runtime,
     this.progress,
   });
 }

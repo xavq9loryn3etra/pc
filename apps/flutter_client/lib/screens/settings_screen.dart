@@ -12,6 +12,7 @@ import '../services/feature_flags_service.dart';
 import '../services/torrent/torrent_storage_service.dart';
 import '../services/torrent/torrent_download_registry.dart';
 import '../services/movie_tab_service.dart';
+import '../services/visual_effects_service.dart';
 import '../theme/app_theme.dart';
 import '../main.dart';
 
@@ -52,6 +53,8 @@ class SettingsScreen extends StatelessWidget {
               children: [
                 const _SectionLabel('SWITCH MODE', topPadding: 8),
                 const ModeSwitchRow(),
+                const _SectionLabel('DISPLAY'),
+                const _ReduceGlassRow(),
                 const _SectionLabel('BACKUP & RESTORE'),
                 _BackupRestoreRow(
                   onExport: () => _exportBackup(context),
@@ -630,6 +633,49 @@ class _ShowGroupTile extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// "Reduce glass effects": swaps the live frosted-glass blur for a plain
+/// tint (see GlassBlur), for phones that stutter while scrolling.
+class _ReduceGlassRow extends StatelessWidget {
+  const _ReduceGlassRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: VisualEffectsService().reduceGlass,
+      builder: (context, reduce, _) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
+        child: Row(
+          children: [
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Reduce glass effects',
+                    style: TextStyle(color: Colors.white, fontSize: 15),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'Uses a plain tint instead of the frosted blur behind '
+                    'bars and buttons. Smoother scrolling on slower phones.',
+                    style: TextStyle(
+                        color: Colors.white70, fontSize: 13, height: 1.4),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Switch.adaptive(
+              value: reduce,
+              onChanged: VisualEffectsService().setReduceGlass,
+            ),
+          ],
+        ),
       ),
     );
   }

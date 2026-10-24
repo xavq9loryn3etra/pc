@@ -78,24 +78,28 @@ class PosterWall extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRect(
-      child: OverflowBox(
-        maxHeight: double.infinity,
-        alignment: Alignment.center,
-        child: Transform(
+    // The rows scroll every frame; the boundary keeps that repaint to the
+    // wall, instead of also repainting the text and buttons over it.
+    return RepaintBoundary(
+      child: ClipRect(
+        child: OverflowBox(
+          maxHeight: double.infinity,
           alignment: Alignment.center,
-          transform: Matrix4.identity()
-            ..setEntry(3, 2, 0.001)
-            ..rotateX(0.15)
-            ..rotateZ(-0.05),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: List.generate(_rowCount, (i) {
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: _buildRow(i),
-              );
-            }),
+          child: Transform(
+            alignment: Alignment.center,
+            transform: Matrix4.identity()
+              ..setEntry(3, 2, 0.001)
+              ..rotateX(0.15)
+              ..rotateZ(-0.05),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: List.generate(_rowCount, (i) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: _buildRow(i),
+                );
+              }),
+            ),
           ),
         ),
       ),

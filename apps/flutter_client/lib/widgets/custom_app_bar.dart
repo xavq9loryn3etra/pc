@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'glass_blur.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../theme/app_theme.dart';
 import '../screens/search_screen.dart';
@@ -105,15 +106,17 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
       backgroundColor: Colors.transparent,
       flexibleSpace: opacity > 0.01
           ? ClipRect(
-              child: BackdropFilter(
+              child: GlassBlur(
                 // Lower peak sigma than the original 20 — this blur is live
                 // while scrolling (recomputed every frame), the single
-                // highest-frequency BackdropFilter use in the app, so its
-                // cost matters most. See mode_switcher_dialog.dart's comment.
-                filter: ImageFilter.blur(
-                  sigmaX: 10 * opacity,
-                  sigmaY: 10 * opacity,
-                ),
+                // highest-frequency backdrop blur in the app, so its cost
+                // matters most. See mode_switcher_dialog.dart's comment.
+                // Grouped with the floating nav bar's glass (they never
+                // overlap), and its own 90% tint needs no extra when the
+                // blur is reduced.
+                sigma: 10 * opacity,
+                grouped: true,
+                reducedTint: Colors.transparent,
                 child: Container(
                   color: Colors.black.withOpacity(
                       opacity * 0.9), // Increased to 0.9 as requested

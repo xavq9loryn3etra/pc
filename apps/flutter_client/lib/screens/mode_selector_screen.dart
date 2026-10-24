@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui' show ImageFilter;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -76,6 +75,12 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
   ImageProvider _imageFor(TrendingItem item) =>
       CachedNetworkImageProvider(item.imageFor(wide: _isWide));
 
+  // The mode panel's "frosted glass": the slide decoded tiny and stretched
+  // smoothly reads as the artwork blurred, without a live BackdropFilter —
+  // which re-blurred the always-zooming slideshow on every frame.
+  ImageProvider _blurredImageFor(TrendingItem item) =>
+      ResizeImage.resizeIfNeeded(40, null, _imageFor(item));
+
   /// Shows [items][index] once its image has loaded (skipping it if it
   /// fails), then schedules the next slide.
   Future<void> _show(List<TrendingItem> items, int index) async {
@@ -88,6 +93,8 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
       await Future.wait([
         precacheImage(_imageFor(item), context,
             onError: (_, __) => loaded = false),
+        // So the panel's blurred copy switches with the slide, not after.
+        precacheImage(_blurredImageFor(item), context, onError: (_, __) {}),
         // A logo that fails to load just falls back to the text title.
         if (item.logoUrl != null)
           precacheImage(CachedNetworkImageProvider(item.logoUrl!), context,
@@ -139,9 +146,66 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
     );
   }
 
+  // Scrims: keep the status bar legible and darken behind the caption,
+  // easing off again under the panel so the art still shows through its
+  // glass.
+  static const _scrim = DecoratedBox(
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Color(0x99000000),
+          Color(0x00000000),
+          Color(0x00000000),
+          Color(0xBF000000),
+          Color(0x99000000),
+        ],
+        stops: [0.0, 0.16, 0.34, 0.62, 1.0],
+      ),
+    ),
+  );
+
+  /// The zooming, cross-fading slideshow — sharp as the background, or
+  /// [blurred] for the mode panel's glass. Both copies are built in the
+  /// same frame with the same slide key, so their zoom and fades run in
+  /// step. Behind a RepaintBoundary: it animates every frame, and shouldn't
+  /// drag the caption and buttons above it into repainting too.
+  Widget _slideshow(TrendingItem? item, {required bool blurred}) {
+    return RepaintBoundary(
+      child: ClipRect(
+        child: AnimatedSwitcher(
+          duration: _fadeDuration,
+          layoutBuilder: (current, previous) => Stack(
+            fit: StackFit.expand,
+            children: [...previous, if (current != null) current],
+          ),
+          child: item == null
+              ? _Placeholder(key: const ValueKey('placeholder'), mode: _mode)
+              : _KenBurnsImage(
+                  key: ValueKey(_slide),
+                  image: blurred ? _blurredImageFor(item) : _imageFor(item),
+                  // Smooth (bicubic) upscaling turns the tiny decode into
+                  // a soft blur rather than visible blocks.
+                  filterQuality:
+                      blurred ? FilterQuality.high : FilterQuality.medium,
+                  // Vary where each slide zooms towards
+                  focus: const [
+                    Alignment(0, -0.4),
+                    Alignment(0.3, 0.1),
+                    Alignment(-0.3, -0.1),
+                  ][_slide % 3],
+                  duration: _slideDuration + _fadeDuration,
+                ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
+    final screenSize = MediaQuery.sizeOf(context);
     final item = _current;
 
     return Scaffold(
@@ -150,53 +214,10 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
         fit: StackFit.expand,
         children: [
           // Background slideshow — full height, so the frosted panel at the
-          // bottom has artwork to blur.
-          Positioned.fill(
-            child: ClipRect(
-              child: AnimatedSwitcher(
-                duration: _fadeDuration,
-                layoutBuilder: (current, previous) => Stack(
-                  fit: StackFit.expand,
-                  children: [...previous, if (current != null) current],
-                ),
-                child: item == null
-                    ? _Placeholder(key: const ValueKey('placeholder'), mode: _mode)
-                    : _KenBurnsImage(
-                        key: ValueKey(_slide),
-                        image: _imageFor(item),
-                        // Vary where each slide zooms towards
-                        focus: const [
-                          Alignment(0, -0.4),
-                          Alignment(0.3, 0.1),
-                          Alignment(-0.3, -0.1),
-                        ][_slide % 3],
-                        duration: _slideDuration + _fadeDuration,
-                      ),
-              ),
-            ),
-          ),
+          // bottom has artwork behind it.
+          Positioned.fill(child: _slideshow(item, blurred: false)),
 
-          // Scrims: keep the status bar legible and darken behind the
-          // caption, easing off again under the panel so the art still
-          // shows through its glass.
-          const Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Color(0x99000000),
-                    Color(0x00000000),
-                    Color(0x00000000),
-                    Color(0xBF000000),
-                    Color(0x99000000),
-                  ],
-                  stops: [0.0, 0.16, 0.34, 0.62, 1.0],
-                ),
-              ),
-            ),
-          ),
+          const Positioned.fill(child: _scrim),
 
           // Title, prompt and mode buttons
           Align(
@@ -240,20 +261,43 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
                 ),
                 const SizedBox(height: 14),
                 // Same frosted glass as the floating bottom nav bar's
-                // buttons (blur, 35% black, faint white edge).
+                // buttons (blur, 35% black, faint white edge) — but faked:
+                // a blurred copy of the slideshow, lined up with the real
+                // one behind (the panel spans the screen's full width and
+                // sits on its bottom edge), instead of a live blur.
                 CustomPaint(
                   foregroundPainter: _DomeEdgePainter(),
                   child: ClipPath(
                     clipper: _DomeClipper(),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                      child: Container(
-                        width: double.infinity,
-                        color: AppTheme.scaffoldColor.withValues(alpha: 0.35),
-                        padding:
-                            EdgeInsets.fromLTRB(16, 40, 16, 28 + bottomInset),
-                        child: ModeSwitchRow(onSelected: _selectMode),
-                      ),
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: OverflowBox(
+                              alignment: Alignment.bottomCenter,
+                              minWidth: screenSize.width,
+                              maxWidth: screenSize.width,
+                              minHeight: screenSize.height,
+                              maxHeight: screenSize.height,
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  _slideshow(item, blurred: true),
+                                  _scrim,
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        Container(
+                          width: double.infinity,
+                          color:
+                              AppTheme.scaffoldColor.withValues(alpha: 0.35),
+                          padding: EdgeInsets.fromLTRB(
+                              16, 40, 16, 28 + bottomInset),
+                          child: ModeSwitchRow(onSelected: _selectMode),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -325,12 +369,14 @@ class _KenBurnsImage extends StatelessWidget {
   final ImageProvider image;
   final Alignment focus;
   final Duration duration;
+  final FilterQuality filterQuality;
 
   const _KenBurnsImage({
     super.key,
     required this.image,
     required this.focus,
     required this.duration,
+    this.filterQuality = FilterQuality.medium,
   });
 
   @override
@@ -347,7 +393,7 @@ class _KenBurnsImage extends StatelessWidget {
         image: image,
         fit: BoxFit.cover,
         gaplessPlayback: true,
-        filterQuality: FilterQuality.medium,
+        filterQuality: filterQuality,
       ),
     );
   }

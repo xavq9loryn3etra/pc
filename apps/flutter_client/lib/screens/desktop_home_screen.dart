@@ -1,5 +1,5 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
+import '../widgets/glass_blur.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -323,11 +323,10 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
 
   Widget _buildTopBar(BuildContext context) {
     return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(
-          sigmaX: 15 * _topBarOpacity,
-          sigmaY: 15 * _topBarOpacity,
-        ),
+      // Its own tint (up to 70%) needs no extra when the blur is reduced.
+      child: GlassBlur(
+        sigma: 15 * _topBarOpacity,
+        reducedTint: Colors.transparent,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 24),
           decoration: BoxDecoration(
@@ -501,10 +500,8 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
               // banner's Trailer button.
               ClipRRect(
                 borderRadius: BorderRadius.circular(4),
-                child: BackdropFilter(
-                  // See mode_switcher_dialog.dart's comment — lower sigma to
-                  // cut GPU cost on weaker/high-refresh-rate devices.
-                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                // See mode_switcher_dialog.dart's comment on the sigma.
+                child: GlassBlur(
                   child: ElevatedButton.icon(
                     onPressed: widget.onTrailerHero,
                     icon: const Icon(

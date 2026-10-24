@@ -25,6 +25,7 @@ import 'services/deep_link_service.dart';
 import 'services/feature_flags_service.dart';
 import 'services/torrent/torrent_engine_service.dart';
 import 'services/trending_service.dart';
+import 'services/visual_effects_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -60,6 +61,7 @@ void main() async {
   await SavedMoviesService().init();
   await AppModeService().init();
   await FeatureFlagsService().init();
+  await VisualEffectsService().init();
   // Not awaited: this spins up the native libtorrent engine (DHT bootstrap,
   // tracker connections), which isn't needed until the user actually starts
   // streaming something. Awaiting it here delayed the first frame on every
@@ -119,6 +121,11 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   String _updateUrl = "";
 
   final _navigatorKey = GlobalKey<NavigatorState>();
+  // Shared by the app's grouped glass (GlassBlur(grouped: true)) so they
+  // read the screen behind them once per frame between them. Kept in state:
+  // a BackdropGroup without one makes a new key — and notifies every
+  // dependent — on each rebuild.
+  final _backdropKey = BackdropKey();
   late StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
   bool _isOffline = false;
 
@@ -320,17 +327,20 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         // instead of sticking app-wide.
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: AppTheme.systemUiStyle,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              if (child != null) child,
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 350),
-                child: _isOffline
-                    ? const NoInternetOverlay()
-                    : const SizedBox.shrink(),
-              ),
-            ],
+          child: BackdropGroup(
+            backdropKey: _backdropKey,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (child != null) child,
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 350),
+                  child: _isOffline
+                      ? const NoInternetOverlay()
+                      : const SizedBox.shrink(),
+                ),
+              ],
+            ),
           ),
         );
       },

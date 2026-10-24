@@ -1,7 +1,7 @@
-import 'dart:ui';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/material.dart';
+import 'glass_blur.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../models/movie.dart';
 import 'image_precache.dart';
@@ -194,11 +194,10 @@ class MovieHeroBanner extends StatelessWidget {
                         // shape and blur what's behind it.
                         ClipRRect(
                           borderRadius: BorderRadius.circular(30),
-                          child: BackdropFilter(
-                            // See mode_switcher_dialog.dart's comment — lower
-                            // sigma to cut GPU cost on weaker/high-refresh-rate
-                            // devices.
-                            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                          // Not grouped: it scrolls up under the app bar's
+                          // glass. See mode_switcher_dialog.dart's comment
+                          // on the sigma.
+                          child: GlassBlur(
                             child: ElevatedButton.icon(
                               onPressed: onTrailer,
                               icon: const Icon(

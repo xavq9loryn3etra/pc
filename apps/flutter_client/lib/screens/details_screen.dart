@@ -26,6 +26,7 @@ import 'dart:ui'; // For BackdropFilter
 import '../widgets/custom_app_bar.dart';
 import '../widgets/glass_bubble_bar.dart';
 import '../widgets/details_overview.dart';
+import '../widgets/episode_card.dart';
 import '../widgets/marquee_text.dart';
 
 class DetailsScreen extends StatefulWidget {
@@ -65,15 +66,24 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // left the backdrop frozen at its old parallax offset. Scroll-metrics
   // notifications do report those corrections.
   final ValueNotifier<double> _scrollOffset = ValueNotifier(0);
+  // Whether the app bar shows the title logo (scrolled past 350px). Its own
+  // notifier, so the app bar rebuilds only when that flips — not on every
+  // scroll pixel, as when it listened to _scrollOffset.
+  final ValueNotifier<bool> _showTitle = ValueNotifier(false);
+
+  void _setScroll(double pixels) {
+    _scrollOffset.value = pixels;
+    _showTitle.value = pixels > 350; // title logo reveal point
+  }
 
   bool _onPageScroll(Notification notification) {
     // depth 0 = the page's own scroll view, not nested ones (the cast row).
     if (notification is ScrollUpdateNotification &&
         notification.depth == 0) {
-      _scrollOffset.value = notification.metrics.pixels;
+      _setScroll(notification.metrics.pixels);
     } else if (notification is ScrollMetricsNotification &&
         notification.depth == 0) {
-      _scrollOffset.value = notification.metrics.pixels;
+      _setScroll(notification.metrics.pixels);
     }
     return false;
   }
@@ -257,6 +267,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     _detailsCancelToken.cancel();
     _scrollController.dispose();
     _scrollOffset.dispose();
+    _showTitle.dispose();
     FeatureFlagsService().hidePlayback.removeListener(_onFlagsChanged);
     super.dispose();
   }
@@ -393,18 +404,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
         e.episodeNumber,
       );
 
-      if (progress != null) {
-        return Episode(
-          id: e.id,
-          episodeNumber: e.episodeNumber,
-          name: e.name,
-          overview: e.overview,
-          stillPath: e.stillPath,
-          airDate: e.airDate,
-          voteAverage: e.voteAverage,
-          progress: progress,
-        );
-      }
+      if (progress != null) return e.withProgress(progress);
       return e;
     }).toList();
 
@@ -449,7 +449,75 @@ class _DetailsScreenState extends State<DetailsScreen> {
   String _formatReleaseDate(DateTime date) =>
       "${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}";
 
-  void _playWithTorrent() async {
+  /// The episode popup (tapping an episode card): the episode in its card
+  /// styling, then how to watch it — its torrents and the web servers, or,
+  /// with playback hidden, a button to the streaming service carrying the
+  /// show (none if there isn't one). Episodes that haven't aired yet show
+  /// their info only.
+  void _openEpisode(Episode ep) {
+    setState(() => _selectedEpisode = ep.episodeNumber);
+    final m = _details ?? widget.movie;
+    final image = ep.stillPath ?? m.backdrop;
+    final hidePlayback = FeatureFlagsService().hidePlayback.value;
+    final header = EpisodeDetailHeader(
+      episode: ep,
+      fallbackImage: m.backdrop,
+      progress: hidePlayback
+          ? null
+          : SavedMoviesService().getEpisodeProgress(
+                widget.movie.id,
+                _selectedSeason?.seasonNumber ?? 1,
+                ep.episodeNumber,
+              ) ??
+              ep.progress,
+    );
+
+    if (!hidePlayback && !ep.isUnreleased) {
+      _playWithTorrent(header: header, backgroundImage: image);
+      return;
+    }
+
+    final provider = m.streamingProvider;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      barrierColor: Colors.black54,
+      builder: (sheetContext) => EpisodeInfoSheet(
+        image: image,
+        header: header,
+        action: hidePlayback && provider != null
+            ? _WatchOnProviderButton(
+                provider: provider,
+                // Close the popup first, so a "couldn't open" message shows
+                // on this screen rather than hidden behind the sheet.
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _openProvider(provider);
+                },
+              )
+            : null,
+      ),
+    );
+  }
+
+  /// The movie's popup (the Play button): the movie in the episode cards'
+  /// styling, over its torrents and the web servers — the same sheet as
+  /// an episode's (see _openEpisode).
+  void _openMovie() {
+    final m = _details ?? widget.movie;
+    _playWithTorrent(
+      header: MovieDetailHeader(
+        movie: m,
+        progress: SavedMoviesService()
+            .getMovieFromHistory(widget.movie.id)
+            ?.progress,
+      ),
+      backgroundImage: m.backdrop ?? m.posterUrl,
+    );
+  }
+
+  void _playWithTorrent({Widget? header, String? backgroundImage}) async {
     if (_details == null) return;
     if (_isSelectionUnreleased()) {
       _showNotReleasedMessage();
@@ -480,6 +548,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
           onFallback: (provider) {
             _openWebPlayer(provider);
           },
+          header: header,
+          backgroundImage: backgroundImage,
         );
       },
     );
@@ -541,18 +611,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
             ep.episodeNumber,
           );
 
-          if (progress != null) {
-            return Episode(
-              id: ep.id,
-              episodeNumber: ep.episodeNumber,
-              name: ep.name,
-              overview: ep.overview,
-              stillPath: ep.stillPath,
-              airDate: ep.airDate,
-              voteAverage: ep.voteAverage,
-              progress: progress,
-            );
-          }
+          if (progress != null) return ep.withProgress(progress);
           return ep;
         }).toList();
       });
@@ -628,11 +687,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
         // on scroll stays local to the AppBar instead of the whole screen.
         appBar: PreferredSize(
           preferredSize: const Size.fromHeight(kToolbarHeight),
-          child: ValueListenableBuilder<double>(
-            valueListenable: _scrollOffset,
-            builder: (context, offset, _) {
-              // Logo reveal point — unchanged from before.
-              final showTitle = offset > 350;
+          child: ValueListenableBuilder<bool>(
+            valueListenable: _showTitle,
+            builder: (context, showTitle, _) {
               // No full-width bar background: the back button and the logo
               // form one frosted "water bubble" (GlassBubbleBar) — the logo's
               // bubble grows out of the back button at showTitle and
@@ -704,9 +761,16 @@ class _DetailsScreenState extends State<DetailsScreen> {
                             // missed position corrections (e.g. after the
                             // synopsis collapses) and left this stuck.
                             valueListenable: _scrollOffset,
-                            builder: (context, offset, child) {
-                              return Transform.translate(
-                                offset: Offset(0, -offset * 0.5),
+                            // Only the offset changes per frame: the image
+                            // subtree is built once (`child`) and sits behind
+                            // a RepaintBoundary, so scrolling just moves its
+                            // layer instead of rebuilding and repainting it.
+                            builder: (context, offset, child) =>
+                                Transform.translate(
+                              offset: Offset(0, -offset * 0.5),
+                              child: child,
+                            ),
+                            child: RepaintBoundary(
                                 child: Stack(
                                   fit: StackFit.expand,
                                   children: [
@@ -759,8 +823,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                     ),
                                   ],
                                 ),
-                              );
-                            },
+                            ),
                           ),
                         ],
                       ),
@@ -980,7 +1043,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                 child: _withProviderSegment(provider, InkWell(
                                                   onTap: movieUnreleased
                                                       ? null
-                                                      : _playWithTorrent,
+                                                      : _openMovie,
                                                   borderRadius:
                                                       BorderRadius.circular(30),
                                                   child: Row(
@@ -1096,7 +1159,19 @@ class _DetailsScreenState extends State<DetailsScreen> {
   
                                                           await _loadSeasonDetails(
                                                               s);
-                                                          _playWithTorrent();
+                                                          // The same popup as
+                                                          // tapping that
+                                                          // episode's card.
+                                                          final i = _episodes
+                                                              .indexWhere((ep) =>
+                                                                  ep.episodeNumber ==
+                                                                  e);
+                                                          if (i != -1) {
+                                                            _openEpisode(
+                                                                _episodes[i]);
+                                                          } else {
+                                                            _playWithTorrent();
+                                                          }
                                                         },
                                                   borderRadius:
                                                       BorderRadius.circular(30),
@@ -1453,9 +1528,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
                         ),
                       ),
 
-                      // Episode list — a separate sliver (not nested inside the
+                      // Episode grid — a separate sliver (not nested inside the
                       // regular-content SliverList above) so it's genuinely lazy
-                      // via SliverList.builder, instead of the old shrinkWrap:
+                      // via SliverGrid.builder, instead of the old shrinkWrap:
                       // true + NeverScrollableScrollPhysics ListView.builder,
                       // which forced every episode row to build up front
                       // regardless of scroll position. Matters a lot for shows
@@ -1479,200 +1554,48 @@ class _DetailsScreenState extends State<DetailsScreen> {
                         else
                           SliverPadding(
                             padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                            sliver: SliverList.builder(
-                              itemCount: _episodes.length,
-                              itemBuilder: (context, index) {
-                                final ep = _episodes[index];
-                                final currentProgress = hidePlayback
-                                    ? null
-                                    : SavedMoviesService().getEpisodeProgress(
-                                          widget.movie.id,
-                                          _selectedSeason?.seasonNumber ?? 1,
-                                          ep.episodeNumber,
-                                        ) ??
-                                        ep.progress;
-
-                                bool isFuture = false;
-                                String? formattedDate;
-
-                                if (ep.airDate != null) {
-                                  try {
-                                    final date = DateTime.parse(ep.airDate!);
-                                    if (date.isAfter(DateTime.now())) {
-                                      isFuture = true;
-                                      formattedDate =
-                                          "${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}";
-                                    }
-                                  } catch (_) {}
-                                }
-
-                                return Container(
-                                  margin: const EdgeInsets.only(bottom: 16),
-                                  child: InkWell(
-                                    onTap: isFuture || hidePlayback
-                                        ? null
-                                        : () {
-                                            setState(() {
-                                              _selectedEpisode =
-                                                  ep.episodeNumber;
-                                            });
-                                            _playWithTorrent();
-                                          },
-                                    borderRadius: BorderRadius.circular(4),
-                                    child: Row(
-                                      children: [
-                                        // Thumbnail
-                                        Container(
-                                          width: 140,
-                                          height: 80,
-                                          margin: const EdgeInsets.only(
-                                            right: 12,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            borderRadius: BorderRadius.circular(
-                                              4,
-                                            ),
-                                            image: DecorationImage(
-                                              image: CachedNetworkImageProvider(
-                                                ep.stillPath ??
-                                                    m.backdrop ??
-                                                    '',
-                                                maxWidth: (140 *
-                                                        MediaQuery.of(context)
-                                                            .devicePixelRatio)
-                                                    .toInt(),
-                                                maxHeight: (80 *
-                                                        MediaQuery.of(context)
-                                                            .devicePixelRatio)
-                                                    .toInt(),
-                                              ),
-                                              fit: BoxFit.cover,
-                                              colorFilter: isFuture
-                                                  ? const ColorFilter.mode(
-                                                      Colors.black54,
-                                                      BlendMode.darken,
-                                                    )
-                                                  : null,
-                                              opacity: isFuture ? 0.6 : 1.0,
-                                            ),
-                                          ),
-                                          child: Stack(
-                                            fit: StackFit.expand,
-                                            children: [
-                                              isFuture
-                                                  ? const Center(
-                                                      child: Icon(
-                                                        Icons.lock_clock,
-                                                        color: Colors.white54,
-                                                        size: 24,
-                                                      ),
-                                                    )
-                                                  : hidePlayback
-                                                      ? const SizedBox.shrink()
-                                                      : Container(
-                                                          color: Colors.black26,
-                                                          child: const Center(
-                                                            child: Icon(
-                                                              Icons
-                                                                  .play_circle_outline,
-                                                              color: Colors.white,
-                                                              size: 32,
-                                                            ),
-                                                          ),
-                                                        ),
-                                              // Progress Bar
-                                              if (currentProgress != null &&
-                                                  currentProgress > 0)
-                                                Positioned(
-                                                  bottom: 4,
-                                                  left: 6,
-                                                  right: 6,
-                                                  child: Container(
-                                                    height: 4,
-                                                    decoration: BoxDecoration(
-                                                      color: Colors.black54,
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                              4),
-                                                    ),
-                                                    child: ClipRRect(
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                              4),
-                                                      child:
-                                                          FractionallySizedBox(
-                                                        alignment: Alignment
-                                                            .centerLeft,
-                                                        widthFactor:
-                                                            currentProgress
-                                                                .clamp(
-                                                                    0.0, 1.0),
-                                                        child: Container(
-                                                            color: AppTheme
-                                                                .primaryColor),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                            ],
-                                          ),
-                                        ),
-
-                                        // Info
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                '${ep.episodeNumber}. ${ep.name}',
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.bold,
-                                                  fontSize: 14,
-                                                  color: isFuture
-                                                      ? Colors.white54
-                                                      : Colors.white,
-                                                ),
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                ep.overview.isNotEmpty
-                                                    ? ep.overview
-                                                    : "No description available.",
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(
-                                                  fontSize: 12,
-                                                  color: Colors.grey,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 4),
-                                              isFuture && formattedDate != null
-                                                  ? Text(
-                                                      'Available on: $formattedDate',
-                                                      style: const TextStyle(
-                                                        fontSize: 12,
-                                                        color: AppTheme
-                                                            .primaryColor,
-                                                        fontStyle:
-                                                            FontStyle.italic,
-                                                      ),
-                                                    )
-                                                  : Text(
-                                                      '${ep.voteAverage.toStringAsFixed(1)} ★',
-                                                      style: const TextStyle(
-                                                        fontSize: 10,
-                                                        color: Colors.white54,
-                                                      ),
-                                                    ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
+                            // Two columns of Apple TV-style episode cards;
+                            // still a lazy sliver (built as they scroll in).
+                            sliver: SliverLayoutBuilder(
+                              builder: (context, constraints) {
+                                const gap = 12.0;
+                                final cardWidth =
+                                    (constraints.crossAxisExtent - gap) / 2;
+                                return SliverGrid.builder(
+                                  gridDelegate:
+                                      SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 2,
+                                    crossAxisSpacing: gap,
+                                    mainAxisSpacing: gap,
+                                    mainAxisExtent: EpisodeCard.heightFor(
+                                      cardWidth,
+                                      MediaQuery.textScalerOf(context),
                                     ),
                                   ),
+                                  itemCount: _episodes.length,
+                                  itemBuilder: (context, index) {
+                                    final ep = _episodes[index];
+                                    final currentProgress = hidePlayback
+                                        ? null
+                                        : SavedMoviesService()
+                                                .getEpisodeProgress(
+                                              widget.movie.id,
+                                              _selectedSeason?.seasonNumber ??
+                                                  1,
+                                              ep.episodeNumber,
+                                            ) ??
+                                            ep.progress;
+                                    return EpisodeCard(
+                                      episode: ep,
+                                      fallbackImage: m.backdrop,
+                                      progress: currentProgress,
+                                      hidePlayback: hidePlayback,
+                                      // The episode popup — also for
+                                      // unaired episodes and with playback
+                                      // hidden (see _openEpisode).
+                                      onTap: () => _openEpisode(ep),
+                                    );
+                                  },
                                 );
                               },
                             ),
@@ -1741,6 +1664,12 @@ class TorrentQualitySelectorSheet extends StatefulWidget {
       List<TorrentStream> updatedStreams)? onStreamSelected;
   final bool resolveOnSelect;
 
+  /// Makes this the episode / movie popup: [header] (a DetailHeader)
+  /// scrolls above the sources, all on an EpisodeSheetFrame showing
+  /// [backgroundImage] (the still / backdrop) blurred behind.
+  final Widget? header;
+  final String? backgroundImage;
+
   const TorrentQualitySelectorSheet({
     required this.imdbId,
     required this.type,
@@ -1753,6 +1682,8 @@ class TorrentQualitySelectorSheet extends StatefulWidget {
     required this.onFallback,
     this.onStreamSelected,
     this.resolveOnSelect = true,
+    this.header,
+    this.backgroundImage,
   });
 
   @override
@@ -1922,9 +1853,13 @@ class _TorrentQualitySelectorSheetState
   Widget build(BuildContext context) {
     final isLandscape =
         MediaQuery.of(context).orientation == Orientation.landscape;
-    final double initialSize = isLandscape ? 0.85 : 0.6;
+    // The episode popup's header takes room, so it opens taller.
+    final hasHeader = widget.header != null;
+    final double initialSize = isLandscape || hasHeader ? 0.85 : 0.6;
     final double minSize = isLandscape ? 0.45 : 0.4;
-    final double maxSize = isLandscape ? 0.95 : 0.9;
+    final double maxSize = isLandscape || hasHeader ? 0.95 : 0.9;
+    final bottomPadding =
+        (isLandscape ? 10 : 20) + MediaQuery.of(context).padding.bottom;
 
     return DraggableScrollableSheet(
       initialChildSize: initialSize,
@@ -1932,6 +1867,43 @@ class _TorrentQualitySelectorSheetState
       maxChildSize: maxSize,
       expand: false,
       builder: (context, scrollController) {
+        // The episode popup (see EpisodeDetailHeader): the episode in its
+        // card styling scrolls along with the sources below it, on the
+        // cards' blurred-still backdrop.
+        if (hasHeader) {
+          return EpisodeSheetFrame(
+            image: widget.backgroundImage,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: CustomScrollView(
+                    controller: scrollController,
+                    slivers: [
+                      SliverToBoxAdapter(child: widget.header),
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                        sliver: SliverToBoxAdapter(
+                          child: _buildTitleRow(context, closeButton: false),
+                        ),
+                      ),
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                        sliver: _buildSources(isLandscape),
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                      20, isLandscape ? 8 : 12, 20, bottomPadding),
+                  child: _buildWebServersMenu(context),
+                ),
+              ],
+            ),
+          );
+        }
+
         return Container(
           decoration: const BoxDecoration(
             color: Color(0xFF0C0C0C),
@@ -1944,8 +1916,7 @@ class _TorrentQualitySelectorSheetState
             top: isLandscape ? 6 : 8,
             left: 20,
             right: 20,
-            bottom:
-                (isLandscape ? 10 : 20) + MediaQuery.of(context).padding.bottom,
+            bottom: bottomPadding,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1963,425 +1934,411 @@ class _TorrentQualitySelectorSheetState
                 ),
               ),
               SizedBox(height: isLandscape ? 8 : 16),
-
-              // Header Text
-              Row(
-                children: [
-                  Icon(Icons.bolt, color: AppTheme.primaryColor, size: 22),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _resolvingMessage != null
-                          ? 'Preparing Playback'
-                          : 'Select Stream Quality',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                  if (_resolvingMessage == null)
-                    IconButton(
-                      icon: const Icon(Icons.close,
-                          color: Colors.white38, size: 20),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                ],
+              _buildTitleRow(context, closeButton: true),
+              SizedBox(height: isLandscape ? 8 : 16),
+              Expanded(
+                child: CustomScrollView(
+                  controller: scrollController,
+                  slivers: [_buildSources(isLandscape)],
+                ),
               ),
               SizedBox(height: isLandscape ? 8 : 16),
-
-              if (_resolveError != null && _resolvingMessage == null)
-                Container(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
-                  decoration: BoxDecoration(
-                    color: Colors.red[900]!.withValues(alpha: 0.85),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Padding(
-                        padding: EdgeInsets.only(top: 2),
-                        child: Icon(Icons.error_outline_rounded,
-                            color: Colors.white, size: 18),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          _resolveError!,
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 13, height: 1.35),
-                        ),
-                      ),
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.close_rounded,
-                            color: Colors.white70, size: 18),
-                        onPressed: () => setState(() => _resolveError = null),
-                      ),
-                    ],
-                  ),
-                ),
-
-              if (_resolvingMessage != null)
-                Expanded(
-                  child: SingleChildScrollView(
-                    controller: scrollController,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(height: isLandscape ? 12 : 24),
-                        const Center(child: ShimmerLoader(size: 90)),
-                        const SizedBox(height: 16),
-                        Center(
-                          child: Text(
-                            _resolvingMessage!,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 14),
-                          ),
-                        ),
-                        SizedBox(height: isLandscape ? 16 : 32),
-                      ],
-                    ),
-                  ),
-                )
-              else if (_loading)
-                Expanded(
-                  child: SingleChildScrollView(
-                    controller: scrollController,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(height: isLandscape ? 20 : 40),
-                        const Center(child: ShimmerLoader(size: 90)),
-                        const SizedBox(height: 16),
-                        const Center(
-                          child: Text(
-                            'Searching peer networks for torrents...',
-                            textAlign: TextAlign.center,
-                            style:
-                                TextStyle(color: Colors.white54, fontSize: 13),
-                          ),
-                        ),
-                        SizedBox(height: isLandscape ? 20 : 40),
-                      ],
-                    ),
-                  ),
-                )
-              else if (_error != null)
-                Expanded(
-                  child: SingleChildScrollView(
-                    controller: scrollController,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(height: isLandscape ? 10 : 20),
-                        Center(
-                          child: Text(
-                            _error!,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.redAccent),
-                          ),
-                        ),
-                        SizedBox(height: isLandscape ? 10 : 20),
-                      ],
-                    ),
-                  ),
-                )
-              else if (_streams == null || _streams!.isEmpty)
-                Expanded(
-                  child: SingleChildScrollView(
-                    controller: scrollController,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(height: isLandscape ? 10 : 20),
-                        const Center(
-                          child: Text(
-                            'No direct torrent streams available.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.white54),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Center(
-                          child: Text(
-                            'Try "Alternative Web Servers" below instead.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                color: Colors.white.withOpacity(0.3),
-                                fontSize: 12),
-                          ),
-                        ),
-                        SizedBox(height: isLandscape ? 10 : 20),
-                      ],
-                    ),
-                  ),
-                )
-              else ...[
-                Expanded(
-                  child: ListView.builder(
-                    controller: scrollController,
-                    itemCount: _streams!.length,
-                    itemBuilder: (context, index) {
-                      final stream = _streams![index];
-                      final isLastPlayed = _lastPlayedHash != null &&
-                          stream.infoHash.toLowerCase() ==
-                              _lastPlayedHash!.toLowerCase();
-                      final isRecommended = index == 0 && !isLastPlayed;
-                      final isHighlighted = isLastPlayed || isRecommended;
-
-                      return Card(
-                        color: Colors.white.withOpacity(0.03),
-                        margin: const EdgeInsets.only(bottom: 12),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(
-                            color: isHighlighted
-                                ? (isLastPlayed
-                                        ? AppTheme.primaryColor
-                                        : Colors.amber)
-                                    .withOpacity(0.4)
-                                : Colors.white.withOpacity(0.05),
-                            width: isHighlighted ? 1.5 : 1,
-                          ),
-                        ),
-                        child: InkWell(
-                          onTap: () => _selectStream(stream),
-                          borderRadius: BorderRadius.circular(12),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    // Quality Badge
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: stream.quality == '4K'
-                                            ? Colors.amber.withOpacity(0.15)
-                                            : AppTheme.primaryColor
-                                                .withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        stream.quality ?? '1080p',
-                                        style: TextStyle(
-                                          color: stream.quality == '4K'
-                                              ? Colors.amber
-                                              : AppTheme.primaryColor,
-                                          fontWeight: FontWeight.w900,
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    // Size Badge
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withOpacity(0.08),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        stream.size ?? 'Unknown size',
-                                        style: const TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                    const Spacer(),
-                                    if (isLastPlayed) ...[
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 4,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: AppTheme.primaryColor,
-                                          borderRadius:
-                                              BorderRadius.circular(6),
-                                        ),
-                                        child: const Text(
-                                          'LAST PLAYED',
-                                          style: TextStyle(
-                                            color: Colors.black,
-                                            fontWeight: FontWeight.w900,
-                                            fontSize: 9,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                    ] else if (isRecommended) ...[
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 4,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: Colors.amber,
-                                          borderRadius:
-                                              BorderRadius.circular(6),
-                                        ),
-                                        child: const Text(
-                                          'RECOMMENDED',
-                                          style: TextStyle(
-                                            color: Colors.black,
-                                            fontWeight: FontWeight.w900,
-                                            fontSize: 9,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                    ],
-                                    // Seeders
-                                    Row(
-                                      children: [
-                                        const Icon(
-                                          Icons.speed,
-                                          size: 14,
-                                          color: Colors.green,
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          '${stream.seeders ?? 0} seeds',
-                                          style: const TextStyle(
-                                            color: Colors.green,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 11,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 12),
-                                // Name of the torrent release
-                                Text(
-                                  stream.name,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                    height: 1.3,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                // Provider/Source
-                                Text(
-                                  'Source: ${stream.source ?? "P2P"}',
-                                  style: TextStyle(
-                                    color: Colors.white.withOpacity(0.3),
-                                    fontSize: 11,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
-              SizedBox(height: isLandscape ? 8 : 16),
-              // Alternate Web Servers Dropdown
-              Center(
-                child: PopupMenuButton<String>(
-                  offset: const Offset(0, -150),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  color: Colors.grey[950],
-                  child: Padding(
-                    padding:
-                        const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.language,
-                            size: 16, color: Colors.white.withOpacity(0.5)),
-                        const SizedBox(width: 6),
-                        Text(
-                          'Alternative Web Servers (No Torrenting)',
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.5),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            decoration: TextDecoration.underline,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Icon(Icons.arrow_drop_up,
-                            size: 16, color: Colors.white.withOpacity(0.5)),
-                      ],
-                    ),
-                  ),
-                  itemBuilder: (context) {
-                    final defaultProvider =
-                        Platform.isIOS ? 'vsembed' : 'vidlink';
-                    final altProvider = Platform.isIOS ? 'vidlink' : 'vsembed';
-                    final altLabel = Platform.isIOS ? 'Server 1' : 'Server 4';
-                    return [
-                      PopupMenuItem(
-                        value: defaultProvider,
-                        child: Text(
-                          Platform.isIOS ? 'Server 4' : 'Server 1',
-                          style: const TextStyle(
-                              color: Colors.white, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                      const PopupMenuItem(
-                        value: 'moviesapi',
-                        child: Text(
-                          'Server 2',
-                          style: const TextStyle(
-                              color: Colors.white, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                      const PopupMenuItem(
-                        value: '2embed',
-                        child: Text(
-                          'Server 3',
-                          style: const TextStyle(
-                              color: Colors.white, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: altProvider,
-                        child: Text(
-                          altLabel,
-                          style: const TextStyle(
-                              color: Colors.white, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ];
-                  },
-                  onSelected: (val) {
-                    Navigator.pop(context);
-                    widget.onFallback(val);
-                  },
-                ),
-              ),
+              _buildWebServersMenu(context),
             ],
           ),
         );
       },
+    );
+  }
+
+  Widget _buildTitleRow(BuildContext context, {required bool closeButton}) {
+    return Row(
+      children: [
+        Icon(Icons.bolt, color: AppTheme.primaryColor, size: 22),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            _resolvingMessage != null
+                ? 'Preparing Playback'
+                : 'Select Stream Quality',
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+        ),
+        if (closeButton && _resolvingMessage == null)
+          IconButton(
+            icon: const Icon(Icons.close, color: Colors.white38, size: 20),
+            onPressed: () => Navigator.pop(context),
+          ),
+      ],
+    );
+  }
+
+  /// The sheet's scrolling body, as a sliver: the last start attempt's
+  /// error, then the current state — preparing playback, searching, an
+  /// error, nothing found, or the list of streams.
+  Widget _buildSources(bool isLandscape) {
+    Widget message(List<Widget> children) => SliverToBoxAdapter(
+          child: Column(mainAxisSize: MainAxisSize.min, children: children),
+        );
+
+    final Widget state;
+    if (_resolvingMessage != null) {
+      state = message([
+        SizedBox(height: isLandscape ? 12 : 24),
+        const Center(child: ShimmerLoader(size: 90)),
+        const SizedBox(height: 16),
+        Center(
+          child: Text(
+            _resolvingMessage!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+        ),
+        SizedBox(height: isLandscape ? 16 : 32),
+      ]);
+    } else if (_loading) {
+      state = message([
+        SizedBox(height: isLandscape ? 20 : 40),
+        const Center(child: ShimmerLoader(size: 90)),
+        const SizedBox(height: 16),
+        const Center(
+          child: Text(
+            'Searching peer networks for torrents...',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white54, fontSize: 13),
+          ),
+        ),
+        SizedBox(height: isLandscape ? 20 : 40),
+      ]);
+    } else if (_error != null) {
+      state = message([
+        SizedBox(height: isLandscape ? 10 : 20),
+        Center(
+          child: Text(
+            _error!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.redAccent),
+          ),
+        ),
+        SizedBox(height: isLandscape ? 10 : 20),
+      ]);
+    } else if (_streams == null || _streams!.isEmpty) {
+      state = message([
+        SizedBox(height: isLandscape ? 10 : 20),
+        const Center(
+          child: Text(
+            'No direct torrent streams available.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white54),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Center(
+          child: Text(
+            'Try "Alternative Web Servers" below instead.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+                color: Colors.white.withOpacity(0.3), fontSize: 12),
+          ),
+        ),
+        SizedBox(height: isLandscape ? 10 : 20),
+      ]);
+    } else {
+      state = SliverList.builder(
+        itemCount: _streams!.length,
+        itemBuilder: (context, index) => _buildStreamCard(index),
+      );
+    }
+
+    return SliverMainAxisGroup(
+      slivers: [
+        if (_resolveError != null && _resolvingMessage == null)
+          SliverToBoxAdapter(child: _buildResolveError()),
+        state,
+      ],
+    );
+  }
+
+  Widget _buildResolveError() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
+      decoration: BoxDecoration(
+        color: Colors.red[900]!.withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: Icon(Icons.error_outline_rounded,
+                color: Colors.white, size: 18),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              _resolveError!,
+              style: const TextStyle(
+                  color: Colors.white, fontSize: 13, height: 1.35),
+            ),
+          ),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.close_rounded,
+                color: Colors.white70, size: 18),
+            onPressed: () => setState(() => _resolveError = null),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStreamCard(int index) {
+    final stream = _streams![index];
+    final isLastPlayed = _lastPlayedHash != null &&
+        stream.infoHash.toLowerCase() == _lastPlayedHash!.toLowerCase();
+    final isRecommended = index == 0 && !isLastPlayed;
+    final isHighlighted = isLastPlayed || isRecommended;
+
+    return Card(
+      color: Colors.white.withOpacity(0.03),
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: isHighlighted
+              ? (isLastPlayed ? AppTheme.primaryColor : Colors.amber)
+                  .withOpacity(0.4)
+              : Colors.white.withOpacity(0.05),
+          width: isHighlighted ? 1.5 : 1,
+        ),
+      ),
+      child: InkWell(
+        onTap: () => _selectStream(stream),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  // Quality Badge
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: stream.quality == '4K'
+                          ? Colors.amber.withOpacity(0.15)
+                          : AppTheme.primaryColor.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      stream.quality ?? '1080p',
+                      style: TextStyle(
+                        color: stream.quality == '4K'
+                            ? Colors.amber
+                            : AppTheme.primaryColor,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // Size Badge
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      stream.size ?? 'Unknown size',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  if (isLastPlayed) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppTheme.primaryColor,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text(
+                        'LAST PLAYED',
+                        style: TextStyle(
+                          color: Colors.black,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 9,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ] else if (isRecommended) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.amber,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text(
+                        'RECOMMENDED',
+                        style: TextStyle(
+                          color: Colors.black,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 9,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  // Seeders
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.speed,
+                        size: 14,
+                        color: Colors.green,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${stream.seeders ?? 0} seeds',
+                        style: const TextStyle(
+                          color: Colors.green,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // Name of the torrent release
+              Text(
+                stream.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  height: 1.3,
+                ),
+              ),
+              const SizedBox(height: 8),
+              // Provider/Source
+              Text(
+                'Source: ${stream.source ?? "P2P"}',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.3),
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// "Alternative Web Servers (No Torrenting)": the embed web players.
+  Widget _buildWebServersMenu(BuildContext context) {
+    return Center(
+      child: PopupMenuButton<String>(
+        offset: const Offset(0, -150),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        color: Colors.grey[950],
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.language,
+                  size: 16, color: Colors.white.withOpacity(0.5)),
+              const SizedBox(width: 6),
+              Text(
+                'Alternative Web Servers (No Torrenting)',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.5),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Icon(Icons.arrow_drop_up,
+                  size: 16, color: Colors.white.withOpacity(0.5)),
+            ],
+          ),
+        ),
+        itemBuilder: (context) {
+          final defaultProvider = Platform.isIOS ? 'vsembed' : 'vidlink';
+          final altProvider = Platform.isIOS ? 'vidlink' : 'vsembed';
+          final altLabel = Platform.isIOS ? 'Server 1' : 'Server 4';
+          return [
+            PopupMenuItem(
+              value: defaultProvider,
+              child: Text(
+                Platform.isIOS ? 'Server 4' : 'Server 1',
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'moviesapi',
+              child: Text(
+                'Server 2',
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+            const PopupMenuItem(
+              value: '2embed',
+              child: Text(
+                'Server 3',
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+            PopupMenuItem(
+              value: altProvider,
+              child: Text(
+                altLabel,
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ];
+        },
+        onSelected: (val) {
+          Navigator.pop(context);
+          widget.onFallback(val);
+        },
+      ),
     );
   }
 }

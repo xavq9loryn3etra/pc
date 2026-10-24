@@ -570,6 +570,7 @@ class TMDBService {
                   : null,
               airDate: e['air_date'],
               voteAverage: (e['vote_average'] ?? 0).toDouble(),
+              runtime: e['runtime'] is int ? e['runtime'] as int : null,
             ),
           )
           .toList();

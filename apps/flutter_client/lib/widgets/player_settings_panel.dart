@@ -1,5 +1,5 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'glass_blur.dart';
 import '../services/torrent/torrent_index_service.dart';
 import '../theme/app_theme.dart';
 import '../services/subtitle_service.dart';
@@ -120,8 +120,10 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
           child: SlideTransition(
             position: _slideAnimation,
             child: ClipRect(
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+              // Its own 85% tint needs no extra when the blur is reduced.
+              child: GlassBlur(
+                sigma: 16,
+                reducedTint: Colors.transparent,
                 child: Container(
                   width: panelWidth,
                   decoration: BoxDecoration(

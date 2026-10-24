@@ -1,6 +1,6 @@
-import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
+import 'glass_blur.dart';
 
 import '../theme/iridescent.dart';
 import 'poster_wall.dart';
@@ -222,8 +222,7 @@ class _StatusPillState extends State<StatusPill>
   Widget build(BuildContext context) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(30),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+      child: GlassBlur(
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           decoration: BoxDecoration(

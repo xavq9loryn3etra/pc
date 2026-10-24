@@ -1,0 +1,10 @@
+# Native binaries are downloaded from our GitHub Release at build time
+# (see native/PREBUILT_RELEASE_URL), never committed.
+prebuilt/
+ios/libtorrent_flutter.xcframework/
+ios/.ios-native-lib.zip
+macos/libtorrent_flutter.xcframework/
+macos/.macos-native-lib.zip
+.dart_tool/
+build/
+pubspec.lock

@@ -62,7 +62,9 @@ dependencies:
   connectivity_plus: ^6.1.1
   share_plus: ^10.1.4
   app_links: ^6.3.3
-  libtorrent_flutter: ^1.8.5
+  libtorrent_flutter:
+    # Vendored: the upstream repo (and its prebuilt native libs) is gone.
+    path: packages/libtorrent_flutter
   flutter_foreground_task: ^8.0.0
   flutter_media_session: ^2.1.3
   wakelock_plus: ^1.4.0

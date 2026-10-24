@@ -1,0 +1,81 @@
+name: Build libtorrent native libs
+
+# Builds the torrent engine (libtorrent + the libtorrent_flutter bridge) from
+# source for Android and iOS, and publishes the zips to the GitHub Release
+# named in PREBUILT_RELEASE_URL. The app's Gradle/CocoaPods builds download
+# from there. Run it manually after bumping that URL or changing the bridge.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  LIBTORRENT_VERSION: v2.0.11
+  BOOST_VERSION: 1.86.0
+  NATIVE_DIR: apps/flutter_client/packages/libtorrent_flutter/native
+
+jobs:
+  android:
+    name: Android (${{ matrix.abi }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a, x86_64]
+    env:
+      WORK_DIR: ${{ github.workspace }}/_native
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash "$NATIVE_DIR/fetch_sources.sh"
+      - run: bash "$NATIVE_DIR/build_android.sh" ${{ matrix.abi }} dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ matrix.abi }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  ios:
+    name: iOS
+    runs-on: macos-15
+    env:
+      WORK_DIR: ${{ github.workspace }}/_native
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash "$NATIVE_DIR/fetch_sources.sh"
+      - run: bash "$NATIVE_DIR/build_ios.sh" dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    needs: [android, ios]
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        run: |
+          url="$(tr -d '[:space:]' < "$NATIVE_DIR/PREBUILT_RELEASE_URL")"
+          tag="${url##*/}"
+          if [ "$url" != "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag" ]; then
+            echo "PREBUILT_RELEASE_URL ($url) doesn't point at this repo's releases" >&2
+            exit 1
+          fi
+          ls -l dist
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" dist/*.zip --clobber
+          else
+            gh release create "$tag" dist/*.zip \
+              --target "$GITHUB_SHA" \
+              --latest=false \
+              --title "libtorrent native libs ($tag)" \
+              --notes "libtorrent $LIBTORRENT_VERSION, Boost $BOOST_VERSION headers, built from $GITHUB_SHA by the build-libtorrent-native workflow."
+          fi

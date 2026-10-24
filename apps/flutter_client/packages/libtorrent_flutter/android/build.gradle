@@ -1,0 +1,103 @@
+// The Android Gradle Plugin builds the native code with the Android NDK.
+
+group = "com.libtorrentflutter.libtorrent_flutter"
+version = "1.0"
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.11.1")
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+
+android {
+    namespace = "com.libtorrentflutter.libtorrent_flutter"
+    compileSdk = 36
+
+    ndkVersion = android.ndkVersion
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Prebuilt JNI libs: not checked in (too big). Pulled on first build from
+    // our own GitHub Release, built by
+    // .github/workflows/build-libtorrent-native.yml:
+    //
+    //   <native/PREBUILT_RELEASE_URL>/android-native-lib-<abi>.zip
+    //
+    // Set -PlibtorrentFlutterAbis=arm64-v8a (or comma-separated list) on the
+    // Gradle command line to limit which ABIs are fetched. Default = all 3.
+    // Set -PlibtorrentFlutterSkipDownload=true to opt out (e.g. when you've
+    // dropped your own .so files into prebuilt/android/<abi>/).
+    // ─────────────────────────────────────────────────────────────────────
+    def prebuiltDir = file("${projectDir}/../prebuilt/android")
+    def skipDownload = (project.findProperty('libtorrentFlutterSkipDownload') ?: 'false').toString().toBoolean()
+    def requestedAbis = (project.findProperty('libtorrentFlutterAbis') ?: 'arm64-v8a,armeabi-v7a,x86_64')
+        .toString().split(',').collect { it.trim() }.findAll { it }
+    def releaseBase = file("${projectDir}/../native/PREBUILT_RELEASE_URL").text.trim()
+
+    if (!skipDownload) {
+        requestedAbis.each { abi ->
+            def soFile = file("${prebuiltDir}/${abi}/liblibtorrent_flutter.so")
+            // Records which release the .so came from, so bumping
+            // PREBUILT_RELEASE_URL replaces a previously downloaded copy.
+            def sourceFile = file("${prebuiltDir}/${abi}/.source")
+            if (soFile.exists() && sourceFile.exists() && sourceFile.text.trim() == releaseBase) return
+            def zipUrl  = "${releaseBase}/android-native-lib-${abi}.zip"
+            def zipFile = file("${buildDir}/libtorrent-flutter-cache/android-native-lib-${abi}.zip")
+            zipFile.parentFile.mkdirs()
+            soFile.parentFile.mkdirs()
+            println "libtorrent_flutter: downloading prebuilt ${abi} from ${zipUrl}"
+            try {
+                new java.net.URL(zipUrl).withInputStream { input ->
+                    zipFile.withOutputStream { out -> out << input }
+                }
+                // The .so sits at the zip root, so unzip into the per-abi directory.
+                ant.unzip(src: zipFile, dest: soFile.parentFile, overwrite: true)
+                zipFile.delete()
+                sourceFile.text = releaseBase
+            } catch (Exception e) {
+                println "libtorrent_flutter: download failed for ${abi}: ${e.message}"
+                if (soFile.exists()) {
+                    println "libtorrent_flutter: keeping the existing ${abi} library"
+                }
+            }
+        }
+    }
+
+    // There's no from-source fallback here (src/CMakeLists.txt can't find
+    // libtorrent on Android by itself), and an app without the .so would
+    // build fine but fail on the first torrent call — so fail the build.
+    def missingAbis = requestedAbis.findAll { !file("${prebuiltDir}/${it}/liblibtorrent_flutter.so").exists() }
+    if (!missingAbis.isEmpty()) {
+        throw new GradleException(
+            "libtorrent_flutter: no native library for ${missingAbis.join(', ')}. " +
+            "Run the 'Build libtorrent native libs' GitHub workflow so ${releaseBase} exists, " +
+            "or drop the .so files into prebuilt/android/<abi>/.")
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ["${projectDir}/../prebuilt/android"]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        minSdk = 24
+    }
+}

@@ -443,10 +443,9 @@ packages:
   libtorrent_flutter:
     dependency: "direct main"
     description:
-      name: libtorrent_flutter
-      sha256: "48605ded68779749246deac803bce4ecea75eb2aac2394fdb8b85961014a3d36"
-      url: "https://pub.dev"
-    source: hosted
+      path: "packages/libtorrent_flutter"
+      relative: true
+    source: path
     version: "1.8.5"
   lints:
     dependency: transitive

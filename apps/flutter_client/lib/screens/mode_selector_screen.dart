@@ -3,7 +3,6 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
@@ -144,133 +143,123 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     final item = _current;
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      // Transparent system navigation bar (no contrast scrim) so the
-      // frosted mode panel runs to the bottom edge. Other screens fall
-      // back to AppTheme.systemUiStyle, set app-wide in main.dart.
-      value: AppTheme.systemUiStyle.copyWith(
-        systemNavigationBarColor: Colors.transparent,
-        systemNavigationBarDividerColor: Colors.transparent,
-        systemNavigationBarContrastEnforced: false,
-      ),
-      child: Scaffold(
-        backgroundColor: Colors.black,
-        body: Stack(
-          fit: StackFit.expand,
-          children: [
-            // Background slideshow — full height, so the frosted panel at the
-            // bottom has artwork to blur.
-            Positioned.fill(
-              child: ClipRect(
-                child: AnimatedSwitcher(
-                  duration: _fadeDuration,
-                  layoutBuilder: (current, previous) => Stack(
-                    fit: StackFit.expand,
-                    children: [...previous, if (current != null) current],
-                  ),
-                  child: item == null
-                      ? _Placeholder(key: const ValueKey('placeholder'), mode: _mode)
-                      : _KenBurnsImage(
-                          key: ValueKey(_slide),
-                          image: _imageFor(item),
-                          // Vary where each slide zooms towards
-                          focus: const [
-                            Alignment(0, -0.4),
-                            Alignment(0.3, 0.1),
-                            Alignment(-0.3, -0.1),
-                          ][_slide % 3],
-                          duration: _slideDuration + _fadeDuration,
-                        ),
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Background slideshow — full height, so the frosted panel at the
+          // bottom has artwork to blur.
+          Positioned.fill(
+            child: ClipRect(
+              child: AnimatedSwitcher(
+                duration: _fadeDuration,
+                layoutBuilder: (current, previous) => Stack(
+                  fit: StackFit.expand,
+                  children: [...previous, if (current != null) current],
+                ),
+                child: item == null
+                    ? _Placeholder(key: const ValueKey('placeholder'), mode: _mode)
+                    : _KenBurnsImage(
+                        key: ValueKey(_slide),
+                        image: _imageFor(item),
+                        // Vary where each slide zooms towards
+                        focus: const [
+                          Alignment(0, -0.4),
+                          Alignment(0.3, 0.1),
+                          Alignment(-0.3, -0.1),
+                        ][_slide % 3],
+                        duration: _slideDuration + _fadeDuration,
+                      ),
+              ),
+            ),
+          ),
+
+          // Scrims: keep the status bar legible and darken behind the
+          // caption, easing off again under the panel so the art still
+          // shows through its glass.
+          const Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0x99000000),
+                    Color(0x00000000),
+                    Color(0x00000000),
+                    Color(0xBF000000),
+                    Color(0x99000000),
+                  ],
+                  stops: [0.0, 0.16, 0.34, 0.62, 1.0],
                 ),
               ),
             ),
+          ),
 
-            // Scrims: keep the status bar legible and darken behind the
-            // caption, easing off again under the panel so the art still
-            // shows through its glass.
-            const Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Color(0x99000000),
-                      Color(0x00000000),
-                      Color(0x00000000),
-                      Color(0xBF000000),
-                      Color(0x99000000),
-                    ],
-                    stops: [0.0, 0.16, 0.34, 0.62, 1.0],
+          // Title, prompt and mode buttons
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: SizedBox(
+                    // Up-to-80px logo + subtitle
+                    height: 128,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 500),
+                      transitionBuilder: (child, animation) => FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween(
+                            begin: const Offset(0, 0.08),
+                            end: Offset.zero,
+                          ).animate(animation),
+                          child: child,
+                        ),
+                      ),
+                      child: item == null
+                          ? const SizedBox.expand()
+                          : _HeroCaption(
+                              key: ValueKey(_slide),
+                              item: item,
+                            ),
+                    ),
                   ),
                 ),
-              ),
-            ),
-
-            // Title, prompt and mode buttons
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 32),
-                    child: SizedBox(
-                      // Up-to-80px logo + subtitle
-                      height: 128,
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 500),
-                        transitionBuilder: (child, animation) => FadeTransition(
-                          opacity: animation,
-                          child: SlideTransition(
-                            position: Tween(
-                              begin: const Offset(0, 0.08),
-                              end: Offset.zero,
-                            ).animate(animation),
-                            child: child,
-                          ),
-                        ),
-                        child: item == null
-                            ? const SizedBox.expand()
-                            : _HeroCaption(
-                                key: ValueKey(_slide),
-                                item: item,
-                              ),
+                const SizedBox(height: 28),
+                Text(
+                  'Choose your mode',
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: Colors.white.withValues(alpha: 0.6),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                // Same frosted glass as the floating bottom nav bar's
+                // buttons (blur, 35% black, faint white edge).
+                CustomPaint(
+                  foregroundPainter: _DomeEdgePainter(),
+                  child: ClipPath(
+                    clipper: _DomeClipper(),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                      child: Container(
+                        width: double.infinity,
+                        color: AppTheme.scaffoldColor.withValues(alpha: 0.35),
+                        padding:
+                            EdgeInsets.fromLTRB(16, 40, 16, 28 + bottomInset),
+                        child: ModeSwitchRow(onSelected: _selectMode),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 28),
-                  Text(
-                    'Choose your mode',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.white.withValues(alpha: 0.6),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  // Same frosted glass as the floating bottom nav bar's
-                  // buttons (blur, 35% black, faint white edge).
-                  CustomPaint(
-                    foregroundPainter: _DomeEdgePainter(),
-                    child: ClipPath(
-                      clipper: _DomeClipper(),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                        child: Container(
-                          width: double.infinity,
-                          color: AppTheme.scaffoldColor.withValues(alpha: 0.35),
-                          padding:
-                              EdgeInsets.fromLTRB(16, 40, 16, 28 + bottomInset),
-                          child: ModeSwitchRow(onSelected: _selectMode),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

@@ -65,7 +65,7 @@ class TrendingService {
   static const _count = 3;
   // Bump the version when TrendingItem's shape or content changes, so a
   // stale cache from an older build isn't shown.
-  static String _cacheKey(AppMode mode) => 'trending_cache_v2_${mode.name}';
+  static String _cacheKey(AppMode mode) => 'trending_cache_v3_${mode.name}';
 
   final Dio _dio = Dio(
     BaseOptions(
@@ -146,10 +146,12 @@ class TrendingService {
         .where((m) => m.image != null)
         .take(_count)
         .toList();
-    // Trending results don't include title logos; the details call does.
-    final logos = await Future.wait(movies.map((m) => tmdb
+    // Trending results don't include title logos or textless art; the
+    // details call does. The logo is drawn over the slide, so the art
+    // should be textless — trending's own poster / backdrop_path usually
+    // has the title printed on it too.
+    final details = await Future.wait(movies.map((m) => tmdb
         .getDetails(m.id, type: m.type)
-        .then((d) => d?.logoUrl)
         .catchError((_) => null)));
     return [
       for (var i = 0; i < movies.length; i++)
@@ -157,9 +159,10 @@ class TrendingService {
           title: movies[i].title,
           subtitle: '',
           // w500 is soft full-screen on modern phones
-          imageUrl: movies[i].image!.replaceFirst('/w500/', '/w780/'),
-          wideImageUrl: movies[i].backdrop,
-          logoUrl: logos[i],
+          imageUrl: (details[i]?.textlessPoster ?? movies[i].image!)
+              .replaceFirst('/w500/', '/w780/'),
+          wideImageUrl: details[i]?.backdrop ?? movies[i].backdrop,
+          logoUrl: details[i]?.logoUrl,
         ),
     ];
   }

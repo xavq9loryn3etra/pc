@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'dart:ui' show PlatformDispatcher;
 import 'package:dio/dio.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -369,14 +370,33 @@ class TMDBService {
     // pre-sorted by vote_average) over the bare backdrop_path field, which
     // is just TMDB's own arbitrary "primary" pick and isn't language-aware —
     // foreign titles in particular can default to a backdrop with
-    // non-English text baked in.
+    // non-English text baked in. Among those, textless ones (no language)
+    // come first: an `en` backdrop usually has the title printed on it,
+    // which doubled up with the logo drawn over the hero (e.g. Parasite).
     String? backdrop = base.backdrop;
-    if (images != null &&
-        images['backdrops'] != null &&
-        (images['backdrops'] as List).isNotEmpty) {
-      final bestBackdrop = (images['backdrops'] as List).first;
-      if (bestBackdrop['file_path'] != null) {
-        backdrop = '$_backdropBase${bestBackdrop['file_path']}';
+    final backdrops = images is Map ? images['backdrops'] : null;
+    if (backdrops is List && backdrops.isNotEmpty) {
+      final candidates = backdrops.whereType<Map>();
+      final best = candidates.firstWhere(
+        (b) => b['iso_639_1'] == null,
+        orElse: () => candidates.first,
+      );
+      if (best['file_path'] != null) {
+        backdrop = '$_backdropBase${best['file_path']}';
+      }
+    }
+
+    // Textless poster — same idea, for the mode selector's portrait slides,
+    // which draw the logo over the poster. No fallback to a poster with
+    // text: callers use `image` for that.
+    String? textlessPoster;
+    final posters = images is Map ? images['posters'] : null;
+    if (posters is List) {
+      for (final p in posters.whereType<Map>()) {
+        if (p['iso_639_1'] == null && p['file_path'] is String) {
+          textlessPoster = '$_imageBase${p['file_path']}';
+          break;
+        }
       }
     }
 
@@ -430,6 +450,7 @@ class TMDBService {
       year: base.year,
       image: base.image,
       backdrop: backdrop,
+      textlessPoster: textlessPoster,
       rating: base.rating,
       voteCount: base.voteCount,
       description: base.description,
@@ -466,17 +487,7 @@ class TMDBService {
   /// in their app are considered: the button never falls back to TMDB, a
   /// search page or any other website. Null when there's none.
   StreamingProvider? _pickStreamingProvider(dynamic watchProviders) {
-    // The first preferred locale can lack a region (iOS reports a plain
-    // "English" language setting as `en`), which left iPhones with no
-    // country to look up — so take the first locale that has one.
-    String? country;
-    for (final locale in PlatformDispatcher.instance.locales) {
-      final code = locale.countryCode;
-      if (code != null && code.isNotEmpty) {
-        country = code;
-        break;
-      }
-    }
+    final country = _deviceCountry();
     if (country == null || watchProviders is! Map) return null;
     final results = watchProviders['results'];
     if (results is! Map) return null;
@@ -508,6 +519,33 @@ class TMDBService {
       name: _netflixIds.contains(id) ? 'Netflix' : name,
       logoUrl: logo is String ? 'https://image.tmdb.org/t/p/w92$logo' : null,
     );
+  }
+
+  /// The device's Region setting — the country whose streaming catalogue
+  /// applies.
+  ///
+  /// PlatformDispatcher's locales are the *language* preferences: on iOS
+  /// their region follows the language variant ("English (US)" → US) or is
+  /// missing, not where the user is. Platform.localeName is the current
+  /// locale (NSLocale.current on iOS), which carries the Region setting —
+  /// e.g. "en_LK", or "en_US@rg=lkzzzz" when language and region differ.
+  static String? _deviceCountry() {
+    final name = Platform.localeName;
+    final rg = RegExp(r'rg=([a-zA-Z]{2})').firstMatch(name);
+    if (rg != null) return rg.group(1)!.toUpperCase();
+    // "en_LK", "zh_Hans_CN", "en_US.UTF-8": the 2-letter subtag after the
+    // language.
+    final subtags = name.split('@').first.split(RegExp(r'[-_.]'));
+    for (final subtag in subtags.skip(1)) {
+      if (RegExp(r'^[a-zA-Z]{2}$').hasMatch(subtag)) {
+        return subtag.toUpperCase();
+      }
+    }
+    for (final locale in PlatformDispatcher.instance.locales) {
+      final code = locale.countryCode;
+      if (code != null && code.isNotEmpty) return code.toUpperCase();
+    }
+    return null;
   }
 
   Future<List<Episode>> getSeasonDetails(String tvId, int seasonNumber) async {

@@ -95,6 +95,10 @@ class StreamingLinkService {
 
   static const _prefsPrefix = 'wd_streaming_ids_';
 
+  // How long a cached lookup missing the wanted service's ID is trusted
+  // before Wikidata is asked again.
+  static const _missRecheck = Duration(days: 1);
+
   // Wikidata asks API clients to identify themselves with a descriptive
   // User-Agent (app name + contact URL).
   final Dio _dio = Dio(BaseOptions(
@@ -111,7 +115,7 @@ class StreamingLinkService {
   bool supports(int providerId) => _services.containsKey(providerId);
 
   /// A direct link to the title on [providerId], or null when Wikidata has
-  /// no ID for it there (or the lookup fails) — callers fall back.
+  /// no ID for it there (or the lookup fails).
   Future<String?> directUrl({
     required String wikidataId,
     required int providerId,
@@ -119,9 +123,10 @@ class StreamingLinkService {
   }) async {
     final service = _services[providerId];
     if (service == null) return null;
-    final ids = await _idsFor(wikidataId);
+    final props = isTv ? service.tvProps : service.movieProps;
+    final ids = await _idsFor(wikidataId, props);
     if (ids == null) return null;
-    for (final prop in isTv ? service.tvProps : service.movieProps) {
+    for (final prop in props) {
       final id = ids[prop];
       if (id != null) {
         return (isTv ? service.tvUrl : service.movieUrl)
@@ -133,21 +138,47 @@ class StreamingLinkService {
 
   /// Fetches (once, then cached on-device) every streaming ID Wikidata has
   /// for [wikidataId]. Prefetching this early makes taps instant.
-  Future<Map<String, String>?> _idsFor(String wikidataId) {
-    return _inFlight[wikidataId] ??= _lookup(wikidataId)
+  ///
+  /// A cached lookup without any of the [wanted] properties is rechecked
+  /// once it's older than [_missRecheck]: new titles often get their
+  /// streaming IDs added to Wikidata weeks after release.
+  Future<Map<String, String>?> _idsFor(
+      String wikidataId, List<String> wanted) {
+    return _inFlight[wikidataId] ??= _lookup(wikidataId, wanted)
       ..whenComplete(() => _inFlight.remove(wikidataId));
   }
 
   /// Starts the lookup in the background (no-op if cached or in flight).
-  void prefetch(String wikidataId) => _idsFor(wikidataId);
+  void prefetch({
+    required String wikidataId,
+    required int providerId,
+    required bool isTv,
+  }) {
+    final service = _services[providerId];
+    if (service == null) return;
+    _idsFor(wikidataId, isTv ? service.tvProps : service.movieProps);
+  }
 
-  Future<Map<String, String>?> _lookup(String wikidataId) async {
+  Future<Map<String, String>?> _lookup(
+      String wikidataId, List<String> wanted) async {
     SharedPreferences? prefs;
+    Map<String, String>? cached;
     try {
       prefs = await SharedPreferences.getInstance();
-      final cached = prefs.getString('$_prefsPrefix$wikidataId');
-      if (cached != null) {
-        return Map<String, String>.from(jsonDecode(cached) as Map);
+      final raw = prefs.getString('$_prefsPrefix$wikidataId');
+      if (raw != null) {
+        final entry = jsonDecode(raw) as Map;
+        // Entries saved before misses were rechecked are the bare ID map,
+        // with no fetch time — so they count as stale.
+        cached = Map<String, String>.from(
+            entry['ids'] is Map ? entry['ids'] as Map : entry);
+        final fetchedAt = entry['fetchedAt'];
+        final age = DateTime.now().difference(
+            DateTime.fromMillisecondsSinceEpoch(
+                fetchedAt is int ? fetchedAt : 0));
+        if (wanted.any(cached.containsKey) || age < _missRecheck) {
+          return cached;
+        }
       }
     } catch (_) {}
 
@@ -171,13 +202,20 @@ class StreamingLinkService {
         }
       }
       try {
-        await prefs?.setString('$_prefsPrefix$wikidataId', jsonEncode(ids));
+        await prefs?.setString(
+          '$_prefsPrefix$wikidataId',
+          jsonEncode({
+            'fetchedAt': DateTime.now().millisecondsSinceEpoch,
+            'ids': ids,
+          }),
+        );
       } catch (_) {}
       return ids;
     } catch (e) {
-      // Network error: don't cache, so a later tap can retry.
+      // Network error: don't cache, so a later tap can retry. A stale
+      // cached lookup is still better than none.
       debugPrint('Streaming ID lookup failed for $wikidataId: $e');
-      return null;
+      return cached;
     }
   }
 }

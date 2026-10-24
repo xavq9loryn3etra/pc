@@ -52,7 +52,7 @@ void main() async {
   // anyway; the players already restore edgeToEdge when they close), and
   // drop Android's default translucent status bar scrim. See
   // AppTheme.systemUiStyle — it's also the root AnnotatedRegion below, so
-  // screens that override it (e.g. ModeSelectorScreen) revert on leave.
+  // screens that override it revert on leave.
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(AppTheme.systemUiStyle);
 
@@ -316,9 +316,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         // it's just visually and interactively covered while offline.
         //
         // The root AnnotatedRegion sets the default system-bar style, so a
-        // screen's own region (e.g. the mode selector's transparent
-        // navigation bar) stops applying once that screen is gone instead
-        // of sticking app-wide.
+        // screen's own region stops applying once that screen is gone
+        // instead of sticking app-wide.
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: AppTheme.systemUiStyle,
           child: Stack(

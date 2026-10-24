@@ -4,6 +4,10 @@ class Movie {
   final int year;
   final String? image;
   final String? backdrop;
+  // Best-rated poster with no title text on it (TMDB's no-language
+  // posters), for places that draw the logo over the art themselves.
+  // Details only, not persisted.
+  final String? textlessPoster;
   final String rating; // Keeping as String to match TS '9.5' or 'N/A'
   final int voteCount;
   final String description;
@@ -78,6 +82,7 @@ class Movie {
     required this.year,
     this.image,
     this.backdrop,
+    this.textlessPoster,
     required this.rating,
     required this.voteCount,
     required this.description,

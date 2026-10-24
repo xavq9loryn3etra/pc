@@ -11,15 +11,19 @@ class AppTheme {
     0xFFB5966E,
   ); // Gold/Bronzish accent from Desktop
 
-  // System bars: transparent status bar (no Android scrim) with light
-  // icons, and a black navigation bar. Applied app-wide in main.dart;
-  // screens can override parts of it with an AnnotatedRegion.
+  // System bars: transparent status and navigation bars (no Android
+  // scrims — contrast enforcement off, so 3-button navigation doesn't get
+  // a translucent backdrop either) with light icons, so every screen's
+  // content runs edge to edge. Applied app-wide in main.dart; screens can
+  // override parts of it with an AnnotatedRegion.
   static const SystemUiOverlayStyle systemUiStyle = SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light, // Android
     statusBarBrightness: Brightness.dark, // iOS
-    systemNavigationBarColor: Colors.black,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarDividerColor: Colors.transparent,
     systemNavigationBarIconBrightness: Brightness.light,
+    systemNavigationBarContrastEnforced: false,
   );
 
   // Gradients

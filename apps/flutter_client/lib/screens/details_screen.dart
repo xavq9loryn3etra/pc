@@ -26,6 +26,7 @@ import 'dart:ui'; // For BackdropFilter
 import '../widgets/custom_app_bar.dart';
 import '../widgets/glass_bubble_bar.dart';
 import '../widgets/details_overview.dart';
+import '../widgets/marquee_text.dart';
 
 class DetailsScreen extends StatefulWidget {
   final Movie movie;
@@ -52,6 +53,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // removed (see _revealOverSkeleton).
   bool _skeletonFading = false;
   bool _skeletonDone = false;
+  // Streaming-service button: a tap in progress, and the snackbar message
+  // currently showing (see _openProvider / _showProviderMessage).
+  bool _openingProvider = false;
+  String? _providerMessage;
   final ScrollController _scrollController = ScrollController();
   // The page's vertical scroll offset, for the parallax backdrop and the
   // app bar. Fed from scroll notifications rather than a _scrollController
@@ -154,6 +159,17 @@ class _DetailsScreenState extends State<DetailsScreen> {
   /// no direct link for the title, or no app on the device can open it, the
   /// user is told instead.
   Future<void> _openProvider(StreamingProvider provider) async {
+    // Ignore taps while one is still resolving / launching.
+    if (_openingProvider) return;
+    _openingProvider = true;
+    try {
+      await _openProviderNow(provider);
+    } finally {
+      _openingProvider = false;
+    }
+  }
+
+  Future<void> _openProviderNow(StreamingProvider provider) async {
     final m = _details ?? widget.movie;
     // Usually already resolved and cached by the prefetch in _loadDetails.
     final url = m.wikidataId == null
@@ -167,7 +183,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
             .timeout(const Duration(seconds: 3), onTimeout: () => null);
     if (!mounted) return;
     if (url == null) {
-      _showProviderMessage("Couldn't find ${m.title} on ${provider.name}.");
+      // The title is on the service (per TMDB / JustWatch) — there's just
+      // no direct link to it yet, so point the user to the app instead.
+      _showProviderMessage(
+          '${m.title} is on ${provider.name}. Open the ${provider.name} app '
+          'to watch it.');
       return;
     }
 
@@ -190,29 +210,42 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   void _showProviderMessage(String message) {
-    ScaffoldMessenger.maybeOf(context)
-      ?..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    // Repeated taps leave the snackbar that's already up alone instead of
+    // dismissing and re-showing it each time.
+    if (_providerMessage == message) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    _providerMessage = message;
+    messenger.hideCurrentSnackBar();
+    messenger
+        .showSnackBar(SnackBar(content: Text(message)))
+        .closed
+        .then((_) {
+      if (_providerMessage == message) _providerMessage = null;
+    });
   }
 
   /// Splits the Play pill so [provider]'s logo sits at its right end,
-  /// behind a thin divider; unchanged when there's no provider.
+  /// behind a thin divider; unchanged when there's no provider. Either way
+  /// the pill's ripples are hosted by a _PillInk.
   Widget _withProviderSegment(StreamingProvider? provider, Widget play) {
-    if (provider == null) return play;
-    return Row(
-      children: [
-        Expanded(child: play),
-        Container(width: 1, height: 26, color: Colors.black12),
-        InkWell(
-          onTap: () => _openProvider(provider),
-          borderRadius:
-              const BorderRadius.horizontal(right: Radius.circular(30)),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(10, 0, 14, 0),
-            child: _ProviderLogo(provider: provider, size: 28),
+    if (provider == null) return _PillInk(child: play);
+    return _PillInk(
+      child: Row(
+        children: [
+          Expanded(child: play),
+          Container(width: 1, height: 26, color: Colors.black12),
+          InkWell(
+            onTap: () => _openProvider(provider),
+            borderRadius:
+                const BorderRadius.horizontal(right: Radius.circular(30)),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 0, 14, 0),
+              child: _ProviderLogo(provider: provider, size: 28),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -262,7 +295,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
     if (provider != null &&
         loaded.wikidataId != null &&
         StreamingLinkService().supports(provider.id)) {
-      StreamingLinkService().prefetch(loaded.wikidataId!);
+      StreamingLinkService().prefetch(
+        wikidataId: loaded.wikidataId!,
+        providerId: provider.id,
+        isTv: loaded.type == 'tv',
+      );
     }
 
     // Still behind the skeleton (_loading stays true): store the details
@@ -814,14 +851,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                     // Genres as quiet metadata under the
                                     // year/rating/runtime line, the way
                                     // streaming apps show them, instead of
-                                    // chips competing with the buttons.
+                                    // chips competing with the buttons. A
+                                    // list too long for one line scrolls.
                                     if (m.genres != null &&
                                         m.genres!.isNotEmpty) ...[
                                       const SizedBox(height: 6),
-                                      Text(
+                                      MarqueeText(
                                         m.genres!.join('  ·  '),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
+                                        separator: '  ·  ',
                                         style: TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w500,
@@ -2427,32 +2464,57 @@ class _WatchOnProviderButton extends StatelessWidget {
           ),
         ],
       ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(30),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _ProviderLogo(provider: provider, size: 26),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  'Watch on ${provider.name}',
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
-                  style: const TextStyle(
-                    color: Colors.black,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
+      child: _PillInk(
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(30),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _ProviderLogo(provider: provider, size: 26),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    'Watch on ${provider.name}',
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    style: const TextStyle(
+                      color: Colors.black,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Lets InkWell ripples show on an opaque pill (the white Play / Watch on
+/// buttons). An InkWell paints on the nearest Material, which sat below
+/// the pill's Container colour — so the solid white hid the ripple, while
+/// the translucent Like / Trailer buttons let it show through. This puts
+/// a transparent Material above the colour, with a dark ripple, since the
+/// dark theme's light grey one doesn't show on white.
+class _PillInk extends StatelessWidget {
+  final Widget child;
+
+  const _PillInk({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Theme(
+      data: Theme.of(context).copyWith(
+        splashColor: Colors.black12,
+        highlightColor: Colors.black12,
+      ),
+      child: Material(type: MaterialType.transparency, child: child),
     );
   }
 }

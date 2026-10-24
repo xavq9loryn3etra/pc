@@ -8,6 +8,7 @@ import '../models/movie.dart';
 import '../widgets/movie_poster.dart';
 import '../widgets/desktop_details_panel.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
+import '../widgets/image_precache.dart';
 import '../services/movie_tab_service.dart';
 
 class DesktopHomeScreen extends StatefulWidget {
@@ -32,6 +33,33 @@ class DesktopHomeScreen extends StatefulWidget {
     required this.onMovieTap,
     this.onRemoveHistory,
   });
+
+  // The hero's images and decode sizes, shared by the state's build and
+  // precacheHero() so the preload warms exactly what the hero requests.
+  static String? _heroBackdropUrlFor(Movie m) =>
+      m.backdropHighRes ?? m.backdrop ?? m.posterUrl;
+  static String? _heroLogoUrlFor(Movie m) =>
+      m.logoUrl == null ? null : (m.logoHighRes ?? m.logoUrl!);
+  static const double _heroLogoHeight = 150;
+  // Cap the backdrop's decode to the screen width — it fills the whole
+  // background, so it'd otherwise decode at the source's native resolution
+  // regardless of how big the window actually is.
+  static int _heroBackdropCacheWidth(BuildContext context) =>
+      (MediaQuery.of(context).size.width *
+              MediaQuery.of(context).devicePixelRatio)
+          .toInt();
+
+  /// Downloads and decodes [movie]'s hero backdrop and logo as the hero
+  /// will request them, so they paint on its first frame.
+  static Future<void> precacheHero(BuildContext context, Movie movie) {
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    return Future.wait([
+      precacheNetworkImage(context, _heroBackdropUrlFor(movie),
+          cacheWidth: _heroBackdropCacheWidth(context)),
+      precacheNetworkImage(context, _heroLogoUrlFor(movie),
+          cacheHeight: (_heroLogoHeight * dpr).toInt()),
+    ]);
+  }
 
   @override
   State<DesktopHomeScreen> createState() => _DesktopHomeScreenState();
@@ -226,20 +254,14 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     // The desktop hero can render wider than TMDB's w1280 backdrop tier on
     // any 1080p+ display, so this one uses the full-resolution `original`
     // source instead of the standard `backdrop` field everything else uses.
-    final image = widget.featuredMovie.backdropHighRes ??
-        widget.featuredMovie.backdrop ??
-        widget.featuredMovie.posterUrl;
+    final image =
+        DesktopHomeScreen._heroBackdropUrlFor(widget.featuredMovie);
     if (image == null) return const SizedBox.shrink();
 
     return CachedNetworkImage(
       imageUrl: image,
       fit: BoxFit.cover,
-      // Cap decode to the actual screen width — this fills the whole
-      // background so without this it decodes at the source image's
-      // native resolution regardless of how big the window actually is.
-      memCacheWidth: (MediaQuery.of(context).size.width *
-              MediaQuery.of(context).devicePixelRatio)
-          .toInt(),
+      memCacheWidth: DesktopHomeScreen._heroBackdropCacheWidth(context),
       placeholder: (context, url) => Container(color: Colors.black),
       errorWidget: (context, url, error) => Container(color: Colors.black),
     ).animate().fadeIn(duration: 800.ms);
@@ -388,17 +410,17 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
   }
 
   Widget _buildLogo(BuildContext context) {
-    final url =
-        widget.featuredMovie.logoHighRes ?? widget.featuredMovie.logoUrl!;
+    final url = DesktopHomeScreen._heroLogoUrlFor(widget.featuredMovie)!;
+    const height = DesktopHomeScreen._heroLogoHeight;
 
     return CachedNetworkImage(
       imageUrl: url,
-      height: 150,
+      height: height,
       memCacheHeight:
-          (150 * MediaQuery.of(context).devicePixelRatio).toInt(),
+          (height * MediaQuery.of(context).devicePixelRatio).toInt(),
       fit: BoxFit.contain,
       alignment: Alignment.centerLeft,
-      placeholder: (context, url) => const SizedBox(height: 150),
+      placeholder: (context, url) => const SizedBox(height: height),
       errorWidget: (context, url, err) => _buildHeroTitle(),
     );
   }

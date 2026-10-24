@@ -41,6 +41,14 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
   Movie? _featuredMovie;
 
   bool _loading = true;
+  // Skeleton reveal stages after _loading turns false: fading out, then
+  // removed (see _revealOverSkeleton).
+  bool _skeletonFading = false;
+  bool _skeletonDone = false;
+
+  // Longest the skeleton waits on the hero's images before showing the
+  // page anyway; anything slower finishes loading in place.
+  static const _maxPreloadWait = Duration(seconds: 4);
 
   @override
   void dispose() {
@@ -56,6 +64,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
       _topRatedMovies = _cachedTopRated!;
       _featuredMovie = _cachedFeatured;
       _loading = false;
+      _skeletonDone = true;
     } else {
       _loadData();
     }
@@ -87,54 +96,104 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
       _cachedTopRated = topRated;
       _cachedFeatured = resolvedFeatured;
 
-      if (mounted) {
-        setState(() {
-          _trendingMovies = trending;
-          _topRatedMovies = topRated;
-          if (resolvedFeatured != null) {
-            _featuredMovie = resolvedFeatured;
-          }
-          _loading = false;
-        });
+      if (!mounted) return;
+      // Still behind the skeleton (_loading stays true).
+      setState(() {
+        _trendingMovies = trending;
+        _topRatedMovies = topRated;
+        if (resolvedFeatured != null) {
+          _featuredMovie = resolvedFeatured;
+        }
+      });
+
+      // Keep the skeleton up until the hero's backdrop and logo are
+      // decoded, so the page doesn't appear with an empty black hero that
+      // its artwork then pops into.
+      if (resolvedFeatured != null) {
+        try {
+          await _precacheHero(resolvedFeatured).timeout(_maxPreloadWait);
+        } catch (_) {
+          // Timed out: show the page regardless.
+        }
       }
     } catch (e) {
       print('Error loading home data: $e');
-      if (mounted) setState(() => _loading = false);
     }
+    await _reveal();
+  }
+
+  Future<void> _precacheHero(Movie movie) {
+    // Same breakpoint as build(): the desktop hero requests its images at
+    // different sizes.
+    return MediaQuery.sizeOf(context).width > 800
+        ? DesktopHomeScreen.precacheHero(context, movie)
+        : MovieHeroBanner.precache(context, movie);
+  }
+
+  /// Builds the page under the still-opaque skeleton, gives it a few
+  /// frames to settle, then fades the skeleton off it (see
+  /// _revealOverSkeleton).
+  Future<void> _reveal() async {
+    if (!mounted) return;
+    setState(() => _loading = false);
+    await Future.delayed(const Duration(milliseconds: 120));
+    if (mounted) setState(() => _skeletonFading = true);
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          if (constraints.maxWidth > 800) {
-            return const Scaffold(body: DesktopSkeletonHome());
-          }
-          // FloatingBottomNavBar is deliberately absent here (unlike the
-          // loaded Stack below) — it plays a staggered pop-in entrance the
-          // first time it's actually built, so it should only get built
-          // once the shimmer is done, not sit there statically the whole
-          // time it's loading.
-          return const Scaffold(body: SkeletonHome());
-        },
-      );
-    }
-
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Scoped to SavedMoviesService so Continue Watching (and the
-        // desktop panel's historyMovies prop) only refresh when history
-        // actually changes, instead of after every single navigation
-        // return regardless of whether anything changed.
-        return ListenableBuilder(
-          listenable: Listenable.merge([
-            SavedMoviesService(),
-            FeatureFlagsService().hidePlayback,
-          ]),
-          builder: (context, _) => _buildContent(context, constraints),
+        final wide = constraints.maxWidth > 800;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            if (!_loading)
+              // Scoped to SavedMoviesService so Continue Watching (and the
+              // desktop panel's historyMovies prop) only refresh when
+              // history actually changes, instead of after every single
+              // navigation return regardless of whether anything changed.
+              ListenableBuilder(
+                listenable: Listenable.merge([
+                  SavedMoviesService(),
+                  FeatureFlagsService().hidePlayback,
+                ]),
+                builder: (context, _) => _buildContent(context, constraints),
+              ),
+            if (!_skeletonDone) _revealOverSkeleton(wide: wide),
+            // Above the skeleton, and only built once loaded: it plays a
+            // staggered pop-in entrance the first time it's built, which
+            // should show as the skeleton fades rather than happen out of
+            // sight or sit there statically while loading. The desktop
+            // layout has no bottom nav.
+            if (!_loading && !(wide && _featuredMovie != null))
+              const FloatingBottomNavBar(activeTab: BottomNavTab.home),
+          ],
         );
       },
+    );
+  }
+
+  /// Skeleton → page reveal, as on DetailsScreen: once loaded, the page is
+  /// built *underneath* the still-opaque skeleton (so its expensive first
+  /// frames — layout, uploading the hero images — happen out of sight),
+  /// then the skeleton fades off it instead of hard-cutting in one frame.
+  Widget _revealOverSkeleton({required bool wide}) {
+    return IgnorePointer(
+      ignoring: !_loading,
+      child: AnimatedOpacity(
+        opacity: _skeletonFading ? 0 : 1,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOut,
+        onEnd: () {
+          if (_skeletonFading && mounted) {
+            setState(() => _skeletonDone = true);
+          }
+        },
+        child: Scaffold(
+          body: wide ? const DesktopSkeletonHome() : const SkeletonHome(),
+        ),
+      ),
     );
   }
 
@@ -226,12 +285,8 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
       )),
     );
 
-    return Stack(
-      children: [
-        scaffold,
-        const FloatingBottomNavBar(activeTab: BottomNavTab.home),
-      ],
-    );
+    // FloatingBottomNavBar is added over this (and the skeleton) in build.
+    return scaffold;
   }
 
   /// Top-edge fade over the scrolling content — the floating nav bar's

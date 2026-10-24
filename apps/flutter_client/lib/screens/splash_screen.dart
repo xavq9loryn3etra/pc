@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/iridescent.dart';
+
 /// Startup intro shown while main.dart's config/first-launch checks run,
 /// straight out of the (plain black) native launch screen: the popcorn icon
 /// fades in while easing up from slightly smaller than full size.
@@ -94,10 +96,14 @@ class _SplashScreenState extends State<SplashScreen>
         opacity: _reveal,
         child: ScaleTransition(
           scale: Tween(begin: 0.92, end: 1.0).animate(_reveal),
-          child: Image.asset(
-            'assets/icon-transparent.png',
-            width: _iconSize,
-            height: _iconSize,
+          // The app's iridescent finish over the (cream) icon artwork —
+          // only its shape is used.
+          child: Iridescent(
+            child: Image.asset(
+              'assets/icon-transparent.png',
+              width: _iconSize,
+              height: _iconSize,
+            ),
           ),
         ),
       ),

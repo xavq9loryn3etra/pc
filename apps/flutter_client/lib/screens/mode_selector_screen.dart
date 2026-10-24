@@ -8,6 +8,7 @@ import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import '../services/trending_service.dart';
 import '../theme/app_theme.dart';
+import '../theme/iridescent.dart';
 import '../widgets/mode_switch_row.dart';
 import 'main_screen.dart';
 
@@ -397,12 +398,14 @@ class _DomeClipper extends CustomClipper<Path> {
 class _DomeEdgePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
+    // The glass edge catches the app's iridescent light (see
+    // AppIridescence) rather than a flat faint white.
     canvas.drawPath(
       _domeEdge(size),
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1
-        ..color = Colors.white.withValues(alpha: 0.14),
+        ..shader = AppIridescence.sweep(Offset.zero & size, opacity: 0.45),
     );
   }
 

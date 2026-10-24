@@ -4,6 +4,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../models/movie.dart';
+import 'image_precache.dart';
 
 class MovieHeroBanner extends StatelessWidget {
   final Movie movie;
@@ -19,6 +20,27 @@ class MovieHeroBanner extends StatelessWidget {
     this.onTrailer,
     this.scrollController,
   });
+
+  // The banner's images and decode heights, shared by build() and
+  // precache() so the preload warms exactly what the banner requests.
+  static String _backdropUrlFor(Movie m) =>
+      m.backdropHighRes ?? m.backdrop ?? m.posterUrl ?? '';
+  static String? _logoUrlFor(Movie m) =>
+      m.logoUrl == null ? null : (m.logoHighRes ?? m.logoUrl!);
+  static const double _backdropCacheHeight = 600; // slightly higher for hero
+  static const double _logoHeight = 100;
+
+  /// Downloads and decodes [movie]'s backdrop and logo as the banner will
+  /// request them, so they paint on its first frame.
+  static Future<void> precache(BuildContext context, Movie movie) {
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    return Future.wait([
+      precacheNetworkImage(context, _backdropUrlFor(movie),
+          cacheHeight: (_backdropCacheHeight * dpr).toInt()),
+      precacheNetworkImage(context, _logoUrlFor(movie),
+          cacheHeight: (_logoHeight * dpr).toInt()),
+    ]);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -216,21 +238,22 @@ class MovieHeroBanner extends StatelessWidget {
   }
 
   Widget _buildLogo(BuildContext context) {
-    final url = movie.logoHighRes ?? movie.logoUrl!;
+    final url = _logoUrlFor(movie)!;
     if (url.toLowerCase().endsWith('.svg')) {
       return SvgPicture.network(
         url,
-        height: 100,
+        height: _logoHeight,
         fit: BoxFit.contain,
-        placeholderBuilder: (context) => const SizedBox(height: 100),
+        placeholderBuilder: (context) => const SizedBox(height: _logoHeight),
       );
     }
     return CachedNetworkImage(
       imageUrl: url,
-      height: 100,
-      memCacheHeight: (100 * MediaQuery.of(context).devicePixelRatio).toInt(),
+      height: _logoHeight,
+      memCacheHeight:
+          (_logoHeight * MediaQuery.of(context).devicePixelRatio).toInt(),
       fit: BoxFit.contain,
-      placeholder: (context, url) => const SizedBox(height: 100),
+      placeholder: (context, url) => const SizedBox(height: _logoHeight),
       // Wait 1 second before showing text if image fails/is missing
       errorWidget: (context, url, error) => Text(
         movie.title,
@@ -252,8 +275,7 @@ class MovieHeroBanner extends StatelessWidget {
   }
 
   Widget _buildBackgroundImage(BuildContext context) {
-    final imageUrl =
-        movie.backdropHighRes ?? movie.backdrop ?? movie.posterUrl ?? '';
+    final imageUrl = _backdropUrlFor(movie);
     return imageUrl.toLowerCase().endsWith(
           '.svg',
         )
@@ -266,8 +288,9 @@ class MovieHeroBanner extends StatelessWidget {
             imageUrl: imageUrl,
             fit: BoxFit.cover,
             alignment: Alignment.topCenter,
-            memCacheHeight: (600 * MediaQuery.of(context).devicePixelRatio)
-                .toInt(), // slightly higher for hero
+            memCacheHeight:
+                (_backdropCacheHeight * MediaQuery.of(context).devicePixelRatio)
+                    .toInt(),
           );
   }
 }

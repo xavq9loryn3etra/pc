@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 
-import '../theme/app_theme.dart';
+import '../theme/iridescent.dart';
 import '../services/feature_flags_service.dart';
 import '../widgets/poster_wall.dart';
+import '../widgets/status_screen.dart';
 
 class WelcomeScreen extends StatefulWidget {
   final VoidCallback onGetStarted;
@@ -83,12 +83,14 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    SvgPicture.asset(
-                      'assets/logo.svg',
-                      width: 80,
-                      colorFilter: const ColorFilter.mode(
-                        AppTheme.primaryColor,
-                        BlendMode.srcIn,
+                    // The app's own mark (as on the app icon and splash), not
+                    // Popcorn mode's logo: this screen introduces all three
+                    // modes.
+                    Iridescent(
+                      child: Image.asset(
+                        'assets/icon-transparent.png',
+                        width: 72,
+                        height: 72,
                       ),
                     ),
                     const SizedBox(height: 24),
@@ -101,16 +103,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         letterSpacing: -0.5,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'All in One Place.',
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w800,
-                        color: AppTheme.primaryColor,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
+                    // Same script headline line as the status screens.
+                    const IridescentScriptText('All in One Place.'),
                     const SizedBox(height: 16),
                     Text(
                       FeatureFlagsService().hidePlayback.value
@@ -124,27 +118,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                       ),
                     ),
                     const SizedBox(height: 32),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: ElevatedButton(
-                        onPressed: widget.onGetStarted,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppTheme.primaryColor,
-                          foregroundColor: Colors.black,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          elevation: 0,
-                        ),
-                        child: const Text(
-                          'Get Started',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
+                    // Same white primary button as the status screens — not
+                    // Popcorn mode's cream.
+                    StatusPrimaryButton(
+                      label: 'Get Started',
+                      onPressed: widget.onGetStarted,
                     ),
                     const SizedBox(height: 16),
                   ],

@@ -2,13 +2,14 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
-import '../enums/app_mode.dart';
+import '../theme/iridescent.dart';
 import 'poster_wall.dart';
 
 /// Full-screen, app-wide status page (update required, maintenance,
 /// offline). Deliberately not tied to any one mode: it sits on the welcome
-/// screen's poster wall and blends all three mode accents in its headline,
-/// so it fits whichever mode it appears over.
+/// screen's poster wall and uses the app's iridescent finish (which blends
+/// all three mode accents) in its headline, so it fits whichever mode it
+/// appears over.
 class StatusScreen extends StatefulWidget {
   /// Bundled (see pubspec `fonts:`), not fetched via google_fonts — the
   /// offline screen has to render it without a connection.
@@ -17,7 +18,7 @@ class StatusScreen extends StatefulWidget {
   /// First headline line, in white.
   final String title;
 
-  /// Second headline line, in script and the blended mode-accent gradient.
+  /// Second headline line, in script and the app's iridescent finish.
   final String highlight;
 
   final String message;
@@ -99,7 +100,7 @@ class _StatusScreenState extends State<StatusScreen>
                         letterSpacing: -0.5,
                       ),
                     ),
-                    _AccentGradientText(widget.highlight),
+                    IridescentScriptText(widget.highlight),
                     const SizedBox(height: 16),
                     Text(
                       widget.message,
@@ -126,23 +127,17 @@ class _StatusScreenState extends State<StatusScreen>
   }
 }
 
-/// Script headline filled with a blend of all three mode accents.
-class _AccentGradientText extends StatelessWidget {
+/// Script headline in the app's iridescent finish (which already holds all
+/// three mode accents — see AppIridescence). The second headline line on
+/// the app-wide screens: these status pages and the welcome screen.
+class IridescentScriptText extends StatelessWidget {
   final String text;
 
-  const _AccentGradientText(this.text);
+  const IridescentScriptText(this.text, {super.key});
 
   @override
   Widget build(BuildContext context) {
-    return ShaderMask(
-      blendMode: BlendMode.srcIn,
-      shaderCallback: (bounds) => LinearGradient(
-        colors: [
-          AppMode.movies.accentColor,
-          AppMode.music.accentColor,
-          AppMode.books.accentColor,
-        ],
-      ).createShader(bounds),
+    return Iridescent(
       // Script glyphs' swashes overhang their text box; the padding keeps
       // them inside the mask so no tips render un-tinted.
       child: Padding(
@@ -162,8 +157,9 @@ class _AccentGradientText extends StatelessWidget {
   }
 }
 
-/// Full-width primary action, styled like the welcome screen's
-/// "Get Started" button.
+/// Full-width primary action on the app-wide screens (these status pages
+/// and the welcome screen's "Get Started"): plain white, since those
+/// screens aren't tied to any one mode's accent.
 class StatusPrimaryButton extends StatelessWidget {
   final String label;
   final VoidCallback onPressed;

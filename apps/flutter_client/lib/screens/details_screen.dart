@@ -1536,12 +1536,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                       // regardless of scroll position. Matters a lot for shows
                       // with long seasons (100+ episodes).
                       if (isTv)
-                        if (_loadingEpisodes)
-                          const SliverPadding(
-                            padding: EdgeInsets.fromLTRB(24, 0, 24, 24),
-                            sliver: SliverToBoxAdapter(child: ShimmerList()),
-                          )
-                        else if (_episodes.isEmpty)
+                        if (!_loadingEpisodes && _episodes.isEmpty)
                           const SliverPadding(
                             padding: EdgeInsets.fromLTRB(24, 0, 24, 24),
                             sliver: SliverToBoxAdapter(
@@ -1572,8 +1567,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                       MediaQuery.textScalerOf(context),
                                     ),
                                   ),
-                                  itemCount: _episodes.length,
+                                  // Skeleton cards while the season loads.
+                                  itemCount: _loadingEpisodes
+                                      ? 6
+                                      : _episodes.length,
                                   itemBuilder: (context, index) {
+                                    if (_loadingEpisodes) {
+                                      return const EpisodeCardSkeleton();
+                                    }
                                     final ep = _episodes[index];
                                     final currentProgress = hidePlayback
                                         ? null

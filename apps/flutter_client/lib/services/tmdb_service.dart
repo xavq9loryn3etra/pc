@@ -180,6 +180,8 @@ class TMDBService {
     if (_cache.containsKey(key) && _cache[key]!.isValid(30)) {
       return _cache[key]!.data as Movie;
     }
+    // Resolved alongside the details request (cached after the first).
+    final watchCountry = _watchCountry();
 
     // 1. Try Movie (unless explicitly TV)
     if (type != 'tv') {
@@ -195,7 +197,8 @@ class TMDBService {
           cancelToken: cancelToken,
         );
         await _addOriginalLanguageLogos(response.data, 'movie', id, cancelToken);
-        final movie = _formatMovieDetails(response.data, isTv: false);
+        final movie = _formatMovieDetails(response.data,
+            isTv: false, watchCountry: await watchCountry);
         _cache[key] = _CacheEntry(movie);
         return movie;
       } catch (e) {
@@ -217,7 +220,8 @@ class TMDBService {
         cancelToken: cancelToken,
       );
       await _addOriginalLanguageLogos(response.data, 'tv', id, cancelToken);
-      final movie = _formatMovieDetails(response.data, isTv: true);
+      final movie = _formatMovieDetails(response.data,
+          isTv: true, watchCountry: await watchCountry);
       _cache[key] = _CacheEntry(movie);
       return movie;
     } catch (e) {
@@ -270,7 +274,8 @@ class TMDBService {
     );
   }
 
-  Movie _formatMovieDetails(Map<String, dynamic> m, {required bool isTv}) {
+  Movie _formatMovieDetails(Map<String, dynamic> m,
+      {required bool isTv, required String watchCountry}) {
     // Basic formatting
     final base = _formatMovie(m);
     if (base == null) throw Exception('Failed to format base movie');
@@ -471,7 +476,7 @@ class TMDBService {
       imdbId: imdbId,
       wikidataId: wikidataId,
       streamingProvider:
-          _pickStreamingProvider(m['watch/providers']),
+          _pickStreamingProvider(m['watch/providers'], watchCountry),
     );
   }
 
@@ -481,17 +486,17 @@ class TMDBService {
   // TMDB's own watch page for the title.
   static const _netflixIds = {8, 1796}; // Netflix, Netflix Standard with Ads
 
-  /// The subscription ("flatrate") service streaming a title in the
-  /// device's country — Netflix when it's one of several, otherwise TMDB's
-  /// top-ranked one. Only services StreamingLinkService can open directly
-  /// in their app are considered: the button never falls back to TMDB, a
-  /// search page or any other website. Null when there's none.
-  StreamingProvider? _pickStreamingProvider(dynamic watchProviders) {
-    final country = _deviceCountry();
-    if (country == null || watchProviders is! Map) return null;
+  /// The subscription ("flatrate") service streaming a title in [country]
+  /// (see _watchCountry) — Netflix when it's one of several, otherwise
+  /// TMDB's top-ranked one. Only services StreamingLinkService can open
+  /// directly in their app are considered: the button never falls back to
+  /// TMDB, a search page or any other website. Null when there's none.
+  StreamingProvider? _pickStreamingProvider(
+      dynamic watchProviders, String country) {
+    if (watchProviders is! Map) return null;
     final results = watchProviders['results'];
     if (results is! Map) return null;
-    final regional = results[country.toUpperCase()];
+    final regional = results[country];
     if (regional is! Map) return null;
     final flatrate = regional['flatrate'];
     if (flatrate is! List || flatrate.isEmpty) return null;
@@ -521,31 +526,75 @@ class TMDBService {
     );
   }
 
-  /// The device's Region setting — the country whose streaming catalogue
-  /// applies.
+  // Countries TMDB has watch-provider data for (JustWatch's coverage),
+  // fetched once per session.
+  Future<Set<String>?>? _watchRegions;
+
+  Future<Set<String>?> _loadWatchRegions() async {
+    try {
+      final response = await _dio.get(
+        '$_baseUrl/watch/providers/regions',
+        queryParameters: {'api_key': _apiKey},
+      );
+      final results = response.data is Map ? response.data['results'] : null;
+      if (results is! List) return null;
+      return {
+        for (final r in results.whereType<Map>())
+          if (r['iso_3166_1'] is String) r['iso_3166_1'] as String,
+      };
+    } catch (e) {
+      print('TMDB Watch Regions Error: $e');
+      return null;
+    }
+  }
+
+  /// The country whose streaming catalogue the provider button uses: the
+  /// device's Region setting when TMDB covers it, otherwise the first
+  /// covered country of the language preferences, else US.
+  ///
+  /// TMDB has no data at all for some countries (e.g. Sri Lanka), so iOS —
+  /// which reports the real Region setting — found no provider for any
+  /// title there, while Android, whose region follows the language
+  /// ("English (US)" → US), did.
+  Future<String> _watchCountry() async {
+    final candidates = _countryCandidates();
+    final regions = await (_watchRegions ??= _loadWatchRegions());
+    if (regions == null) {
+      _watchRegions = null; // retry on the next details fetch
+      return candidates.first;
+    }
+    return candidates.firstWhere(regions.contains,
+        orElse: () => candidates.first);
+  }
+
+  /// The device's countries, most specific first: the Region setting, then
+  /// the language preferences' countries, then US.
   ///
   /// PlatformDispatcher's locales are the *language* preferences: on iOS
   /// their region follows the language variant ("English (US)" → US) or is
   /// missing, not where the user is. Platform.localeName is the current
   /// locale (NSLocale.current on iOS), which carries the Region setting —
   /// e.g. "en_LK", or "en_US@rg=lkzzzz" when language and region differ.
-  static String? _deviceCountry() {
+  static List<String> _countryCandidates() {
+    final candidates = <String>{};
     final name = Platform.localeName;
     final rg = RegExp(r'rg=([a-zA-Z]{2})').firstMatch(name);
-    if (rg != null) return rg.group(1)!.toUpperCase();
+    if (rg != null) candidates.add(rg.group(1)!.toUpperCase());
     // "en_LK", "zh_Hans_CN", "en_US.UTF-8": the 2-letter subtag after the
     // language.
     final subtags = name.split('@').first.split(RegExp(r'[-_.]'));
     for (final subtag in subtags.skip(1)) {
       if (RegExp(r'^[a-zA-Z]{2}$').hasMatch(subtag)) {
-        return subtag.toUpperCase();
+        candidates.add(subtag.toUpperCase());
+        break;
       }
     }
     for (final locale in PlatformDispatcher.instance.locales) {
       final code = locale.countryCode;
-      if (code != null && code.isNotEmpty) return code.toUpperCase();
+      if (code != null && code.isNotEmpty) candidates.add(code.toUpperCase());
     }
-    return null;
+    candidates.add('US');
+    return candidates.toList();
   }
 
   Future<List<Episode>> getSeasonDetails(String tvId, int seasonNumber) async {

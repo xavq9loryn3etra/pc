@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:shimmer/shimmer.dart';
 
 import '../models/movie.dart';
 import '../theme/app_theme.dart';
@@ -247,6 +248,91 @@ class EpisodeCard extends StatelessWidget {
               child: InkWell(onTap: onTap),
             ),
           ],
+        ),
+      );
+    });
+  }
+}
+
+/// An [EpisodeCard] while its season loads: the same size and layout, with
+/// shimmering blocks for the still and each line of text.
+class EpisodeCardSkeleton extends StatelessWidget {
+  const EpisodeCardSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final textScaler = MediaQuery.textScalerOf(context);
+
+    // A bar the size of one line of [style]'s text, [widthFactor] of the
+    // card wide.
+    Widget line(TextStyle style, double widthFactor) {
+      final fontSize = textScaler.scale(style.fontSize!);
+      return SizedBox(
+        height: fontSize * style.height!,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: FractionallySizedBox(
+            widthFactor: widthFactor,
+            child: Container(
+              height: fontSize * 0.75,
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final imageHeight = EpisodeCard._imageHeight(constraints.maxWidth);
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(EpisodeCard._radius),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(EpisodeCard._radius),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+          ),
+          child: Shimmer.fromColors(
+            baseColor: Colors.grey[900]!,
+            highlightColor: Colors.grey[800]!,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // The still, ending a little above where the text starts
+                // (the real one fades out under it).
+                Container(
+                  height: imageHeight - EpisodeCard._overlap - 6,
+                  color: Colors.black,
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      EpisodeCard._padding,
+                      6,
+                      EpisodeCard._padding,
+                      EpisodeCard._padding,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        line(EpisodeCard._labelStyle, 0.4),
+                        const SizedBox(height: 2),
+                        line(EpisodeCard._titleStyle, 0.85),
+                        const SizedBox(height: 4),
+                        line(EpisodeCard._descriptionStyle, 1),
+                        line(EpisodeCard._descriptionStyle, 0.6),
+                        const Spacer(),
+                        line(EpisodeCard._metaStyle, 0.25),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       );
     });
@@ -521,6 +607,7 @@ class EpisodeSheetFrame extends StatelessWidget {
   });
 
   static const _radius = BorderRadius.vertical(top: Radius.circular(24));
+  static final _edge = BorderSide(color: Colors.white.withValues(alpha: 0.12));
 
   @override
   Widget build(BuildContext context) {
@@ -548,11 +635,11 @@ class EpisodeSheetFrame extends StatelessWidget {
           Positioned.fill(
             child: IgnorePointer(
               child: DecoratedBox(
+                // No bottom edge: the sheet runs off the bottom of the
+                // screen.
                 decoration: BoxDecoration(
                   borderRadius: _radius,
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.12),
-                  ),
+                  border: Border(top: _edge, left: _edge, right: _edge),
                 ),
               ),
             ),

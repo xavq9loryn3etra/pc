@@ -19,6 +19,7 @@ jobs:
   android:
     name: Android (${{ matrix.abi }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -38,12 +39,23 @@ jobs:
   ios:
     name: iOS
     runs-on: macos-15
+    # A first run hung for GitHub's whole 6-hour limit and its log was lost;
+    # give up well before that instead, and keep the build log either way.
+    timeout-minutes: 90
     env:
       WORK_DIR: ${{ github.workspace }}/_native
     steps:
       - uses: actions/checkout@v4
       - run: bash "$NATIVE_DIR/fetch_sources.sh"
-      - run: bash "$NATIVE_DIR/build_ios.sh" dist
+      - name: Build
+        timeout-minutes: 75
+        run: bash "$NATIVE_DIR/build_ios.sh" dist 2>&1 | tee build-ios.log
+      - name: Keep the build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log
+          path: build-ios.log
       - uses: actions/upload-artifact@v4
         with:
           name: ios

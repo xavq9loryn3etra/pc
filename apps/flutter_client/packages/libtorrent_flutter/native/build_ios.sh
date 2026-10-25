@@ -33,7 +33,10 @@ build_slice() {
     -DBoost_NO_SYSTEM_PATHS=ON \
     -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON
-  cmake --build "$build" --target libtorrent_flutter --parallel
+  # One compile per core: an unbounded --parallel launched hundreds of
+  # Boost-heavy compiles at once and ran the runner out of memory.
+  cmake --build "$build" --target libtorrent_flutter \
+    --parallel "$(sysctl -n hw.ncpu)"
 
   local rasterbar
   rasterbar="$(find "$build/libtorrent" -name 'libtorrent-rasterbar.a' | head -n 1)"

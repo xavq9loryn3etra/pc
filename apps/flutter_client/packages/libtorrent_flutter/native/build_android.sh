@@ -26,7 +26,7 @@ cmake -S "$here" -B "$build" \
   -DBoost_NO_SYSTEM_PATHS=ON \
   -DBUILD_SHARED_LIBS=OFF \
   -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON
-cmake --build "$build" --target libtorrent_flutter --parallel
+cmake --build "$build" --target libtorrent_flutter --parallel "$(nproc)"
 
 so="$build/liblibtorrent_flutter.so"
 "$llvm_bin/llvm-strip" --strip-unneeded "$so"

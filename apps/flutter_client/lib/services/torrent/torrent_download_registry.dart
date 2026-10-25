@@ -101,7 +101,10 @@ class TorrentDownloadRegistry {
     if (existingJson == null) return;
     final existing =
         TorrentDownloadInfo.fromJson(existingJson as Map<String, dynamic>);
-    var resolvedTotal = totalBytes ?? existing.totalBytes;
+    // The size saved with the entry (the video file's, from Torrentio)
+    // wins: libtorrent's "wanted" total while streaming covers only the
+    // pieces currently prioritized, not the whole file.
+    var resolvedTotal = existing.totalBytes ?? totalBytes;
     // Guard against a stale/wrong total (e.g. mis-parsed from Torrentio's
     // size string) that's smaller than what's actually been downloaded —
     // that combination is impossible for a real torrent, so bump it up

@@ -212,6 +212,17 @@ typedef LtSetDownloadLimit = void Function(Pointer<LtSessionOpaque>, int);
 typedef _SetUploadLimitN = Void Function(Pointer<LtSessionOpaque>, Int32);
 typedef LtSetUploadLimit = void Function(Pointer<LtSessionOpaque>, int);
 
+// ─── Session state (DHT routing table) ───────────────────────────────────────
+typedef _CreateSessionWithStateN = Pointer<LtSessionOpaque> Function(
+    Pointer<Utf8>, Int32, Int32, Pointer<Utf8>);
+typedef LtCreateSessionWithState = Pointer<LtSessionOpaque> Function(
+    Pointer<Utf8>, int, int, Pointer<Utf8>);
+
+typedef _SaveSessionStateN = Int32 Function(
+    Pointer<LtSessionOpaque>, Pointer<Utf8>);
+typedef LtSaveSessionState = int Function(
+    Pointer<LtSessionOpaque>, Pointer<Utf8>);
+
 // ─── Utility ─────────────────────────────────────────────────────────────────
 typedef _LastErrorN = Pointer<Utf8> Function();
 typedef LtLastError = Pointer<Utf8> Function();
@@ -283,7 +294,18 @@ class TorrentBridgeBindings {
   late final LtLastError          lastError;
   late final LtVersion            version;
 
+  // Null with a native library built before they existed (the prebuilt
+  // Windows/macOS ones): sessions then just start cold.
+  late final LtCreateSessionWithState? createSessionWithState;
+  late final LtSaveSessionState?       saveSessionState;
+
   TorrentBridgeBindings(this._lib) {
+    createSessionWithState = _lib.providesSymbol('lt_create_session_with_state')
+        ? _lib.lookup<NativeFunction<_CreateSessionWithStateN>>('lt_create_session_with_state').asFunction<LtCreateSessionWithState>()
+        : null;
+    saveSessionState = _lib.providesSymbol('lt_save_session_state')
+        ? _lib.lookup<NativeFunction<_SaveSessionStateN>>('lt_save_session_state').asFunction<LtSaveSessionState>()
+        : null;
     createSession       = _lib.lookup<NativeFunction<_CreateSessionN>>('lt_create_session').asFunction<LtCreateSession>();
     destroySession      = _lib.lookup<NativeFunction<_DestroySessionN>>('lt_destroy_session').asFunction<LtDestroySession>();
     pollAlerts          = _lib.lookup<NativeFunction<_PollAlertsN>>('lt_poll_alerts').asFunction<LtPollAlerts>();

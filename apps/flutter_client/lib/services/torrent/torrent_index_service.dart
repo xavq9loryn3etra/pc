@@ -12,6 +12,9 @@ class TorrentStream {
   // Torrentio's languages line: flags and text like "Multi Audio / 🇫🇷".
   // Empty when unmarked, which usually means English only.
   final String languages;
+  // Part of a season pack (or other multi-file torrent) rather than a
+  // torrent of its own — slower to start: its metadata covers every file.
+  final bool isPack;
 
   TorrentStream({
     required this.infoHash,
@@ -23,6 +26,7 @@ class TorrentStream {
     this.fileIdx,
     this.seeders,
     this.languages = '',
+    this.isPack = false,
   });
 
   factory TorrentStream.fromJson(Map<String, dynamic> json) {
@@ -55,7 +59,9 @@ class TorrentStream {
       quality = '1080p';
     } else if (qualityStr.contains('720')) {
       quality = '720p';
-    } else if (qualityStr.contains('480')) {
+    } else if (qualityStr.contains('480') || qualityStr.contains('dvd')) {
+      // A DVD rip is standard definition (480p/576p) — often all there is
+      // for older shows.
       quality = '480p';
     } else if (qualityStr.contains('cam') || qualityStr.contains('scr')) {
       quality = 'CAM';
@@ -70,7 +76,7 @@ class TorrentStream {
         quality = '1080p';
       } else if (titleLower.contains('720p')) {
         quality = '720p';
-      } else if (titleLower.contains('480p')) {
+      } else if (titleLower.contains('480p') || titleLower.contains('dvdrip')) {
         quality = '480p';
       }
     }
@@ -126,6 +132,9 @@ class TorrentStream {
       fileIdx: fileIdx,
       seeders: seeders,
       languages: languages,
+      // A pack's title has the episode's file name between the release
+      // name and the stats line (see above).
+      isPack: statsIndex > 1,
     );
   }
 }

@@ -46,6 +46,17 @@ android {
     }
 }
 
+// Release builds ship for modern 64-bit ARM phones only. Flutter, mpv and
+// libtorrent each bring libraries for every ABI, which add ~70 MB nobody
+// needs. (ndk.abiFilters doesn't work here: the Flutter plugin resets it.)
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        variant.packaging.jniLibs.excludes.addAll(
+            listOf("lib/armeabi-v7a/**", "lib/x86_64/**", "lib/x86/**")
+        )
+    }
+}
+
 flutter {
     source = "../.."
 }

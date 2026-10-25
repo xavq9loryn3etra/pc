@@ -308,17 +308,24 @@ class _DetailsScreenState extends State<DetailsScreen> {
   Widget _withProviderSegment(StreamingProvider? provider, Widget play) {
     if (provider == null) return _PillInk(child: play);
     return _PillInk(
+      // Stretch so both tap targets fill the pill's full height, not just
+      // the strip their content occupies.
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(child: play),
-          Container(width: 1, height: 26, color: Colors.black12),
+          Center(
+            child: Container(width: 1, height: 26, color: Colors.black12),
+          ),
           InkWell(
             onTap: () => _openProvider(provider),
             borderRadius:
                 const BorderRadius.horizontal(right: Radius.circular(30)),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(10, 0, 14, 0),
-              child: _ProviderLogo(provider: provider, size: 28),
+              child: Center(
+                child: _ProviderLogo(provider: provider, size: 28),
+              ),
             ),
           ),
         ],
@@ -397,6 +404,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
         _movieStreams = StreamResolver().getAvailableStreams(
           imdbId: _details!.imdbId ?? _details!.id,
           type: _details!.type,
+          title: _details,
         );
       }
 
@@ -702,6 +710,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
             s ?? 1,
             ep.episodeNumber,
           );
+          // The played copy's real length, now that it's known (see
+          // TMDBService.getSeasonDetails).
+          final minutes = service.getEpisodeMinutes(
+            widget.movie.id,
+            s ?? 1,
+            ep.episodeNumber,
+          );
+          if (minutes != null) ep = ep.withRuntime(minutes);
 
           if (progress != null) return ep.withProgress(progress);
           return ep;
@@ -1291,7 +1307,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         // on pill keeps room for its label.
                                         if (m.trailerUrl != null &&
                                             provider != null)
-                                          _GlassActionButton(
+                                          GlassActionButton(
                                             width: 50,
                                             onTap: () =>
                                                 _openTrailer(m.trailerUrl!),
@@ -1304,7 +1320,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         else if (m.trailerUrl != null)
                                           Expanded(
                                             flex: 2,
-                                            child: _GlassActionButton(
+                                            child: GlassActionButton(
                                               onTap: () =>
                                                   _openTrailer(m.trailerUrl!),
                                               child: const Row(
@@ -1352,7 +1368,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         //   ),
                                         // ),
                                         // Like Button — moved here from the AppBar.
-                                        _GlassActionButton(
+                                        GlassActionButton(
                                           width: 50,
                                           onTap: _toggleFavorite,
                                           child: Icon(
@@ -1667,6 +1683,7 @@ class _TorrentQualitySelectorSheetState
               type: widget.type,
               season: widget.season,
               episode: widget.episode,
+              title: widget.details,
             );
 
       if (mounted) {
@@ -2284,43 +2301,3 @@ class _PillInk extends StatelessWidget {
   }
 }
 
-/// A 50px-tall frosted-glass pill (round at [width] 50) for the details
-/// screen's secondary actions — Trailer and Like — in the app's glass (see
-/// GlassCircleButton): the backdrop blurred under a dark tint, with a faint
-/// edge.
-class _GlassActionButton extends StatelessWidget {
-  final Widget child;
-  final VoidCallback onTap;
-  final double? width;
-
-  const _GlassActionButton({
-    required this.child,
-    required this.onTap,
-    this.width,
-  });
-
-  static const _shape = StadiumBorder();
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 50,
-      width: width,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(30),
-        child: GlassBlur(
-          reducedTint: Colors.black.withValues(alpha: 0.45),
-          child: Material(
-            color: kGlassTint,
-            shape: _shape.copyWith(side: BorderSide(color: kGlassEdge)),
-            child: InkWell(
-              customBorder: _shape,
-              onTap: onTap,
-              child: Center(child: child),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import '../../models/movie.dart';
 import 'torrent_engine_service.dart';
 import 'torrent_index_service.dart';
 
@@ -62,22 +63,142 @@ class StreamResolver {
   /// choose — comes first. Only SD (480p) and up: cinema recordings and
   /// releases of unknown quality (tier 0, see [tierOf]) are left out
   /// altogether, so nothing — a list, a fallback — ever lands on one.
+  ///
+  /// [title], when given, also drops releases of a different title — see
+  /// [_fitsTitle].
   Future<List<TorrentStream>> getAvailableStreams({
     required String imdbId,
     required String type,
     int? season,
     int? episode,
+    Movie? title,
   }) async {
     final found = type == 'movie'
         ? await _indexService.getMovieStreams(imdbId)
         : await _indexService.getSeriesStreams(
             imdbId, season ?? 1, episode ?? 1);
-    final streams = found.where((s) => tierOf(s) > 0).toList();
+    var streams = found
+        .where((s) =>
+            tierOf(s) > 0 &&
+            !_isExtra(s, title) &&
+            !(type != 'movie' && (season ?? 1) > 0 && _isSpecial(s, title)) &&
+            _fitsTitle(s, title))
+        .toList();
+    // Fan edits only when there's nothing else.
+    final unedited = streams.where((s) => !_isCustomEdit(s, title)).toList();
+    if (unedited.isNotEmpty) streams = unedited;
 
     final recommendedTier = _recommendedTierRank(streams);
     streams.sort((a, b) =>
         _score(b, recommendedTier).compareTo(_score(a, recommendedTier)));
     return streams;
+  }
+
+  // Words that mark a pack's file as a bonus clip rather than the feature.
+  static final _extraPattern = RegExp(
+      r'(?<![A-Za-z])(menu|sample|trailer|NCOP|NCED|creditless)(?![A-Za-z])',
+      caseSensitive: false);
+
+  /// Whether [stream] is a disc menu, sample, trailer or similar extra that
+  /// Torrentio matched to the episode by mistake — e.g. a Blu-ray rip's
+  /// 12 MB "menu/…[S1][D1][01]….mkv" listed as Naruto's episode 1. Judged
+  /// by the file's own name (a pack's second title line; words that are
+  /// part of [title]'s own name, as in "The Menu", don't count) and by
+  /// size: no real episode is under 30 MB.
+  static bool _isExtra(TorrentStream stream, Movie? title) {
+    final lines = stream.title.split('\n');
+    final ownName = title?.title.toLowerCase() ?? '';
+    if (stream.isPack &&
+        lines.length > 1 &&
+        _extraPattern
+            .allMatches(lines[1])
+            .any((m) => !ownName.contains(m[0]!.toLowerCase()))) {
+      return true;
+    }
+    final mb = _sizeInMB(stream.size);
+    return mb != null && mb < 30;
+  }
+
+  static final _specialPattern =
+      RegExp(r'(?<![A-Za-z])(OVAs?|OADs?)(?![A-Za-z])', caseSensitive: false);
+
+  /// Whether [stream] is an OVA/OAD special rather than a regular episode —
+  /// Torrentio matches "[NamikazeSubs] Naruto OVA 01 …" to Naruto's S1E1,
+  /// a different 17-minute story. Either the file's own name (for a pack)
+  /// says so, or the release is OVAs only — one named as a whole series
+  /// that also has its OVAs ("Attack on Titan (S01-S04+OVA+Movies)") still
+  /// holds the episode.
+  static bool _isSpecial(TorrentStream stream, Movie? title) {
+    final ownName = title?.title.toLowerCase() ?? '';
+    bool saysSpecial(String name) => _specialPattern
+        .allMatches(name)
+        .any((m) => !ownName.contains(m[0]!.toLowerCase()));
+    final lines = stream.title.split('\n');
+    if (stream.isPack && lines.length > 1 && saysSpecial(lines[1])) {
+      return true;
+    }
+    return saysSpecial(stream.name) &&
+        !_collectionPattern.hasMatch(stream.name);
+  }
+
+  // A release of a whole series: seasons ("S01-S04"), "complete", or an
+  // episode range ("001-220", "Episodes 001-750") — not a year span.
+  static final _collectionPattern = RegExp(
+      r'(?<![A-Za-z])(S\d{1,2}|seasons?|complete|collection|batch|episodes)(?![A-Za-z])'
+      r'|(?<!\d)\d{1,3}\s*[-~]\s*\d{1,3}(?!\d)',
+      caseSensitive: false);
+
+  static final _customPattern =
+      RegExp(r'(?<![A-Za-z])custom(?![A-Za-z])', caseSensitive: false);
+
+  /// Whether [stream] is a fan edit ("[N-Custom] Naruto …"): these cut the
+  /// opening, ending and recaps, so an episode plays at 17 minutes instead
+  /// of 23 and doesn't match what people expect. Not when "custom" is part
+  /// of [title]'s own name.
+  static bool _isCustomEdit(TorrentStream stream, Movie? title) =>
+      _customPattern.hasMatch(stream.name) &&
+      !(title?.title.toLowerCase().contains('custom') ?? false);
+
+  // A year standing on its own in a release name ("Baki (2018)",
+  // "Show.2019.1080p"), not part of a longer number like "1920x1080".
+  static final _yearPattern =
+      RegExp(r'(?<![A-Za-z0-9])(19\d\d|20\d\d)(?![A-Za-z0-9])');
+  // A span of years, as collections and complete series give them
+  // ("(2000-2023)", "1994 - 2004", "2008 to 2021").
+  static final _yearRangePattern = RegExp(
+      r'(?<![A-Za-z0-9])(19\d\d|20\d\d)\s*(?:[-–]|to)\s*(19\d\d|20\d\d)(?![A-Za-z0-9])',
+      caseSensitive: false);
+
+  /// Whether [stream] could be a release of [title]: not when its name
+  /// gives only years outside the title's own. Torrentio sometimes files a
+  /// remake or namesake under the original — "Baki (Baki the Grappler
+  /// 2018)" under 2001's Baki the Grappler — which would play the wrong
+  /// show. Names without a year are kept, as are numbers that are part of
+  /// the title itself ("Blade Runner 2049").
+  static bool _fitsTitle(TorrentStream stream, Movie? title) {
+    if (title == null || title.year <= 0) return true;
+    final titleNumbers =
+        _yearPattern.allMatches(title.title).map((m) => m[0]).toSet();
+    final years = _yearPattern
+        .allMatches(stream.name)
+        .map((m) => m[0]!)
+        .where((y) => !titleNumbers.contains(y))
+        .map(int.parse);
+    if (years.isEmpty) return true;
+    // A year either side: release and air dates can straddle New Year,
+    // and festival premieres come a year early.
+    final first = title.year - 1;
+    final last = title.type == 'tv'
+        ? (title.lastAirYear ?? DateTime.now().year) + 1
+        : title.year + 1;
+    // A collection spanning the title's years ("The Christopher Nolan
+    // Collection (2000-2023)") holds it too.
+    for (final range in _yearRangePattern.allMatches(stream.name)) {
+      if (int.parse(range[1]!) <= last && int.parse(range[2]!) >= first) {
+        return true;
+      }
+    }
+    return years.any((y) => y >= first && y <= last);
   }
 
   /// Starting from the highest available quality tier, keep stepping down
@@ -180,8 +301,9 @@ class StreamResolver {
 
   /// Groups [streams] (as sorted by [getAvailableStreams]) into one option
   /// per quality, highest quality first. Within a quality, torrents with a
-  /// healthy number of sharers come first, smallest first among them — the
-  /// same picture for less to download — then the rest by sharers.
+  /// healthy number of sharers come first — single episodes before season
+  /// packs, then smallest first, the same picture for less to download —
+  /// then the rest by sharers.
   /// [preferHash] (the last-played torrent) is put first in its quality
   /// regardless, so resuming reuses what's already downloaded.
   static List<QualityOption> qualityOptions(
@@ -243,6 +365,9 @@ class StreamResolver {
       final ha = healthy(sa), hb = healthy(sb);
       if (ha != hb) return ha ? -1 : 1;
       if (ha) {
+        // A torrent of just this episode before a season pack: it starts
+        // sooner, as there's only one file's metadata to fetch.
+        if (sa.isPack != sb.isPack) return sa.isPack ? 1 : -1;
         // Unknown sizes go after known ones.
         final ma = _sizeInMB(sa.size) ?? double.infinity;
         final mb = _sizeInMB(sb.size) ?? double.infinity;

@@ -3,6 +3,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 
 import '../services/visual_effects_service.dart';
+import '../theme/app_theme.dart';
 
 /// Frosted glass: blurs whatever is painted behind [child], within the
 /// nearest clip (wrap it in a ClipRect / ClipRRect / ClipPath), then
@@ -91,6 +92,113 @@ class GlassCircleButton extends StatelessWidget {
               width: 40,
               height: 40,
               child: Icon(icon, color: Colors.white, size: 18),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A 50px-tall frosted-glass pill (round at [width] 50) for secondary
+/// actions — the details screen's Trailer and Like, Settings' Export and
+/// Import: the backdrop blurred under a dark tint, with a faint edge.
+class GlassActionButton extends StatelessWidget {
+  final Widget child;
+  final VoidCallback onTap;
+  final double? width;
+
+  const GlassActionButton({
+    super.key,
+    required this.child,
+    required this.onTap,
+    this.width,
+  });
+
+  static const _shape = StadiumBorder();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 50,
+      width: width,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(30),
+        child: GlassBlur(
+          reducedTint: Colors.black.withValues(alpha: 0.45),
+          child: Material(
+            color: kGlassTint,
+            shape: _shape.copyWith(side: BorderSide(color: kGlassEdge)),
+            child: InkWell(
+              customBorder: _shape,
+              onTap: onTap,
+              child: Center(child: child),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// An on/off switch in the glass style: a frosted track with a faint edge
+/// that fills with [activeColor] when on, and a white knob that slides
+/// across.
+class GlassSwitch extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool> onChanged;
+  final Color activeColor;
+
+  const GlassSwitch({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    this.activeColor = AppTheme.primaryColor,
+  });
+
+  static const _duration = Duration(milliseconds: 180);
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      toggled: value,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => onChanged(!value),
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: GlassBlur(
+              reducedTint: Colors.black.withValues(alpha: 0.45),
+              child: AnimatedContainer(
+                duration: _duration,
+                curve: Curves.easeOut,
+                width: 52,
+                height: 32,
+                padding: const EdgeInsets.all(3),
+                decoration: ShapeDecoration(
+                  color: value ? activeColor : kGlassTint,
+                  shape: StadiumBorder(
+                    side: BorderSide(
+                        color: value ? Colors.transparent : kGlassEdge),
+                  ),
+                ),
+                child: AnimatedAlign(
+                  duration: _duration,
+                  curve: Curves.easeOut,
+                  alignment:
+                      value ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Container(
+                    width: 26,
+                    height: 26,
+                    decoration: BoxDecoration(
+                      color: value ? Colors.black : Colors.white,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         ),

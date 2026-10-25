@@ -13,6 +13,13 @@ class TorrentPaths {
     return '${base.path}/torrents';
   }
 
+  /// The engine's saved DHT state (see TorrentEngineService) — beside the
+  /// torrents directory, not in it, so clearing downloads leaves it be.
+  static Future<String> engineStateFile() async {
+    final base = await getApplicationSupportDirectory();
+    return '${base.path}/engine_state.dat';
+  }
+
   /// Deterministic per-content save path. Re-adding the same infoHash always
   /// resolves to the same directory, so libtorrent's own piece hash-check
   /// finds and reuses whatever was already downloaded there instead of

@@ -14,6 +14,9 @@ class Movie {
   final String type; // 'movie' or 'tv'
   final bool inCinemas;
   final String? releaseDateRaw; // Raw TMDB release_date/first_air_date
+  // TV only: the year its latest episode aired (TMDB's last_air_date).
+  // Details only, not persisted.
+  final int? lastAirYear;
 
   // Extra Details
   final String? director;
@@ -92,6 +95,7 @@ class Movie {
     required this.type,
     required this.inCinemas,
     this.releaseDateRaw,
+    this.lastAirYear,
     this.director,
     this.cast,
     this.castMembers,
@@ -193,6 +197,19 @@ class Episode {
 
   /// A copy of this episode with [progress] (watch history) attached.
   Episode withProgress(double? progress) => Episode(
+        id: id,
+        episodeNumber: episodeNumber,
+        name: name,
+        overview: overview,
+        stillPath: stillPath,
+        airDate: airDate,
+        voteAverage: voteAverage,
+        runtime: runtime,
+        progress: progress,
+      );
+
+  /// A copy of this episode with [runtime] (in minutes) replaced.
+  Episode withRuntime(int? runtime) => Episode(
         id: id,
         episodeNumber: episodeNumber,
         name: name,

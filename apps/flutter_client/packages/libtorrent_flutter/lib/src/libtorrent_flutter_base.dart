@@ -115,6 +115,7 @@ class LibtorrentFlutter {
   late final TorrentBridgeBindings _b;
   late final Pointer<LtSessionOpaque> _session;
   late final String _defaultSavePath;
+  String? _sessionStatePath;
 
   // Torrent status
   final _torrentsCtrl = StreamController<Map<int, TorrentInfo>>.broadcast();
@@ -146,6 +147,9 @@ class LibtorrentFlutter {
   /// - [pollInterval] — how often to poll for torrent/stream status updates.
   /// - [fetchTrackers] — automatically fetch best public trackers on startup.
   /// - [defaultSavePath] — where to save torrent data. Defaults to system temp dir.
+  /// - [sessionStatePath] — a file to restore the DHT routing table from,
+  ///   and that [saveSessionState] writes it to, so a launch doesn't have
+  ///   to find the network from scratch.
   static Future<void> init({
     String listenInterface = '',
     int downloadLimit = 0,
@@ -153,6 +157,7 @@ class LibtorrentFlutter {
     Duration pollInterval = const Duration(milliseconds: 600),
     bool fetchTrackers = true,
     String? defaultSavePath,
+    String? sessionStatePath,
   }) async {
     if (_instance != null) return;
     final engine = LibtorrentFlutter._();
@@ -166,8 +171,12 @@ class LibtorrentFlutter {
     engine._b = lib;
 
     final iface = listenInterface.toNativeUtf8();
+    final statePath = sessionStatePath?.toNativeUtf8() ?? nullptr;
     try {
-      final session = engine._b.createSession(iface, downloadLimit, uploadLimit);
+      final withState = engine._b.createSessionWithState;
+      final session = withState != null
+          ? withState(iface, downloadLimit, uploadLimit, statePath)
+          : engine._b.createSession(iface, downloadLimit, uploadLimit);
       if (session == nullptr) {
         final err = engine._b.lastError().toDartString();
         throw StateError('Failed to create libtorrent session: $err');
@@ -175,9 +184,11 @@ class LibtorrentFlutter {
       engine._session = session;
     } finally {
       malloc.free(iface);
+      if (statePath != nullptr) malloc.free(statePath);
     }
 
     _instance = engine;
+    engine._sessionStatePath = sessionStatePath;
     engine._defaultSavePath = defaultSavePath ?? Directory.systemTemp.path;
     engine._startPolling(pollInterval);
   }
@@ -198,6 +209,22 @@ class LibtorrentFlutter {
 
   /// libtorrent version string.
   String get libraryVersion => _b.version().toDartString();
+
+  /// Writes the DHT routing table to the `sessionStatePath` given to
+  /// [init], for the next launch to start from. Returns false when there's
+  /// no path, the native library can't (see
+  /// TorrentBridgeBindings.saveSessionState), or the write failed.
+  bool saveSessionState() {
+    final save = _b.saveSessionState;
+    final path = _sessionStatePath;
+    if (save == null || path == null) return false;
+    final p = path.toNativeUtf8();
+    try {
+      return save(_session, p) == 1;
+    } finally {
+      malloc.free(p);
+    }
+  }
 
   // ─── Torrent Management ─────────────────────────────────────────────────────
 
@@ -543,11 +570,19 @@ class LibtorrentFlutter {
     }
   }
 
-  /// Shut down the engine entirely. Calls [disposeAll] first, then
-  /// destroys the native session. After this, you'd need to call
-  /// [init] again to use the engine.
-  Future<void> dispose() async {
-    disposeAll();
+  /// Shut down the engine entirely. Calls [disposeAll] first — or, with
+  /// [deleteFiles] false, just stops the streams, keeping every torrent's
+  /// downloaded data on disk for next time — then destroys the native
+  /// session. After this, you'd need to call [init] again to use the
+  /// engine.
+  Future<void> dispose({bool deleteFiles = true}) async {
+    if (deleteFiles) {
+      disposeAll();
+    } else {
+      for (final sid in _streams.keys.toList()) {
+        try { stopStream(sid); } catch (_) {}
+      }
+    }
     _pollTimer?.cancel();
     _b.destroySession(_session);
     await _torrentsCtrl.close();

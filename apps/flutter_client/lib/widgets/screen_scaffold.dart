@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../models/movie.dart';
@@ -9,19 +8,11 @@ import '../widgets/floating_bottom_nav_bar.dart';
 typedef BodyBuilder = Widget Function(
     BuildContext context, bool isDesktop, EdgeInsets padding);
 
-class ScreenScaffold extends StatelessWidget {
+class ScreenScaffold extends StatefulWidget {
   final Widget title;
   final Widget? leading;
   final List<Widget>? actions;
   final BodyBuilder body;
-  final double opacity;
-  // Scroll-driven app-bar fade, as a listenable instead of a plain double.
-  // When set, only the AppBar repaints as it changes — the screen (and
-  // this widget's own build()) never re-runs, so `body(...)` isn't
-  // reinvoked and the scrollable content underneath isn't forced to
-  // rebuild on every scroll tick. Falls back to the static [opacity]
-  // field when absent (e.g. Settings, which has no scroll fade at all).
-  final ValueListenable<double>? opacityListenable;
   final Movie? selectedMovie;
   final VoidCallback? onCloseSidePanel;
   final bool extendBodyBehindAppBar;
@@ -33,13 +24,71 @@ class ScreenScaffold extends StatelessWidget {
     required this.body,
     this.leading,
     this.actions,
-    this.opacity = 0.0,
-    this.opacityListenable,
     this.selectedMovie,
     this.onCloseSidePanel,
     this.extendBodyBehindAppBar = true,
     this.bottomNavTab,
   });
+
+  @override
+  State<ScreenScaffold> createState() => _ScreenScaffoldState();
+}
+
+class _ScreenScaffoldState extends State<ScreenScaffold> {
+  // How far the top-edge fade has faded in (see _withTopFade), from the
+  // body's scrolling. A notifier so only the fade repaints while scrolling,
+  // not the body.
+  final ValueNotifier<double> _fade = ValueNotifier(0.0);
+
+  @override
+  void dispose() {
+    _fade.dispose();
+    super.dispose();
+  }
+
+  bool _onScroll(ScrollNotification n) {
+    if (n.depth == 0 && n.metrics.axis == Axis.vertical) {
+      _fade.value = (n.metrics.pixels / 200).clamp(0.0, 1.0);
+    }
+    return false;
+  }
+
+  /// The home screen's top edge (see MovieHomeScreen._withTopFade): no
+  /// glass behind the bar — it stays transparent, and a black-to-clear fade
+  /// comes in over the content as it scrolls up under the title.
+  Widget _withTopFade(BuildContext context, Widget body) {
+    return Stack(
+      children: [
+        NotificationListener<ScrollNotification>(
+          onNotification: _onScroll,
+          child: body,
+        ),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: IgnorePointer(
+            child: ValueListenableBuilder<double>(
+              valueListenable: _fade,
+              builder: (context, fade, child) =>
+                  Opacity(opacity: fade, child: child),
+              child: Container(
+                height: MediaQuery.paddingOf(context).top + kToolbarHeight + 40,
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.black, Colors.transparent],
+                    stops: [0.4, 1.0],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -48,74 +97,51 @@ class ScreenScaffold extends StatelessWidget {
         final isDesktop = constraints.maxWidth > 800;
         final bottomSafePadding = MediaQuery.of(context).padding.bottom;
 
-        // An if/else into a pre-declared variable, not a ternary — Dart
-        // infers a bare ternary's static type as the LUB of the two
-        // branches' own types (here, Widget, since PreferredSize and
-        // CustomAppBar only share the class hierarchy at that level), not
-        // their shared PreferredSizeWidget interface, so Scaffold.appBar
-        // rejects it even with an explicitly-typed target variable.
-        // Independent if/else assignments don't have that problem — each
-        // is checked against the variable's declared type on its own.
-        final PreferredSizeWidget appBar;
-        if (opacityListenable != null) {
-          appBar = PreferredSize(
-            preferredSize: const Size.fromHeight(kToolbarHeight),
-            child: ValueListenableBuilder<double>(
-              valueListenable: opacityListenable!,
-              builder: (context, liveOpacity, _) => CustomAppBar(
-                title: title,
-                leading: leading,
-                actions: actions,
-                forceOpacity: liveOpacity,
-                showActions: false, // Scaffold users provide their own actions
+        return Stack(
+          children: [
+            Scaffold(
+              extendBodyBehindAppBar: widget.extendBodyBehindAppBar,
+              appBar: CustomAppBar(
+                title: widget.title,
+                leading: widget.leading,
+                actions: widget.actions,
+                forceOpacity: 0,
+                showActions: false,
                 // Its 3 callers (Search/Favorites/Settings) all have the
                 // floating bottom nav bar now — mode-switching lives in
                 // Settings instead of a header icon.
                 showModeSwitch: false,
               ),
-            ),
-          );
-        } else {
-          appBar = CustomAppBar(
-            title: title,
-            leading: leading,
-            actions: actions,
-            forceOpacity: opacity,
-            showActions: false,
-            showModeSwitch: false,
-          );
-        }
-
-        return Stack(
-          children: [
-            Scaffold(
-              extendBodyBehindAppBar: extendBodyBehindAppBar,
-              appBar: appBar,
-              body: body(
+              body: _withTopFade(
                 context,
-                isDesktop,
-                // Reserve room for the floating nav bar (~110px including its
-                // own top/bottom padding) so scrollable content doesn't end
-                // up rendering underneath/overlapping its buttons.
-                EdgeInsets.only(
-                  bottom: bottomSafePadding + (bottomNavTab != null ? 110 : 0),
+                widget.body(
+                  context,
+                  isDesktop,
+                  // Reserve room for the floating nav bar (~110px including
+                  // its own top/bottom padding) so scrollable content
+                  // doesn't end up rendering underneath/overlapping its
+                  // buttons.
+                  EdgeInsets.only(
+                    bottom: bottomSafePadding +
+                        (widget.bottomNavTab != null ? 110 : 0),
+                  ),
                 ),
               ),
             ),
 
-            if (bottomNavTab != null)
-              FloatingBottomNavBar(activeTab: bottomNavTab!),
+            if (widget.bottomNavTab != null)
+              FloatingBottomNavBar(activeTab: widget.bottomNavTab!),
 
             // Side panel overlay for desktop
-            if (isDesktop && selectedMovie != null)
+            if (isDesktop && widget.selectedMovie != null)
               Positioned.fill(
                 child: Stack(
                   children: [
                     // Darkened background overlay
                     GestureDetector(
-                      onTap: onCloseSidePanel,
+                      onTap: widget.onCloseSidePanel,
                       child: Container(
-                        color: Colors.black.withOpacity(0.6),
+                        color: Colors.black.withValues(alpha: 0.6),
                       ),
                     ).animate().fadeIn(duration: 200.ms),
 
@@ -125,8 +151,8 @@ class ScreenScaffold extends StatelessWidget {
                       bottom: 0,
                       right: 0,
                       child: DesktopDetailsPanel(
-                        movie: selectedMovie!,
-                        onClose: onCloseSidePanel ?? () {},
+                        movie: widget.selectedMovie!,
+                        onClose: widget.onCloseSidePanel ?? () {},
                       )
                           .animate()
                           .slideX(

@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart' show launchUrl;
 import '../widgets/status_screen.dart';
@@ -13,11 +14,17 @@ class UpdateOverlay extends StatelessWidget {
     return StatusScreen(
       title: 'A New Version',
       highlight: 'Is Ready.',
-      message: message,
-      footer: StatusPrimaryButton(
-        label: 'Download Update',
-        onPressed: () => launchUrl(Uri.parse(url)),
-      ),
+      // The remote message and download link are for Android builds;
+      // iPhones update through TestFlight.
+      message: Platform.isIOS
+          ? 'A new update is available. Please update the app from TestFlight.'
+          : message,
+      footer: Platform.isIOS
+          ? null
+          : StatusPrimaryButton(
+              label: 'Download Update',
+              onPressed: () => launchUrl(Uri.parse(url)),
+            ),
     );
   }
 }

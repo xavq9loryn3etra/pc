@@ -9,6 +9,7 @@ import '../widgets/movie_poster.dart';
 import '../widgets/screen_scaffold.dart';
 import '../widgets/shimmer_loader.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
+import '../widgets/glass_blur.dart';
 import '../services/movie_tab_service.dart';
 import '../services/search_history_service.dart';
 
@@ -27,11 +28,6 @@ class _SearchScreenState extends State<SearchScreen> {
 
   List<Movie> _results = [];
   bool _isLoading = false;
-  // Scroll-driven app-bar fade. A ValueNotifier instead of a setState field
-  // — ScreenScaffold scopes it to just the AppBar via ValueListenableBuilder,
-  // so scrolling doesn't force this screen's build() (and the poster grid's
-  // itemBuilder for every visible cell) to re-run on every scroll tick.
-  final ValueNotifier<double> _opacityNotifier = ValueNotifier(0.0);
   Timer? _debounce;
   String? _error;
   Movie? _selectedMovie;
@@ -40,7 +36,6 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_onScroll);
     // SearchScreen stays mounted (offscreen) for the whole movies-mode
     // session as one of MovieTabShell's tabs, so `autofocus` would pop the
     // keyboard the instant the app opens rather than when this tab is
@@ -75,14 +70,6 @@ class _SearchScreenState extends State<SearchScreen> {
     }
   }
 
-  void _onScroll() {
-    final offset = _scrollController.offset;
-    final newOpacity = (offset / 50).clamp(0.0, 1.0);
-    if (newOpacity != _opacityNotifier.value) {
-      _opacityNotifier.value = newOpacity;
-    }
-  }
-
   @override
   void dispose() {
     MovieTabService().currentTab.removeListener(_onActiveTabChanged);
@@ -90,7 +77,6 @@ class _SearchScreenState extends State<SearchScreen> {
     _controller.dispose();
     _searchFocusNode.dispose();
     _scrollController.dispose();
-    _opacityNotifier.dispose();
     super.dispose();
   }
 
@@ -153,41 +139,81 @@ class _SearchScreenState extends State<SearchScreen> {
   Widget build(BuildContext context) {
     return ScreenScaffold(
       bottomNavTab: BottomNavTab.search,
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back, color: Colors.white),
-        // Search is a bottom-nav tab, not a pushed route, so there's no
-        // route to pop — "back" here means returning to the Home tab,
-        // same as tapping the Home icon in FloatingBottomNavBar.
-        onPressed: () =>
-            MovieTabService().currentTab.value = BottomNavTab.home,
-      ),
-      title: TextField(
-        controller: _controller,
-        focusNode: _searchFocusNode,
-        style: const TextStyle(color: Colors.white, fontSize: 18),
-        decoration: const InputDecoration(
-          hintText: 'Search movies & TV shows...',
-          hintStyle: TextStyle(color: Colors.white54),
-          border: InputBorder.none,
+      leading: Center(
+        child: GlassCircleButton(
+          icon: Icons.arrow_back_rounded,
+          // Search is a bottom-nav tab, not a pushed route, so there's no
+          // route to pop — "back" here means returning to the Home tab,
+          // same as tapping the Home icon in FloatingBottomNavBar.
+          onPressed: () =>
+              MovieTabService().currentTab.value = BottomNavTab.home,
         ),
-        textInputAction: TextInputAction.search,
-        onChanged: _onSearchChanged,
-        onSubmitted: _searchNow,
       ),
-      actions: [
-        if (_controller.text.isNotEmpty)
-          IconButton(
-            icon: const Icon(Icons.clear, color: Colors.white54),
-            onPressed: () {
-              _controller.clear();
-              _onSearchChanged('');
-            },
-          ),
-      ],
+      title: _buildSearchField(),
+      actions: const [SizedBox(width: 16)],
       body: _buildBody,
-      opacityListenable: _opacityNotifier,
       selectedMovie: _selectedMovie,
       onCloseSidePanel: _closeSidePanel,
+    );
+  }
+
+  /// The search box as a frosted pill, like the bottom nav bar's Search
+  /// button it's opened from: a search icon, the field, and ✕ to clear
+  /// once there's text.
+  Widget _buildSearchField() {
+    return SizedBox(
+      height: 44,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: GlassBlur(
+          reducedTint: Colors.black.withValues(alpha: 0.45),
+          child: DecoratedBox(
+            decoration: ShapeDecoration(
+              color: kGlassTint,
+              shape: StadiumBorder(side: BorderSide(color: kGlassEdge)),
+            ),
+            child: Row(
+              children: [
+                const SizedBox(width: 14),
+                const Icon(Icons.search_rounded,
+                    color: Colors.white70, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _controller,
+                    focusNode: _searchFocusNode,
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                    cursorColor: Colors.white,
+                    decoration: const InputDecoration(
+                      hintText: 'Movies & TV shows',
+                      hintStyle: TextStyle(color: Colors.white54),
+                      border: InputBorder.none,
+                      isDense: true,
+                    ),
+                    textInputAction: TextInputAction.search,
+                    onChanged: _onSearchChanged,
+                    onSubmitted: _searchNow,
+                  ),
+                ),
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _controller,
+                  builder: (context, value, _) => value.text.isEmpty
+                      ? const SizedBox(width: 14)
+                      : IconButton(
+                          icon: const Icon(Icons.close_rounded,
+                              color: Colors.white70, size: 18),
+                          tooltip: 'Clear',
+                          onPressed: () {
+                            _controller.clear();
+                            _onSearchChanged('');
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 

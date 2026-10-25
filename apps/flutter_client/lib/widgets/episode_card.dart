@@ -405,6 +405,10 @@ class EpisodeBackdrop extends StatelessWidget {
 class EpisodeStill extends StatelessWidget {
   final String image;
 
+  /// A lower-resolution copy of [image] that's likely already cached (the
+  /// card's), shown until [image] loads instead of nothing.
+  final String? preview;
+
   /// Decode width in physical pixels — the box's width × device pixel
   /// ratio.
   final int decodeWidth;
@@ -417,6 +421,7 @@ class EpisodeStill extends StatelessWidget {
   const EpisodeStill({
     super.key,
     required this.image,
+    this.preview,
     required this.decodeWidth,
     this.dimmed = false,
     this.fadeRight = false,
@@ -434,6 +439,17 @@ class EpisodeStill extends StatelessWidget {
         child: child,
       );
 
+  Widget _previewOrNothing() => preview == null
+      ? const SizedBox.shrink()
+      : CachedNetworkImage(
+          imageUrl: preview!,
+          memCacheWidth: decodeWidth,
+          fit: BoxFit.cover,
+          fadeInDuration: Duration.zero,
+          placeholder: (_, __) => const SizedBox.shrink(),
+          errorWidget: (_, __, ___) => const SizedBox.shrink(),
+        );
+
   @override
   Widget build(BuildContext context) {
     final faded = _fade(
@@ -444,8 +460,8 @@ class EpisodeStill extends StatelessWidget {
         memCacheWidth: decodeWidth,
         fit: BoxFit.cover,
         fadeInDuration: const Duration(milliseconds: 200),
-        placeholder: (_, __) => const SizedBox.shrink(),
-        errorWidget: (_, __, ___) => const SizedBox.shrink(),
+        placeholder: (_, __) => _previewOrNothing(),
+        errorWidget: (_, __, ___) => _previewOrNothing(),
       ),
     );
     return Opacity(
@@ -510,8 +526,11 @@ class DetailHeader extends StatelessWidget {
               left: 0,
               right: 0,
               height: imageHeight,
+              // Full-width, so TMDB's full-size still rather than the
+              // cards' w500 one, which looks soft stretched this wide.
               child: EpisodeStill(
-                image: image!,
+                image: image!.replaceFirst('/w500/', '/original/'),
+                preview: image,
                 decodeWidth: (width * dpr).toInt(),
                 dimmed: dimmed,
                 fadeRight: sideways,

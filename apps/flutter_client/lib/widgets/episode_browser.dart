@@ -309,6 +309,7 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
                       '${widget.currentSeason}_${ep.episodeNumber}'),
                   resolver: widget.resolver,
                   imdbId: widget.imdbId,
+                  details: widget.details,
                   season: widget.currentSeason,
                   episode: ep.episodeNumber,
                   onTorrentChosen: (stream, allStreams) =>
@@ -349,6 +350,7 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
 class _EpisodeSourcePicker extends StatefulWidget {
   final StreamResolver resolver;
   final String imdbId;
+  final Movie details;
   final int season;
   final int episode;
   final void Function(TorrentStream stream, List<TorrentStream> allStreams)
@@ -363,6 +365,7 @@ class _EpisodeSourcePicker extends StatefulWidget {
     super.key,
     required this.resolver,
     required this.imdbId,
+    required this.details,
     required this.season,
     required this.episode,
     required this.onTorrentChosen,
@@ -392,6 +395,7 @@ class _EpisodeSourcePickerState extends State<_EpisodeSourcePicker> {
         type: 'tv',
         season: widget.season,
         episode: widget.episode,
+        title: widget.details,
       );
       if (mounted) {
         setState(() {

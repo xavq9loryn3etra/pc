@@ -9,11 +9,18 @@ class CachedTorrentEntry {
   final int sizeBytes;
   final DateTime modified;
 
+  /// Space the download really takes up on disk, where it can be measured
+  /// (Android). Unlike [sizeBytes] — files are sparse-allocated to their
+  /// full size as soon as streaming starts — this counts only what's been
+  /// written.
+  final int? diskBytes;
+
   const CachedTorrentEntry({
     required this.infoHash,
     required this.path,
     required this.sizeBytes,
     required this.modified,
+    this.diskBytes,
   });
 }
 
@@ -42,6 +49,7 @@ class TorrentStorageService {
           path: child.path,
           sizeBytes: size,
           modified: stat.modified,
+          diskBytes: await _diskUsage(child.path),
         ));
       } catch (_) {
         // Skip entries we can't stat/read rather than failing the whole list.
@@ -49,6 +57,20 @@ class TorrentStorageService {
     }
     entries.sort((a, b) => b.modified.compareTo(a.modified));
     return entries;
+  }
+
+  /// Bytes actually written under [path], via the system's `du` (Android
+  /// ships it; iOS apps can't run processes). Null when unavailable.
+  static Future<int?> _diskUsage(String path) async {
+    if (!Platform.isAndroid) return null;
+    try {
+      final result = await Process.run('du', ['-sk', path]);
+      if (result.exitCode != 0) return null;
+      final kb = int.tryParse('${result.stdout}'.trim().split(RegExp(r'\s+')).first);
+      return kb == null ? null : kb * 1024;
+    } catch (_) {
+      return null;
+    }
   }
 
   static int totalCachedBytes(List<CachedTorrentEntry> entries) =>

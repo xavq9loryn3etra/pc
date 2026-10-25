@@ -11,7 +11,6 @@ class NoInternetOverlay extends StatelessWidget {
       highlight: 'Hang Tight.',
       message: 'Check your Wi-Fi or mobile data. '
           "We'll pick up right where you left off.",
-      footer: StatusPill(label: 'Waiting for connection'),
     );
   }
 }

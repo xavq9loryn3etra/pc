@@ -3,6 +3,7 @@ import 'dart:ui' show PlatformDispatcher;
 import 'package:dio/dio.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/movie.dart';
+import 'saved_movies_service.dart';
 import 'streaming_link_service.dart';
 
 // ... imports
@@ -220,6 +221,19 @@ class TMDBService {
         cancelToken: cancelToken,
       );
       await _addOriginalLanguageLogos(response.data, 'tv', id, cancelToken);
+      final split = await _splitSeasons(id, response.data['seasons']);
+      if (split != null) {
+        response.data['seasons'] = [
+          ...(response.data['seasons'] as List)
+              .where((s) => s['season_number'] == 0),
+          for (final e in split.entries)
+            {
+              'id': -e.key,
+              'season_number': e.key,
+              'episode_count': e.value.length,
+            },
+        ];
+      }
       final movie = _formatMovieDetails(response.data,
           isTv: true, watchCountry: await watchCountry);
       _cache[key] = _CacheEntry(movie);
@@ -465,6 +479,9 @@ class TMDBService {
       type: isTv ? 'tv' : 'movie',
       inCinemas: base.inCinemas,
       releaseDateRaw: base.releaseDateRaw,
+      lastAirYear: isTv
+          ? int.tryParse('${m['last_air_date'] ?? ''}'.split('-').first)
+          : null,
       director: director,
       cast: cast,
       castMembers: castMembers,
@@ -607,31 +624,40 @@ class TMDBService {
     return candidates.toList();
   }
 
+  /// A season's episodes — with, for any already played, the length of the
+  /// copy actually played in place of TMDB's runtime (see
+  /// SavedMoviesService.saveEpisodeLength).
   Future<List<Episode>> getSeasonDetails(String tvId, int seasonNumber) async {
+    final history = SavedMoviesService();
+    return [
+      for (final e in await _seasonEpisodes(tvId, seasonNumber))
+        switch (history.getEpisodeMinutes(tvId, seasonNumber, e.episodeNumber)) {
+          final minutes? => e.withRuntime(minutes),
+          null => e,
+        },
+    ];
+  }
+
+  Future<List<Episode>> _seasonEpisodes(String tvId, int seasonNumber) async {
     final key = 'season_${tvId}_$seasonNumber';
     if (_cache.containsKey(key) && _cache[key]!.isValid(30)) {
       return _cache[key]!.data as List<Episode>;
     }
     try {
+      if (seasonNumber > 0) {
+        final split = await _splitSeasons(tvId);
+        if (split != null) {
+          final episodes = split[seasonNumber] ?? const <Episode>[];
+          _cache[key] = _CacheEntry(episodes);
+          return episodes;
+        }
+      }
       final response = await _dio.get(
         '$_baseUrl/tv/$tvId/season/$seasonNumber',
         queryParameters: {'api_key': _apiKey},
       );
       final episodes = (response.data['episodes'] as List)
-          .map(
-            (e) => Episode(
-              id: e['id'],
-              episodeNumber: e['episode_number'],
-              name: e['name'],
-              overview: e['overview'],
-              stillPath: e['still_path'] != null
-                  ? '$_imageBase${e['still_path']}'
-                  : null,
-              airDate: e['air_date'],
-              voteAverage: (e['vote_average'] ?? 0).toDouble(),
-              runtime: e['runtime'] is int ? e['runtime'] as int : null,
-            ),
-          )
+          .map((e) => _episodeFromJson(e, e['episode_number']))
           .toList();
       _cache[key] = _CacheEntry(episodes);
       return episodes;
@@ -639,6 +665,89 @@ class TMDBService {
       print('TMDB Season Details Error: $e');
       return [];
     }
+  }
+
+  Episode _episodeFromJson(Map<String, dynamic> e, int episodeNumber) =>
+      Episode(
+        id: e['id'],
+        episodeNumber: episodeNumber,
+        name: e['name'],
+        overview: e['overview'],
+        stillPath:
+            e['still_path'] != null ? '$_imageBase${e['still_path']}' : null,
+        airDate: e['air_date'],
+        voteAverage: (e['vote_average'] ?? 0).toDouble(),
+        runtime: e['runtime'] is int ? e['runtime'] as int : null,
+      );
+
+  // Per show: its seasons from TMDB's "Seasons" episode group, or null when
+  // TMDB's own seasons are used. See _loadSplitSeasons.
+  final Map<String, Future<Map<int, List<Episode>>?>> _splitSeasonsByShow = {};
+
+  /// Some shows — mostly anime — are one long "Season 1" on TMDB (absolute
+  /// numbering), while Torrentio, like IMDb, splits them into real seasons:
+  /// TMDB's S1E25 is Torrentio's S2E1, so nothing past the first season
+  /// could be found. For those, TMDB usually also has a "Seasons" episode
+  /// group with the real split; this returns it as season number →
+  /// episodes, renumbered from 1 within each season. [tmdbSeasons] is the
+  /// show's TMDB season list when the caller already has it.
+  Future<Map<int, List<Episode>>?> _splitSeasons(String tvId,
+      [List? tmdbSeasons]) {
+    return _splitSeasonsByShow[tvId] ??=
+        _loadSplitSeasons(tvId, tmdbSeasons).catchError((Object e) {
+      // Falls back to TMDB's own seasons; retried next time instead of
+      // being remembered.
+      print('TMDB Episode Group Error: $e');
+      _splitSeasonsByShow.remove(tvId);
+      return null;
+    });
+  }
+
+  Future<Map<int, List<Episode>>?> _loadSplitSeasons(
+      String tvId, List? tmdbSeasons) async {
+    tmdbSeasons ??= (await _dio.get(
+      '$_baseUrl/tv/$tvId',
+      queryParameters: {'api_key': _apiKey},
+    ))
+        .data['seasons'] as List?;
+    final regular =
+        (tmdbSeasons ?? const []).where((s) => (s['season_number'] ?? 0) > 0);
+    if (regular.length != 1) return null;
+
+    final groups = (await _dio.get(
+      '$_baseUrl/tv/$tvId/episode_groups',
+      queryParameters: {'api_key': _apiKey},
+    ))
+        .data['results'] as List?;
+    // Type 6 is TMDB's "production" grouping, which is where these splits
+    // live.
+    final seasonsGroup = groups?.firstWhere(
+      (g) => g['type'] == 6 && g['name'] == 'Seasons',
+      orElse: () => null,
+    );
+    if (seasonsGroup == null) return null;
+
+    final detail = (await _dio.get(
+      '$_baseUrl/tv/episode_group/${seasonsGroup['id']}',
+      queryParameters: {'api_key': _apiKey},
+    ))
+        .data['groups'] as List?;
+    final parts = (detail ?? const [])
+        .where((g) =>
+            (g['episodes'] as List?)?.isNotEmpty == true &&
+            // Specials stay TMDB's own season 0.
+            (g['episodes'] as List).every((e) => e['season_number'] != 0))
+        .toList()
+      ..sort((a, b) => (a['order'] as int).compareTo(b['order'] as int));
+    if (parts.length < 2) return null;
+
+    return {
+      for (var i = 0; i < parts.length; i++)
+        i + 1: [
+          for (final (j, e) in (parts[i]['episodes'] as List).indexed)
+            _episodeFromJson(e, j + 1),
+        ],
+    };
   }
 
   Future<String?> getTrailer(String id, {bool isTv = false}) async {

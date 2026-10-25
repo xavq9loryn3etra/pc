@@ -7,6 +7,7 @@ class SavedMoviesService with ChangeNotifier {
   static const String _favoritesKey = 'favorites_v1';
   static const String _historyKey = 'watch_history_v1';
   static const String _episodeHistoryKey = 'episode_history_v1';
+  static const String _episodeLengthsKey = 'episode_lengths_v1';
 
   // Singleton
   static final SavedMoviesService _instance = SavedMoviesService._internal();
@@ -17,6 +18,10 @@ class SavedMoviesService with ChangeNotifier {
   Map<String, dynamic> _history =
       {}; // { id: { progress: 0.5, last_watched: ms } }
   Map<String, dynamic> _episodeHistory = {}; // { 'movieId_s_e': progress }
+  // How long the copy actually played of each episode was, in seconds
+  // ({ 'movieId_s_e': seconds }) — TMDB's runtime is the broadcast length
+  // and is often off (shortened edits, recaps cut, or just rounded).
+  Map<String, dynamic> _episodeLengths = {};
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
@@ -54,8 +59,37 @@ class SavedMoviesService with ChangeNotifier {
       }
     }
 
+    final lengthsJson = prefs.getString(_episodeLengthsKey);
+    if (lengthsJson != null) {
+      try {
+        _episodeLengths = jsonDecode(lengthsJson);
+      } catch (e) {
+        print("Error loading episode lengths: $e");
+      }
+    }
+
     _historyCache = null;
     notifyListeners();
+  }
+
+  /// The length in minutes of the copy of this episode that was played, if
+  /// it has been — see [saveEpisodeLength].
+  int? getEpisodeMinutes(String movieId, int season, int episode) {
+    final seconds = _episodeLengths['${movieId}_${season}_$episode'] as num?;
+    if (seconds == null) return null;
+    return (seconds / 60).round().clamp(1, 1 << 20);
+  }
+
+  /// Remembers how long the played copy of an episode is, so its card
+  /// shows that (and the time left in it) instead of TMDB's runtime.
+  Future<void> saveEpisodeLength(
+      String movieId, int season, int episode, Duration length) async {
+    if (length.inSeconds < 60) return;
+    final key = '${movieId}_${season}_$episode';
+    if (_episodeLengths[key] == length.inSeconds) return;
+    _episodeLengths[key] = length.inSeconds;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_episodeLengthsKey, jsonEncode(_episodeLengths));
   }
 
   // --- Favorites API ---
@@ -214,6 +248,9 @@ class SavedMoviesService with ChangeNotifier {
       // Clear associated episode history
       _episodeHistory.removeWhere((key, _) => key.startsWith('${movieId}_'));
       await _saveEpisodeHistory();
+      _episodeLengths.removeWhere((key, _) => key.startsWith('${movieId}_'));
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_episodeLengthsKey, jsonEncode(_episodeLengths));
       notifyListeners();
     }
   }

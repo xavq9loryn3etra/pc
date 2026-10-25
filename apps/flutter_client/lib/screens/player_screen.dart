@@ -168,6 +168,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _isLoadingSubtitles = false;
   bool _initialPositionRestored = false;
   double? _pendingResumeSnackbarProgress;
+  // "Resumed from …", shown for a moment at the top (see _showResumeBadge).
+  String? _resumeBadge;
+  String? _pendingResumeBadge;
+  Timer? _resumeBadgeTimer;
   // True from player.open() until playback is actually progressing (see
   // _checkOpeningFinished) — drives the loading spinner along with
   // _isBuffering.
@@ -201,9 +205,17 @@ class _PlayerScreenState extends State<PlayerScreen>
   int? _lastWatchdogDownloadedBytes;
   int _stallTicks = 0;
   static const int _stallTicksThreshold = 4; // 4 * 5s = 20s of no progress
+  // While the video is still opening: a slow swarm can need longer to find
+  // peers, and wiping it would throw away the ones it has already found.
+  static const int _openingStallTicksThreshold = 9; // 45s
   bool _recoveringStream = false;
   int _autoRecoverAttempts = 0;
   static const int _maxAutoRecoverAttempts = 2;
+  // Copies (info hashes, lower case) that already got stuck while starting,
+  // so recovery doesn't go back to them.
+  final Set<String> _triedStartHashes = {};
+  // The "keeps stalling" message is shown once, not on every later stall.
+  bool _stallMessageShown = false;
 
   final _resolver = StreamResolver();
   final _mediaSession = FlutterMediaSession();
@@ -426,33 +438,16 @@ class _PlayerScreenState extends State<PlayerScreen>
         _duration = dur;
         _durationNotifier.value = dur;
         _updateMediaSessionMetadata();
+        _rememberEpisodeLength(dur);
 
         if (_pendingResumeSnackbarProgress != null && dur.inSeconds > 0) {
           final targetSeconds =
               (dur.inSeconds * _pendingResumeSnackbarProgress!).round();
           if (targetSeconds > 5) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                behavior: SnackBarBehavior.floating,
-                backgroundColor: Colors.black.withOpacity(0.85),
-                duration: const Duration(seconds: 3),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-                content: Row(
-                  children: [
-                    Icon(Icons.replay, color: AppTheme.primaryColor, size: 18),
-                    const SizedBox(width: 8),
-                    Text(
-                      "Resumed from ${_formatDuration(Duration(seconds: targetSeconds))}",
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13),
-                    ),
-                  ],
-                ),
-              ),
-            );
+            // Shown once the video is actually playing (see
+            // _checkOpeningFinished), not over the black loading screen.
+            _pendingResumeBadge =
+                'Resumed from ${_formatDuration(Duration(seconds: targetSeconds))}';
           }
           _pendingResumeSnackbarProgress = null;
         }
@@ -487,6 +482,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       setState(() => _isMediaOpening = false);
       // Loaded: now the controls can start counting down to hide.
       _resetControlsTimer();
+      final resumedFrom = _pendingResumeBadge;
+      _pendingResumeBadge = null;
+      if (resumedFrom != null) _showResumeBadge(resumedFrom);
     }
   }
 
@@ -588,10 +586,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     _lastWatchdogPosition = _currentPosition;
     _lastWatchdogDownloadedBytes = downloadedBytes;
 
-    if (_stallTicks >= _stallTicksThreshold) {
+    final threshold = _isMediaOpening
+        ? _openingStallTicksThreshold
+        : _stallTicksThreshold;
+    if (_stallTicks >= threshold) {
       _stallTicks = 0;
       _attemptStreamRecovery(
-        reason: 'No playback or download progress for 20s',
+        reason: 'No playback or download progress for ${threshold * 5}s',
       );
     }
   }
@@ -611,6 +612,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       // stuck, the torrent itself is likely the problem (e.g. no real
       // seeds for this piece range), and retrying forever would just
       // thrash. Surface it instead of silently looping.
+      if (_stallMessageShown) return;
+      _stallMessageShown = true;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: Colors.red[900],
@@ -629,6 +632,17 @@ class _PlayerScreenState extends State<PlayerScreen>
     _recoveringStream = true;
     final resumeAt = _currentPosition;
     final staleInfoHash = _currentStream.infoHash;
+    final stuckTorrentId = _torrentId;
+
+    // Still starting: nothing's downloaded that could be damaged, so wiping
+    // this copy and starting it over would only lose the peers it has
+    // found. Move on to the next copy of the same quality instead.
+    _triedStartHashes.add(staleInfoHash.toLowerCase());
+    final otherCopies = _isMediaOpening
+        ? StreamResolver.sameQuality(_currentStream, _availableStreams)
+            .where((s) => !_triedStartHashes.contains(s.infoHash.toLowerCase()))
+            .toList()
+        : const <TorrentStream>[];
 
     if (mounted) {
       setState(() {
@@ -644,20 +658,34 @@ class _PlayerScreenState extends State<PlayerScreen>
     player.pause();
 
     try {
-      // Wipe the stuck torrent's cached data (also removes the live handle
-      // if it's still registered) so the retry doesn't just reuse whatever
-      // was stuck on disk.
-      await TorrentStorageService.deleteByInfoHash(staleInfoHash);
-
-      final resolved = await _resolver.resolveWithFallback(
-        _currentStream,
-        _availableStreams,
-      );
+      final StreamResolveResult resolved;
+      if (otherCopies.isNotEmpty) {
+        // Starting one pauses the stuck copy (see
+        // TorrentEngineService.streamMagnet), so a failure can go back to
+        // it.
+        resolved = await _resolver.resolveWithFallback(
+          otherCopies.first,
+          otherCopies,
+        );
+        await _rememberPlayedTorrent(resolved.stream);
+      } else {
+        // Wipe the stuck torrent's cached data (also removes the live
+        // handle if it's still registered) so the retry doesn't just reuse
+        // whatever was stuck on disk.
+        await TorrentStorageService.deleteByInfoHash(staleInfoHash);
+        resolved = await _resolver.resolveWithFallback(
+          _currentStream,
+          _availableStreams,
+        );
+      }
       final resolvedStream = resolved.stream;
       final result = resolved.result;
 
       await _openMediaWithResume(result.streamUrl, precisePosition: resumeAt);
       player.play();
+      if (otherCopies.isNotEmpty && stuckTorrentId != result.torrentId) {
+        _resolver.cleanup(stuckTorrentId);
+      }
 
       if (mounted) {
         setState(() {
@@ -669,29 +697,53 @@ class _PlayerScreenState extends State<PlayerScreen>
           _resetControlsTimer();
         });
         _subscribeToTorrent(_torrentId);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            backgroundColor: Colors.black87,
-            content: Text('Recovered from a playback stall.'),
-          ),
-        );
       }
     } catch (e) {
+      if (otherCopies.isNotEmpty) {
+        // No other copy started either: carry on waiting for the first
+        // one (the watchdog checks it again).
+        _returnAfterFailedSwitch(resumePlayback: true);
+      }
       if (mounted) {
         setState(() {
           _switchingQuality = false;
           _initialPositionRestored = true;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.red[900],
-            content: Text('Failed to recover playback: $e'),
-          ),
-        );
+        if (otherCopies.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: Colors.red[900],
+              content: Text('Failed to recover playback: $e'),
+            ),
+          );
+        }
       }
     } finally {
       _recoveringStream = false;
     }
+  }
+
+  /// Remembers [stream] as the torrent this title/episode plays from — for
+  /// resuming with it later, and for Settings > Storage.
+  Future<void> _rememberPlayedTorrent(TorrentStream stream) async {
+    final prefs = await SharedPreferences.getInstance();
+    final String imdbId = widget.details.imdbId ?? widget.details.id;
+    final String key = _currentSeason != null && _currentEpisode != null
+        ? 'last_played_torrent_${imdbId}_${_currentSeason}_${_currentEpisode}'
+        : 'last_played_torrent_$imdbId';
+    await prefs.setString(key, stream.infoHash);
+    await TorrentDownloadRegistry.save(
+      stream.infoHash,
+      TorrentDownloadInfo(
+        movieId: widget.movie.id,
+        imdbId: imdbId,
+        title: widget.movie.title,
+        image: widget.movie.image,
+        season: _currentSeason,
+        episode: _currentEpisode,
+        totalBytes: TorrentDownloadRegistry.parseSizeBytes(stream.size),
+      ),
+    );
   }
 
   // Fully pause playback when the app is backgrounded — otherwise mpv keeps
@@ -1015,6 +1067,78 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _markControlsPointer(PointerDownEvent _) =>
       _controlsPointerAt = DateTime.now();
 
+  /// Records how long this copy of the episode really is — TMDB's runtime
+  /// can be well off (a 17-minute edit listed as 24m) — for its card and
+  /// "time left" (see SavedMoviesService.saveEpisodeLength), here and in
+  /// the episode browser.
+  void _rememberEpisodeLength(Duration length) {
+    final s = _currentSeason, e = _currentEpisode;
+    if (s == null || e == null || length.inSeconds < 60) return;
+    SavedMoviesService().saveEpisodeLength(widget.movie.id, s, e, length);
+    final minutes = SavedMoviesService().getEpisodeMinutes(widget.movie.id, s, e);
+    List<Episode> updated(List<Episode> eps) => [
+          for (final ep in eps)
+            ep.episodeNumber == e ? ep.withRuntime(minutes) : ep,
+        ];
+    setState(() {
+      _episodes = updated(_episodes);
+      if (_browsingSeason == s) _browsingEpisodes = updated(_browsingEpisodes);
+    });
+  }
+
+  void _showResumeBadge(String text) {
+    setState(() => _resumeBadge = text);
+    _resumeBadgeTimer?.cancel();
+    _resumeBadgeTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _resumeBadge = null);
+    });
+  }
+
+  static const _badgeTextStyle = TextStyle(
+    color: Colors.white,
+    fontSize: 13,
+    fontWeight: FontWeight.w700,
+  );
+
+  /// A small frosted-glass pill centred at [top], fading in and out with
+  /// [visible] — passing notes over the video, whether or not the controls
+  /// are showing.
+  Widget _glassBadge({
+    required double top,
+    required bool visible,
+    required List<Widget> children,
+  }) {
+    return Positioned(
+      top: top,
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        child: Center(
+          child: AnimatedOpacity(
+            opacity: visible ? 1 : 0,
+            duration: const Duration(milliseconds: 150),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: GlassBlur(
+                reducedTint: Colors.black.withValues(alpha: 0.45),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                  decoration: ShapeDecoration(
+                    color: kGlassTint,
+                    shape: StadiumBorder(side: BorderSide(color: kGlassEdge)),
+                  ),
+                  child:
+                      Row(mainAxisSize: MainAxisSize.min, children: children),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   // Press-and-hold on the video plays at 2× until the finger lifts
   // (PlayerGestureOverlay.onHoldStart / onHoldEnd), with a badge saying so.
   bool _speedBoost = false;
@@ -1118,24 +1242,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
       // 3. Save last played torrent infohash — the one that actually
       // resolved, not necessarily the one originally tapped.
-      final prefs = await SharedPreferences.getInstance();
-      final String imdbId = widget.details.imdbId ?? widget.details.id;
-      final String key = _currentSeason != null && _currentEpisode != null
-          ? 'last_played_torrent_${imdbId}_${_currentSeason}_${_currentEpisode}'
-          : 'last_played_torrent_$imdbId';
-      await prefs.setString(key, resolvedStream.infoHash);
-      await TorrentDownloadRegistry.save(
-        resolvedStream.infoHash,
-        TorrentDownloadInfo(
-          movieId: widget.movie.id,
-          imdbId: imdbId,
-          title: widget.movie.title,
-          image: widget.movie.image,
-          season: _currentSeason,
-          episode: _currentEpisode,
-          totalBytes: TorrentDownloadRegistry.parseSizeBytes(resolvedStream.size),
-        ),
-      );
+      await _rememberPlayedTorrent(resolvedStream);
 
       // 4. Open new media at exactly saved position natively
       await _openMediaWithResume(result.streamUrl, precisePosition: savedPos);
@@ -1357,6 +1464,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         type: 'tv',
         season: seasonNumber,
         episode: targetEp.episodeNumber,
+        title: widget.details,
       );
 
       if (streams.isEmpty) {
@@ -1530,6 +1638,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       setState(() {
         _currentStream = stream;
         _availableStreams = streams;
+        // A new episode gets its own stall recovery attempts.
+        _autoRecoverAttempts = 0;
+        _triedStartHashes.clear();
+        _stallMessageShown = false;
         _torrentId = result.torrentId;
         _streamId = result.streamId;
         _streamUrl = result.streamUrl;
@@ -1632,6 +1744,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _torrentSub?.cancel();
     _controlsTimer?.cancel();
     _stallWatchdogTimer?.cancel();
+    _resumeBadgeTimer?.cancel();
     _mediaActionSub?.cancel();
     _mediaSession.deactivate();
     _episodeDrawerController.dispose();
@@ -2570,53 +2683,31 @@ class _PlayerScreenState extends State<PlayerScreen>
                     ),
                   ),
 
+                  // "Resumed from 12:34" for a moment after picking up
+                  // where the viewer left off (see _showResumeBadge).
+                  _glassBadge(
+                    top: 16 + safe.top,
+                    visible: _resumeBadge != null && !_speedBoost,
+                    children: [
+                      const Icon(Icons.replay_rounded,
+                          color: Colors.white, size: 16),
+                      const SizedBox(width: 6),
+                      Text(_resumeBadge ?? '', style: _badgeTextStyle),
+                    ],
+                  ),
+
                   // "2× ⏩" while a press-and-hold speeds playback up
                   // (see _startSpeedBoost) — shown whether or not the
                   // controls are.
-                  Positioned(
+                  _glassBadge(
                     top: 16 + safe.top,
-                    left: 0,
-                    right: 0,
-                    child: IgnorePointer(
-                      child: Center(
-                        child: AnimatedOpacity(
-                          opacity: _speedBoost ? 1 : 0,
-                          duration: const Duration(milliseconds: 150),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(20),
-                            child: GlassBlur(
-                              reducedTint: Colors.black.withValues(alpha: 0.45),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 7),
-                                decoration: ShapeDecoration(
-                                  color: kGlassTint,
-                                  shape: StadiumBorder(
-                                    side: BorderSide(color: kGlassEdge),
-                                  ),
-                                ),
-                                child: const Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      '2×',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                    SizedBox(width: 6),
-                                    Icon(Icons.fast_forward_rounded,
-                                        color: Colors.white, size: 16),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
+                    visible: _speedBoost,
+                    children: const [
+                      Text('2×', style: _badgeTextStyle),
+                      SizedBox(width: 6),
+                      Icon(Icons.fast_forward_rounded,
+                          color: Colors.white, size: 16),
+                    ],
                   ),
                 ],
               ),

@@ -15,6 +15,7 @@ import 'desktop_home_screen.dart';
 import '../widgets/desktop_skeletons.dart';
 import '../widgets/custom_app_bar.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
+import '../widgets/glass_dialog.dart';
 
 class MovieHomeScreen extends StatefulWidget {
   const MovieHomeScreen({super.key});
@@ -355,32 +356,15 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
   }
 
   Future<void> _confirmRemoveHistory(Movie movie) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.grey[900],
-        title: const Text(
-          'Remove from History?',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: Text(
-          'Are you sure you want to remove "${movie.title}" from your continue watching list?',
-          style: const TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remove', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
+    final confirmed = await showGlassConfirm(
+      context,
+      title: 'Remove from Continue Watching?',
+      message: '"${movie.title}" and your progress in it will be removed.',
+      confirmLabel: 'Remove',
+      destructive: true,
     );
 
-    if (confirmed == true) {
+    if (confirmed) {
       // removeFromHistory() calls notifyListeners() itself — the
       // ListenableBuilder(SavedMoviesService()) around _buildContent picks
       // it up without a manual setState here.

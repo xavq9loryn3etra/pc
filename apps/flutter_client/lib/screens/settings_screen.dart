@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../widgets/screen_scaffold.dart';
+import '../widgets/glass_blur.dart';
+import '../widgets/glass_dialog.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/shimmer_loader.dart';
 import '../widgets/mode_switch_row.dart';
@@ -16,16 +18,17 @@ import '../services/visual_effects_service.dart';
 import '../theme/app_theme.dart';
 import '../main.dart';
 
-/// Best available estimate of how much of [entry] has actually downloaded.
-/// Prefers the registry's real `totalDone`-derived figure (persisted while
-/// streaming — see PlayerScreen._subscribeToTorrent); falls back to the raw
-/// file size on disk only when no real progress was ever recorded (legacy
-/// entries). That fallback can overstate progress for a torrent abandoned
-/// early — libtorrent sparse-allocates files to their full final size the
-/// moment streaming starts, so file length alone isn't reliable.
+/// Best available figure for how much of [entry] has actually downloaded:
+/// the space it really takes on disk where that can be measured (Android —
+/// see CachedTorrentEntry.diskBytes); else the registry's `totalDone`
+/// figure, persisted while streaming (see PlayerScreen._subscribeToTorrent)
+/// but stale whenever the torrent downloaded more after the last save;
+/// else, for legacy entries, the raw file size — which overstates it, as
+/// libtorrent sparse-allocates files to their full size the moment
+/// streaming starts.
 int _downloadedBytesFor(CachedTorrentEntry entry, Map<String, TorrentDownloadInfo> registry) {
   final info = registry[entry.infoHash.toLowerCase()];
-  return info?.downloadedBytes ?? entry.sizeBytes;
+  return entry.diskBytes ?? info?.downloadedBytes ?? entry.sizeBytes;
 }
 
 class SettingsScreen extends StatelessWidget {
@@ -82,9 +85,9 @@ Future<bool?> _runWithLoadingDialog(
   required String message,
   required Future<bool> Function() action,
 }) async {
-  showDialog(
-    context: context,
-    barrierDismissible: false,
+  showGlassDialog(
+    context,
+    dismissible: false,
     builder: (_) => _BackupLoadingDialog(message: message),
   );
   final success = await action();
@@ -154,15 +157,21 @@ class _BackupLoadingDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false,
-      child: AlertDialog(
-        backgroundColor: Colors.grey[900],
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        content: Row(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Row(
           children: [
             const ShimmerLoader(size: 40),
             const SizedBox(width: 16),
             Expanded(
-              child: Text(message, style: const TextStyle(color: Colors.white)),
+              child: Text(
+                message,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
           ],
         ),
@@ -228,8 +237,7 @@ class _SectionLabel extends StatelessWidget {
 /// Inline Export/Import buttons — used to live behind a "Backup & Restore"
 /// tap target that opened an AlertDialog asking which action to run; now
 /// shown directly on the Settings screen instead. Buttons match the
-/// pill-shaped, height-50 style used for the Trailer/Like buttons on
-/// DetailsScreen and the Play/More Info buttons on the home hero banner.
+/// frosted glass pills of the Trailer/Like buttons on DetailsScreen.
 class _BackupRestoreRow extends StatelessWidget {
   final VoidCallback onExport;
   final VoidCallback onImport;
@@ -287,30 +295,22 @@ class _BackupButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 50,
-      decoration: BoxDecoration(
-        color: Colors.white10,
-        borderRadius: BorderRadius.circular(30),
-      ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(30),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: Colors.white, size: 20),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
+    return GlassActionButton(
+      onTap: onTap,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, color: Colors.white, size: 20),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 16,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -564,7 +564,7 @@ class _DownloadTile extends StatelessWidget {
         style: const TextStyle(color: Colors.white, fontSize: 14),
       ),
       subtitle: _ProgressLine(
-        downloadedBytes: info?.downloadedBytes ?? entry.sizeBytes,
+        downloadedBytes: entry.diskBytes ?? info?.downloadedBytes ?? entry.sizeBytes,
         totalBytes: info?.totalBytes,
       ),
       trailing: IconButton(
@@ -624,7 +624,7 @@ class _ShowGroupTile extends StatelessWidget {
                 style: const TextStyle(color: Colors.white70, fontSize: 13),
               ),
               subtitle: _ProgressLine(
-                downloadedBytes: infos[i].downloadedBytes ?? entries[i].sizeBytes,
+                downloadedBytes: _downloadedBytesFor(entries[i], registry),
                 totalBytes: infos[i].totalBytes,
               ),
               trailing: IconButton(
@@ -669,8 +669,8 @@ class _ReduceGlassRow extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(width: 12),
-            Switch.adaptive(
+            const SizedBox(width: 4),
+            GlassSwitch(
               value: reduce,
               onChanged: VisualEffectsService().setReduceGlass,
             ),

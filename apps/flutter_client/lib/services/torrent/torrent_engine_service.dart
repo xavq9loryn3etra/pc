@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:libtorrent_flutter/libtorrent_flutter.dart';
 import 'torrent_paths.dart';
 
@@ -33,7 +34,9 @@ class TorrentEngineService {
         uploadLimit: _uploadLimitBytesPerSec,
         fetchTrackers: true, // Inject public trackers
         defaultSavePath: savePath,
+        sessionStatePath: await TorrentPaths.engineStateFile(),
       );
+      _keepSessionStateSaved();
 
       // Apply explicit session tuning instead of relying on whatever the
       // native library's own hardcoded defaults happen to be. In particular:
@@ -62,6 +65,29 @@ class TorrentEngineService {
   }
 
   LibtorrentFlutter get engine => LibtorrentFlutter.instance;
+
+  Timer? _stateSaveTimer;
+  AppLifecycleListener? _lifecycle;
+
+  /// Saves the engine's map of the network (its DHT routing table) every
+  /// few minutes and whenever the app leaves the screen — mobile apps are
+  /// usually killed in the background rather than closed — so the next
+  /// launch restores it (see LibtorrentFlutter.init's sessionStatePath)
+  /// and finds peers right away instead of rediscovering the network for
+  /// a minute or more first.
+  void _keepSessionStateSaved() {
+    void save() {
+      try {
+        if (engine.saveSessionState()) print('Torrent engine state saved');
+      } catch (e) {
+        print('Error saving torrent engine state: $e');
+      }
+    }
+
+    _stateSaveTimer =
+        Timer.periodic(const Duration(minutes: 3), (_) => save());
+    _lifecycle = AppLifecycleListener(onHide: save);
+  }
 
   // High-availability public trackers — appended to every magnet so
   // libtorrent can connect to the swarm immediately via announce URLs
@@ -259,9 +285,15 @@ class TorrentEngineService {
 
   /// Full shutdown on app exit
   Future<void> dispose() async {
+    _stateSaveTimer?.cancel();
+    _lifecycle?.dispose();
     try {
-      engine.disposeAll();
-      await engine.dispose();
+      engine.saveSessionState();
+    } catch (_) {}
+    try {
+      // Keeps what was downloaded: closing the app mustn't wipe the
+      // cached downloads Settings > Storage lists and resuming reuses.
+      await engine.dispose(deleteFiles: false);
     } catch (e) {
       print('Error disposing Torrent Engine: $e');
     }

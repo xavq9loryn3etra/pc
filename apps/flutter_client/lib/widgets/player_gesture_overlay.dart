@@ -21,7 +21,14 @@ class PlayerGestureOverlay extends StatefulWidget {
   final ValueChanged<Offset>? onTapAt;
   final VoidCallback? onSwipeUp;
   final ValueChanged<bool>? onDoubleTapSeek;
-  
+
+  /// A finger held still on the screen for [holdDelay] (e.g. to play at 2×
+  /// speed), and its release. A hold is neither a tap nor a volume /
+  /// brightness swipe.
+  final VoidCallback? onHoldStart;
+  final VoidCallback? onHoldEnd;
+  static const holdDelay = Duration(milliseconds: 450);
+
   /// When false, all gesture processing is disabled (e.g. when the episode
   /// drawer is open and should receive all touches).
   final bool enabled;
@@ -33,6 +40,8 @@ class PlayerGestureOverlay extends StatefulWidget {
     this.onTapAt,
     this.onSwipeUp,
     this.onDoubleTapSeek,
+    this.onHoldStart,
+    this.onHoldEnd,
     this.enabled = true,
   });
 
@@ -59,6 +68,11 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
 
   late final AnimationController _fadeController;
   Timer? _fadeTimer;
+
+  // Press-and-hold (see PlayerGestureOverlay.onHoldStart): armed on pointer
+  // down, cancelled by a drag or an early release; _holding once it fired.
+  Timer? _holdTimer;
+  bool _holding = false;
 
   // Double tap seeking state variables
   DateTime? _lastTapTime;
@@ -96,6 +110,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
 
   @override
   void dispose() {
+    _holdTimer?.cancel();
     _fadeTimer?.cancel();
     _seekHideTimer?.cancel();
     _seekFade.dispose();
@@ -114,9 +129,12 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   double _seekRegionWidth(Size size) => size.width * 0.4;
 
   /// One seek step: tells the player, then shows/extends the feedback with
-  /// a fresh ripple from the tap point.
+  /// a fresh ripple from the tap point. Without an [onDoubleTapSeek]
+  /// (e.g. while the video loads) there's no seeking, so no feedback either.
   void _seek(bool isForward, Offset localTap) {
-    widget.onDoubleTapSeek?.call(isForward);
+    final onSeek = widget.onDoubleTapSeek;
+    if (onSeek == null) return;
+    onSeek(isForward);
 
     final size = MediaQuery.of(context).size;
     final regionLeft = isForward ? size.width - _seekRegionWidth(size) : 0.0;
@@ -177,16 +195,37 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
     
     _pointerStart = event.position;
     _isDragging = false;
+
+    _holdTimer?.cancel();
+    if (widget.onHoldStart != null) {
+      _holdTimer = Timer(PlayerGestureOverlay.holdDelay, () {
+        if (!mounted || _pointerStart == null || _isDragging) return;
+        _holding = true;
+        widget.onHoldStart!();
+      });
+    }
+  }
+
+  /// Releases a hold, if one is on — telling the player.
+  void _endHold() {
+    _holdTimer?.cancel();
+    if (!_holding) return;
+    _holding = false;
+    widget.onHoldEnd?.call();
   }
 
   void _onPointerMove(PointerMoveEvent event) {
     if (!widget.enabled || _pointerStart == null) return;
+    // A finger that's holding can wander a little without it turning into
+    // a volume / brightness swipe.
+    if (_holding) return;
 
     final delta = event.position - _pointerStart!;
 
     if (!_isDragging && delta.distance < _dragThreshold) return;
 
-    // First time crossing threshold
+    // First time crossing threshold: a swipe, not a hold.
+    _holdTimer?.cancel();
     if (!_isDragging) {
       // Only activate on primarily-vertical movement
       if (delta.dy.abs() < delta.dx.abs()) {
@@ -266,7 +305,17 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
 
   void _onPointerUp(PointerUpEvent event) {
     if (!widget.enabled) return;
-    
+
+    // Letting go of a hold isn't a tap.
+    if (_holding) {
+      _endHold();
+      _pointerStart = null;
+      _isBottomEdgeSwipe = false;
+      _isDragging = false;
+      return;
+    }
+    _holdTimer?.cancel();
+
     if (!_isDragging && _pointerStart != null && !_isBottomEdgeSwipe) {
       final now = DateTime.now();
       final tapPos = event.position;
@@ -315,6 +364,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
+    _endHold();
     _pointerStart = null;
     _isDragging = false;
     _isBottomEdgeSwipe = false;

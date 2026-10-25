@@ -449,6 +449,9 @@ class TMDBService {
     final String? wikidataId =
         wikidata is String && wikidata.isNotEmpty ? wikidata : null;
 
+    final streamingProviders =
+        _pickStreamingProviders(m['watch/providers'], watchCountry);
+
     return Movie(
       id: base.id,
       title: base.title,
@@ -475,8 +478,8 @@ class TMDBService {
       trailerUrl: trailerUrl,
       imdbId: imdbId,
       wikidataId: wikidataId,
-      streamingProvider:
-          _pickStreamingProvider(m['watch/providers'], watchCountry),
+      streamingProvider: streamingProviders.firstOrNull,
+      otherStreamingProviders: streamingProviders.skip(1).toList(),
     );
   }
 
@@ -486,44 +489,51 @@ class TMDBService {
   // TMDB's own watch page for the title.
   static const _netflixIds = {8, 1796}; // Netflix, Netflix Standard with Ads
 
-  /// The subscription ("flatrate") service streaming a title in [country]
-  /// (see _watchCountry) — Netflix when it's one of several, otherwise
-  /// TMDB's top-ranked one. Only services StreamingLinkService can open
-  /// directly in their app are considered: the button never falls back to
-  /// TMDB, a search page or any other website. Null when there's none.
-  StreamingProvider? _pickStreamingProvider(
+  /// The subscription ("flatrate") services streaming a title in [country]
+  /// (see _watchCountry), the main one first — Netflix when it's one of
+  /// them, otherwise TMDB's top-ranked one — then the rest in TMDB's
+  /// order. Only services StreamingLinkService can open directly in their
+  /// app are considered: the buttons never fall back to TMDB, a search
+  /// page or any other website. One entry per service: plan variants
+  /// ("… with Ads", other regions' listings) collapse into the first.
+  List<StreamingProvider> _pickStreamingProviders(
       dynamic watchProviders, String country) {
-    if (watchProviders is! Map) return null;
+    if (watchProviders is! Map) return const [];
     final results = watchProviders['results'];
-    if (results is! Map) return null;
+    if (results is! Map) return const [];
     final regional = results[country];
-    if (regional is! Map) return null;
+    if (regional is! Map) return const [];
     final flatrate = regional['flatrate'];
-    if (flatrate is! List || flatrate.isEmpty) return null;
+    if (flatrate is! List || flatrate.isEmpty) return const [];
 
     // Already sorted by TMDB's display_priority.
-    final providers = flatrate
-        .whereType<Map>()
-        .where((p) =>
-            p['provider_id'] is int &&
-            p['provider_name'] is String &&
-            StreamingLinkService().supports(p['provider_id'] as int))
-        .toList();
-    if (providers.isEmpty) return null;
-    final chosen = providers.firstWhere(
-      (p) => _netflixIds.contains(p['provider_id']),
-      orElse: () => providers.first,
-    );
-    final id = chosen['provider_id'] as int;
-    final name = chosen['provider_name'] as String;
+    final providers = <StreamingProvider>[];
+    for (final p in flatrate.whereType<Map>()) {
+      final id = p['provider_id'];
+      final name = p['provider_name'];
+      if (id is! int ||
+          name is! String ||
+          !StreamingLinkService().supports(id)) {
+        continue;
+      }
+      // "Netflix Standard with Ads" → "Netflix", "… with Ads" → "…".
+      final label = _netflixIds.contains(id)
+          ? 'Netflix'
+          : name.replaceFirst(
+              RegExp(r'\s+(Standard\s+)?with\s+Ads$', caseSensitive: false),
+              '');
+      if (providers.any((existing) => existing.name == label)) continue;
+      final logo = p['logo_path'];
+      providers.add(StreamingProvider(
+        id: id,
+        name: label,
+        logoUrl: logo is String ? 'https://image.tmdb.org/t/p/w92$logo' : null,
+      ));
+    }
 
-    final logo = chosen['logo_path'];
-    return StreamingProvider(
-      id: id,
-      // "Netflix Standard with Ads" → "Netflix" for the button label.
-      name: _netflixIds.contains(id) ? 'Netflix' : name,
-      logoUrl: logo is String ? 'https://image.tmdb.org/t/p/w92$logo' : null,
-    );
+    final netflix = providers.indexWhere((p) => _netflixIds.contains(p.id));
+    if (netflix > 0) providers.insert(0, providers.removeAt(netflix));
+    return providers;
   }
 
   // Countries TMDB has watch-provider data for (JustWatch's coverage),

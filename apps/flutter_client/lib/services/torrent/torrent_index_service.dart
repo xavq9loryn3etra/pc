@@ -2,13 +2,16 @@ import 'package:dio/dio.dart';
 
 class TorrentStream {
   final String infoHash;
-  final String title;       // Full raw title
-  final String name;        // Parsed torrent name
-  final String? quality;    // Parsed: "4K", "1080p", "720p", etc.
-  final String? size;       // Parsed: "2.1 GB"
-  final String? source;     // Parsed: "RARBG", "YTS", etc.
-  final int? fileIdx;       // File index within the torrent (null for movies)
-  final int? seeders;       // Seeders count
+  final String title; // Full raw title
+  final String name; // Parsed torrent name
+  final String? quality; // Parsed: "4K", "1080p", "720p", etc.
+  final String? size; // Parsed: "2.1 GB"
+  final String? source; // Parsed: "RARBG", "YTS", etc.
+  final int? fileIdx; // File index within the torrent (null for movies)
+  final int? seeders; // Seeders count
+  // Torrentio's languages line: flags and text like "Multi Audio / 🇫🇷".
+  // Empty when unmarked, which usually means English only.
+  final String languages;
 
   TorrentStream({
     required this.infoHash,
@@ -19,6 +22,7 @@ class TorrentStream {
     this.source,
     this.fileIdx,
     this.seeders,
+    this.languages = '',
   });
 
   factory TorrentStream.fromJson(Map<String, dynamic> json) {
@@ -31,8 +35,10 @@ class TorrentStream {
     //   name:  "Torrentio\n4k HDR"  (quality is on line 2 of name)
     //   title: "Inception 2010 PROPER Bluray 2160p...\n👤 122 💾 8.91 GB ⚙️ 1337x\n🇬🇧 / 🇮🇹"
     //          Line 1: Torrent release name
-    //          Line 2: Seeders + Size + Source (all on one line)
-    //          Line 3: (optional) language flags
+    //          (Season packs only: the episode's file inside the pack)
+    //          Then: Seeders + Size + Source (all on one line) — for a pack,
+    //                the size is usually the episode file's, not the pack's
+    //          Last: (optional) languages — flags, "Multi Audio", ...
 
     final titleLines = rawTitle.split('\n');
     final nameLines = rawName.split('\n');
@@ -69,13 +75,19 @@ class TorrentStream {
       }
     }
 
-    // --- Seeders, Size, Source (from title field, line 2) ---
+    // --- Seeders, Size, Source (the title's stats line) ---
     String? size;
     String? source;
     int? seeders;
 
-    // The stats line is line 2 of title (index 1), which contains 👤 seeders 💾 size ⚙️ source
-    final statsLine = titleLines.length > 1 ? titleLines[1] : '';
+    // The stats line holds 👤 seeders 💾 size ⚙️ source. Found by its
+    // markers rather than position: season packs push it down a line.
+    final statsIndex =
+        titleLines.indexWhere((l) => l.contains('👤') || l.contains('💾'));
+    final statsLine = statsIndex >= 0 ? titleLines[statsIndex] : '';
+    final languages = statsIndex >= 0
+        ? titleLines.skip(statsIndex + 1).join(' / ').trim()
+        : '';
 
     // Seeders: 👤 122
     final seederRegExp = RegExp(r'👤\s*(\d+)');
@@ -113,6 +125,7 @@ class TorrentStream {
       source: source,
       fileIdx: fileIdx,
       seeders: seeders,
+      languages: languages,
     );
   }
 }

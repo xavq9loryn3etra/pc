@@ -57,3 +57,111 @@ class GlassBlur extends StatelessWidget {
     );
   }
 }
+
+// The app's frosted glass on top of a [GlassBlur] (as on the details
+// screen's back button and the bottom nav): a 35% black tint with a faint
+// edge.
+const kGlassTint = Color(0x59000000);
+final kGlassEdge = Colors.white.withValues(alpha: 0.12);
+
+/// A round frosted-glass icon button — the back / close buttons over the
+/// player and its episode browser, matching the details screen's.
+class GlassCircleButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  const GlassCircleButton({
+    super.key,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipOval(
+      child: GlassBlur(
+        reducedTint: Colors.black.withValues(alpha: 0.45),
+        child: Material(
+          color: kGlassTint,
+          shape: CircleBorder(side: BorderSide(color: kGlassEdge)),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: onPressed,
+            child: SizedBox(
+              width: 40,
+              height: 40,
+              child: Icon(icon, color: Colors.white, size: 18),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A frosted-glass pill with an optional [icon] before its [label] and an
+/// optional [trailingIcon] after it — the player's bottom-row buttons and
+/// the episode browser's season picker. Null [onPressed] shows it dimmed
+/// and inert.
+class GlassPillButton extends StatelessWidget {
+  final IconData? icon;
+  final String label;
+  final IconData? trailingIcon;
+  final VoidCallback? onPressed;
+
+  const GlassPillButton({
+    super.key,
+    this.icon,
+    required this.label,
+    this.trailingIcon,
+    required this.onPressed,
+  });
+
+  static const _shape = StadiumBorder();
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: onPressed == null ? 0.4 : 1,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: GlassBlur(
+          reducedTint: Colors.black.withValues(alpha: 0.45),
+          child: Material(
+            color: kGlassTint,
+            shape: _shape.copyWith(side: BorderSide(color: kGlassEdge)),
+            child: InkWell(
+              customBorder: _shape,
+              onTap: onPressed,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (icon != null) ...[
+                      Icon(icon, color: Colors.white, size: 16),
+                      const SizedBox(width: 6),
+                    ],
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (trailingIcon != null) ...[
+                      const SizedBox(width: 4),
+                      Icon(trailingIcon, color: Colors.white70, size: 16),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

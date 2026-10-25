@@ -39,6 +39,9 @@ class Movie {
   // Subscription service streaming this title in the user's country (from
   // TMDB's watch providers). Details-only, not persisted.
   final StreamingProvider? streamingProvider;
+  // Any other subscription services streaming it there too, in TMDB's
+  // order (the details screen's "Also on"). Details-only, not persisted.
+  final List<StreamingProvider> otherStreamingProviders;
 
   // History / Progress
   final int? currentSeason;
@@ -103,6 +106,7 @@ class Movie {
     this.imdbId,
     this.wikidataId,
     this.streamingProvider,
+    this.otherStreamingProviders = const [],
     this.currentSeason,
     this.currentEpisode,
     this.progress,

@@ -6,6 +6,7 @@ import '../models/movie.dart';
 import '../theme/app_theme.dart';
 import '../services/saved_movies_service.dart';
 import '../services/feature_flags_service.dart';
+import 'episode_card.dart';
 
 class MoviePoster extends StatefulWidget {
   final Movie movie;
@@ -72,103 +73,124 @@ class _MoviePosterState extends State<MoviePoster> {
             final currentEpisode = hidePlayback
                 ? null
                 : historyMovie?.currentEpisode ?? widget.movie.currentEpisode;
+            final hasProgress = progress != null && progress > 0;
+            final showBadge = widget.movie.type == 'tv' &&
+                currentSeason != null &&
+                currentEpisode != null;
 
+            final posterUrl = widget.movie.posterUrl;
+            final hasPoster = posterUrl != null && posterUrl.isNotEmpty;
+            final isSvg = hasPoster && posterUrl.toLowerCase().endsWith('.svg');
+            final Widget image = !hasPoster
+                ? Container(
+                    color: Colors.grey[900],
+                    child: const Center(
+                      child: Icon(Icons.movie, color: Colors.white24),
+                    ),
+                  )
+                : isSvg
+                    ? SvgPicture.network(
+                        posterUrl,
+                        fit: BoxFit.cover,
+                        alignment: Alignment.topCenter,
+                        placeholderBuilder: (context) => Shimmer.fromColors(
+                          baseColor: Colors.grey[900]!,
+                          highlightColor: Colors.grey[800]!,
+                          child: Container(color: Colors.black),
+                        ),
+                      )
+                    : CachedNetworkImage(
+                        imageUrl: posterUrl,
+                        fit: BoxFit.cover,
+                        alignment: Alignment.topCenter,
+                        // Multiply by 1.5 to ensure sharpness (supersample slightly)
+                        memCacheHeight: ((widget.height == double.infinity
+                                    ? 400
+                                    : widget.height) *
+                                MediaQuery.of(context).devicePixelRatio *
+                                1.5)
+                            .toInt(),
+                        placeholder: (context, url) => Shimmer.fromColors(
+                          baseColor: Colors.grey[900]!,
+                          highlightColor: Colors.grey[800]!,
+                          child: Container(color: Colors.black),
+                        ),
+                        errorWidget: (context, url, error) => Container(
+                          color: Colors.grey[900],
+                          child: const Center(
+                            child: Icon(
+                              Icons.broken_image,
+                              color: Colors.white24,
+                            ),
+                          ),
+                        ),
+                      );
+
+            if (!showBadge && !hasProgress) return image;
+
+            // Watch history, in the episode cards' style (see EpisodeCard):
+            // the poster melts at the bottom into a blurred, darkened copy
+            // of itself, with the progress bar and "S1 · E3" on it.
             return Stack(
               fit: StackFit.expand,
               children: [
-                (widget.movie.posterUrl != null &&
-                        widget.movie.posterUrl!.isNotEmpty)
-                    ? (widget.movie.posterUrl!.toLowerCase().endsWith('.svg')
-                        ? SvgPicture.network(
-                            widget.movie.posterUrl!,
-                            fit: BoxFit.cover,
-                            alignment: Alignment.topCenter,
-                            placeholderBuilder: (context) => Shimmer.fromColors(
-                              baseColor: Colors.grey[900]!,
-                              highlightColor: Colors.grey[800]!,
-                              child: Container(color: Colors.black),
+                EpisodeBackdrop(image: hasPoster && !isSvg ? posterUrl : null),
+                ShaderMask(
+                  blendMode: BlendMode.dstIn,
+                  shaderCallback: (rect) => const LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.white, Colors.white, Colors.transparent],
+                    stops: [0, 0.68, 0.88],
+                  ).createShader(rect),
+                  child: image,
+                ),
+                Positioned(
+                  left: 8,
+                  right: 8,
+                  bottom: 8,
+                  // One text line high whether or not there's an "S1 · E3"
+                  // in it, so the bar sits at the same height on movie and
+                  // show cards side by side.
+                  height: MediaQuery.textScalerOf(context).scale(11) * 1.2,
+                  child: Row(
+                    children: [
+                      if (hasProgress)
+                        Expanded(
+                          child: Container(
+                            height: 3,
+                            decoration: BoxDecoration(
+                              color: Colors.white24,
+                              borderRadius: BorderRadius.circular(2),
                             ),
-                          )
-                        : CachedNetworkImage(
-                            imageUrl: widget.movie.posterUrl!,
-                            fit: BoxFit.cover,
-                            alignment: Alignment.topCenter,
-                            // Multiply by 1.5 to ensure sharpness (supersample slightly)
-                            memCacheHeight: ((widget.height == double.infinity
-                                        ? 400
-                                        : widget.height) *
-                                    MediaQuery.of(context).devicePixelRatio *
-                                    1.5)
-                                .toInt(),
-                            placeholder: (context, url) => Shimmer.fromColors(
-                              baseColor: Colors.grey[900]!,
-                              highlightColor: Colors.grey[800]!,
-                              child: Container(color: Colors.black),
-                            ),
-                            errorWidget: (context, url, error) => Container(
-                              color: Colors.grey[900],
-                              child: const Center(
-                                child: Icon(
-                                  Icons.broken_image,
-                                  color: Colors.white24,
+                            alignment: Alignment.centerLeft,
+                            child: FractionallySizedBox(
+                              widthFactor: progress.clamp(0.0, 1.0),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: AppTheme.primaryColor,
+                                  borderRadius: BorderRadius.circular(2),
                                 ),
                               ),
                             ),
-                          ))
-                    : Container(
-                        color: Colors.grey[900],
-                        child: const Center(
-                          child: Icon(Icons.movie, color: Colors.white24),
+                          ),
                         ),
-                      ),
-                // History Badge (S1 E1)
-                if (widget.movie.type == 'tv' && currentSeason != null && currentEpisode != null)
-                  Positioned(
-                    bottom: (progress != null && progress > 0) ? 18 : 8,
-                    right: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.8),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: Colors.white24, width: 0.5),
-                      ),
-                      child: Text(
-                        'S$currentSeason E$currentEpisode',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
+                      if (showBadge) ...[
+                        if (hasProgress) const SizedBox(width: 6),
+                        Text(
+                          'S$currentSeason · E$currentEpisode',
+                          maxLines: 1,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            height: 1.2,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.white60,
+                          ),
                         ),
-                      ),
-                    ),
+                      ],
+                    ],
                   ),
-
-                // Progress Bar
-                if (progress != null && progress > 0)
-                  Positioned(
-                    bottom: 6,
-                    left: 12,
-                    right: 12,
-                    child: Container(
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color: Colors.black54,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: FractionallySizedBox(
-                          alignment: Alignment.centerLeft,
-                          widthFactor: progress.clamp(0.0, 1.0),
-                          child: Container(color: AppTheme.primaryColor),
-                        ),
-                      ),
-                    ),
-                  ),
+                ),
               ],
             );
           },

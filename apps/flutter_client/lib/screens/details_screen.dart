@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -8,7 +7,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:dio/dio.dart';
 import '../theme/app_theme.dart';
 import '../widgets/skeletons.dart';
-import '../widgets/shimmer_loader.dart';
 import '../models/movie.dart';
 import '../services/tmdb_service.dart';
 import '../services/scraper_service.dart';
@@ -24,10 +22,14 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:ui'; // For BackdropFilter
 import '../widgets/custom_app_bar.dart';
+import '../widgets/glass_blur.dart';
 import '../widgets/glass_bubble_bar.dart';
 import '../widgets/details_overview.dart';
 import '../widgets/episode_card.dart';
 import '../widgets/marquee_text.dart';
+import '../widgets/quality_option_list.dart';
+import '../widgets/season_picker.dart';
+import '../widgets/image_precache.dart';
 
 class DetailsScreen extends StatefulWidget {
   final Movie movie;
@@ -49,6 +51,13 @@ class DetailsScreen extends StatefulWidget {
 
 class _DetailsScreenState extends State<DetailsScreen> {
   Movie? _details;
+  // Movies only: the Play popup's torrents, fetched as soon as the details
+  // load so the popup can list the qualities straight away (see
+  // _openMovie). Null until then, or when playback is hidden.
+  Future<List<TorrentStream>>? _movieStreams;
+  // The other services streaming this title that have a direct link to it
+  // (see _loadAlsoOn) — the "Also on" logos under the buttons.
+  List<StreamingProvider> _alsoOn = const [];
   bool _loading = true;
   // Skeleton reveal stages after _loading turns false: fading out, then
   // removed (see _revealOverSkeleton).
@@ -238,6 +247,64 @@ class _DetailsScreenState extends State<DetailsScreen> {
   /// Splits the Play pill so [provider]'s logo sits at its right end,
   /// behind a thin divider; unchanged when there's no provider. Either way
   /// the pill's ripples are hosted by a _PillInk.
+  /// Works out which of [m]'s other streaming services ("Also on") can
+  /// open it directly — only those get a logo, so none of them is a dead
+  /// button. One Wikidata lookup covers every service, and it's usually
+  /// already in flight from the main service's prefetch.
+  Future<void> _loadAlsoOn(Movie m) async {
+    final others = m.otherStreamingProviders;
+    final wikidataId = m.wikidataId;
+    if (others.isEmpty || wikidataId == null) return;
+    final urls = await Future.wait([
+      for (final p in others)
+        StreamingLinkService().directUrl(
+          wikidataId: wikidataId,
+          providerId: p.id,
+          isTv: m.type == 'tv',
+        ),
+    ]);
+    if (!mounted) return;
+    setState(() => _alsoOn = [
+          for (var i = 0; i < others.length; i++)
+            if (urls[i] != null) others[i],
+        ]);
+  }
+
+  /// The quiet line under the buttons: "Also on [logo] [logo] · " — the
+  /// other services streaming this title, each opening it in its own app
+  /// like the main service's button — then the JustWatch credit TMDB
+  /// requires for watch-provider data.
+  Widget _buildStreamingCredit() {
+    final style = TextStyle(
+      fontSize: 11,
+      color: Colors.white.withValues(alpha: 0.4),
+    );
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      runSpacing: 6,
+      children: [
+        if (_alsoOn.isNotEmpty) ...[
+          Text('Also on', style: style),
+          const SizedBox(width: 4),
+          for (final p in _alsoOn)
+            Tooltip(
+              message: 'Watch on ${p.name}',
+              child: InkWell(
+                onTap: () => _openProvider(p),
+                borderRadius: BorderRadius.circular(6),
+                child: Padding(
+                  padding: const EdgeInsets.all(3),
+                  child: _ProviderLogo(provider: p, size: 20),
+                ),
+              ),
+            ),
+          Text('  ·  ', style: style),
+        ],
+        Text('Streaming info by JustWatch', style: style),
+      ],
+    );
+  }
+
   Widget _withProviderSegment(StreamingProvider? provider, Widget play) {
     if (provider == null) return _PillInk(child: play);
     return _PillInk(
@@ -312,6 +379,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
         isTv: loaded.type == 'tv',
       );
     }
+    // Waited for below with the rest, so the "Also on" row is there when
+    // the page appears instead of popping in after.
+    final alsoOn = _loadAlsoOn(loaded);
 
     // Still behind the skeleton (_loading stays true): store the details
     // and pick the starting season, then keep the skeleton up while the
@@ -319,6 +389,16 @@ class _DetailsScreenState extends State<DetailsScreen> {
     // complete instead of filling in piece by piece.
     setState(() {
       _details = d ?? widget.movie;
+
+      // Look the movie's torrents up in the background now, rather than
+      // when Play is pressed — Torrentio can take several seconds.
+      if (_details!.type == 'movie' &&
+          !FeatureFlagsService().hidePlayback.value) {
+        _movieStreams = StreamResolver().getAvailableStreams(
+          imdbId: _details!.imdbId ?? _details!.id,
+          type: _details!.type,
+        );
+      }
 
       // Init Season 1 if TV
       if (_details?.type == 'tv' &&
@@ -339,6 +419,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
         _preloadHeader(_details!),
         if (_selectedSeason != null)
           _loadSeasonDetails(_selectedSeason!.seasonNumber),
+        alsoOn,
       ]).timeout(_maxPreloadWait);
     } catch (_) {
       // Timed out or an image failed: show the page regardless.
@@ -380,6 +461,16 @@ class _DetailsScreenState extends State<DetailsScreen> {
           CachedNetworkImageProvider(logo),
         ),
         context,
+      ));
+    }
+    // The movie popup's blurred background (see _openMovie): the same
+    // backdrop decoded tiny — nearly free once it's downloaded — so the
+    // popup doesn't open on the bare dark fallback and fill in after.
+    if (m.type != 'tv') {
+      jobs.add(precacheNetworkImage(
+        context,
+        backdrop,
+        cacheWidth: EpisodeBackdrop.cacheWidth,
       ));
     }
     await Future.wait(jobs);
@@ -501,23 +592,23 @@ class _DetailsScreenState extends State<DetailsScreen> {
     );
   }
 
-  /// The movie's popup (the Play button): the movie in the episode cards'
-  /// styling, over its torrents and the web servers — the same sheet as
-  /// an episode's (see _openEpisode).
+  /// The movie's popup (the Play button): just its qualities, on the
+  /// episode popup's blurred backdrop (see _openEpisode) — the details
+  /// screen behind it already shows everything about the movie.
   void _openMovie() {
-    final m = _details ?? widget.movie;
+    // The header's own backdrop, preloaded tiny in _preloadHeader.
+    final backdrop = _backdropUrlFor(_details ?? widget.movie);
     _playWithTorrent(
-      header: MovieDetailHeader(
-        movie: m,
-        progress: SavedMoviesService()
-            .getMovieFromHistory(widget.movie.id)
-            ?.progress,
-      ),
-      backgroundImage: m.backdrop ?? m.posterUrl,
+      backgroundImage: backdrop.isEmpty ? null : backdrop,
+      streams: _movieStreams,
     );
   }
 
-  void _playWithTorrent({Widget? header, String? backgroundImage}) async {
+  void _playWithTorrent({
+    Widget? header,
+    String? backgroundImage,
+    Future<List<TorrentStream>>? streams,
+  }) async {
     if (_details == null) return;
     if (_isSelectionUnreleased()) {
       _showNotReleasedMessage();
@@ -550,6 +641,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           },
           header: header,
           backgroundImage: backgroundImage,
+          prefetchedStreams: streams,
         );
       },
     );
@@ -618,56 +710,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     }
   }
 
-  Widget _buildAppBarTitle(Movie m) {
-    if (m.logoUrl != null) {
-      // Fixed width+height (not just a maxWidth cap) — CachedNetworkImage/
-      // SvgPicture.network report zero size while their first frame is
-      // still loading (octo_image's placeholder for the "loading" state is
-      // a bare zero-size Container), so a maxWidth-only box collapsed to
-      // nothing and then snapped to full size the instant the logo finished
-      // decoding — only on first load, since after that it's served
-      // synchronously from Flutter's image cache. A tight box keeps the
-      // space stable from the very first frame, loaded or not.
-      //
-      // The box is sized to the logo's own aspect ratio (from TMDB) rather
-      // than a flat 120 wide: the title bubble wraps this box, so a squarer
-      // logo contain-fitted into 120×28 left the bubble with a long empty
-      // tail. Capped at 120 wide; unknown ratio falls back to 120.
-      final ratio = m.logoAspectRatio;
-      final width = ratio == null ? 120.0 : math.min(120.0, 28 * ratio);
-      if (m.logoUrl!.toLowerCase().endsWith('.svg')) {
-        return SizedBox(
-          width: width,
-          height: 28,
-          child: SvgPicture.network(
-            m.logoUrl!,
-            alignment: Alignment.centerLeft,
-            fit: BoxFit.contain,
-          ),
-        );
-      } else {
-        return SizedBox(
-          width: width,
-          height: 28,
-          child: CachedNetworkImage(
-            imageUrl: m.logoUrl!,
-            memCacheHeight:
-                (28 * MediaQuery.of(context).devicePixelRatio).toInt(),
-            alignment: Alignment.centerLeft,
-            fit: BoxFit.contain,
-          ),
-        );
-      }
-    }
-    return Text(
-      m.title,
-      style: const TextStyle(
-        fontSize: 18,
-        fontWeight: FontWeight.bold,
-        color: Colors.white,
-      ),
-    );
-  }
+  Widget _buildAppBarTitle(Movie m) => MovieTitleLogo(movie: m);
 
   @override
   Widget build(BuildContext context) {
@@ -1248,62 +1291,42 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         // on pill keeps room for its label.
                                         if (m.trailerUrl != null &&
                                             provider != null)
-                                          Container(
-                                            height: 50,
+                                          _GlassActionButton(
                                             width: 50,
-                                            decoration: BoxDecoration(
-                                              color: Colors.white10,
-                                              borderRadius:
-                                                  BorderRadius.circular(30),
-                                            ),
-                                            child: InkWell(
-                                              onTap: () =>
-                                                  _openTrailer(m.trailerUrl!),
-                                              borderRadius:
-                                                  BorderRadius.circular(30),
-                                              child: const Icon(
-                                                Icons.movie_creation_outlined,
-                                                color: Colors.white,
-                                                semanticLabel: 'Trailer',
-                                              ),
+                                            onTap: () =>
+                                                _openTrailer(m.trailerUrl!),
+                                            child: const Icon(
+                                              Icons.movie_creation_outlined,
+                                              color: Colors.white,
+                                              semanticLabel: 'Trailer',
                                             ),
                                           )
                                         else if (m.trailerUrl != null)
                                           Expanded(
                                             flex: 2,
-                                            child: Container(
-                                              height: 50,
-                                              decoration: BoxDecoration(
-                                                color: Colors.white10,
-                                                borderRadius:
-                                                    BorderRadius.circular(30),
-                                              ),
-                                              child: InkWell(
-                                                onTap: () =>
-                                                    _openTrailer(m.trailerUrl!),
-                                                borderRadius:
-                                                    BorderRadius.circular(30),
-                                                child: const Row(
-                                                  mainAxisAlignment:
-                                                      MainAxisAlignment.center,
-                                                  children: [
-                                                    Icon(
-                                                      Icons
-                                                          .movie_creation_outlined,
+                                            child: _GlassActionButton(
+                                              onTap: () =>
+                                                  _openTrailer(m.trailerUrl!),
+                                              child: const Row(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                children: [
+                                                  Icon(
+                                                    Icons
+                                                        .movie_creation_outlined,
+                                                    color: Colors.white,
+                                                  ),
+                                                  SizedBox(width: 8),
+                                                  Text(
+                                                    'Trailer',
+                                                    style: TextStyle(
                                                       color: Colors.white,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      fontSize: 16,
                                                     ),
-                                                    SizedBox(width: 8),
-                                                    Text(
-                                                      'Trailer',
-                                                      style: TextStyle(
-                                                        color: Colors.white,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        fontSize: 16,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
+                                                  ),
+                                                ],
                                               ),
                                             ),
                                           ),
@@ -1329,48 +1352,27 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         //   ),
                                         // ),
                                         // Like Button — moved here from the AppBar.
-                                        Container(
-                                          height: 50,
+                                        _GlassActionButton(
                                           width: 50,
-                                          decoration: BoxDecoration(
-                                            color: Colors.white10,
-                                            borderRadius:
-                                                BorderRadius.circular(30),
-                                          ),
-                                          child: InkWell(
-                                            onTap: _toggleFavorite,
-                                            borderRadius:
-                                                BorderRadius.circular(30),
-                                            child: Icon(
-                                              SavedMoviesService()
-                                                      .isFavorite(
-                                                          widget.movie.id)
-                                                  ? Icons.favorite
-                                                  : Icons.favorite_border,
-                                              color: SavedMoviesService()
-                                                      .isFavorite(
-                                                          widget.movie.id)
-                                                  ? AppTheme.primaryColor
-                                                  : Colors.white,
-                                            ),
+                                          onTap: _toggleFavorite,
+                                          child: Icon(
+                                            SavedMoviesService()
+                                                    .isFavorite(widget.movie.id)
+                                                ? Icons.favorite
+                                                : Icons.favorite_border,
+                                            color: SavedMoviesService()
+                                                    .isFavorite(widget.movie.id)
+                                                ? AppTheme.primaryColor
+                                                : Colors.white,
                                           ),
                                         ),
                                       ],
                                     ),
-                                    // TMDB requires crediting JustWatch for
-                                    // watch-provider data.
                                     if (provider != null)
                                       Padding(
                                         padding: const EdgeInsets.only(
                                             top: 10, left: 4),
-                                        child: Text(
-                                          'Streaming info by JustWatch',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            color: Colors.white
-                                                .withValues(alpha: 0.4),
-                                          ),
-                                        ),
+                                        child: _buildStreamingCredit(),
                                       ),
                                   ],
                                 );
@@ -1411,112 +1413,30 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         fontWeight: FontWeight.bold,
                                       ),
                                     ),
-                                    // Minimalist Netflix-style Season Selector
-                                    Builder(
-                                      builder: (btnContext) {
-                                        return TextButton.icon(
-                                          style: TextButton.styleFrom(
-                                            backgroundColor:
-                                                Colors.white.withOpacity(0.08),
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(6),
-                                            ),
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 12, vertical: 6),
-                                          ),
-                                          icon: const Icon(Icons.layers_rounded,
-                                              color: Colors.white, size: 16),
-                                          label: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(
-                                                _selectedSeason?.seasonNumber ==
-                                                        0
-                                                    ? 'Specials'
-                                                    : 'Season ${_selectedSeason?.seasonNumber ?? 1}',
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontWeight: FontWeight.w600,
-                                                  fontSize: 11,
-                                                ),
-                                              ),
-                                              const SizedBox(width: 4),
-                                              const Icon(
-                                                  Icons.keyboard_arrow_down,
-                                                  color: Colors.white54,
-                                                  size: 14),
-                                            ],
-                                          ),
-                                          onPressed: () async {
-                                            final RenderBox renderBox =
-                                                btnContext.findRenderObject()
-                                                    as RenderBox;
-                                            final offset = renderBox
-                                                .localToGlobal(Offset.zero);
-                                            final val = await showMenu<int>(
-                                              context: context,
-                                              position: RelativeRect.fromLTRB(
-                                                offset.dx,
-                                                offset.dy +
-                                                    renderBox.size.height +
-                                                    4,
-                                                offset.dx +
-                                                    renderBox.size.width,
-                                                0,
-                                              ),
-                                              color: Colors.grey[900],
-                                              shape: RoundedRectangleBorder(
-                                                  borderRadius:
-                                                      BorderRadius.circular(8)),
-                                              items: m.seasons!
-                                                  .where(
-                                                    (s) =>
-                                                        s.seasonNumber > 0 ||
-                                                        s.seasonNumber ==
-                                                            _selectedSeason
-                                                                ?.seasonNumber,
-                                                  )
-                                                  .map((s) => PopupMenuItem(
-                                                        value: s.seasonNumber,
-                                                        height: 40,
-                                                        child: Text(
-                                                          s.seasonNumber == 0
-                                                              ? 'Specials'
-                                                              : 'Season ${s.seasonNumber}',
-                                                          style: TextStyle(
-                                                            color: s.seasonNumber ==
-                                                                    _selectedSeason
-                                                                        ?.seasonNumber
-                                                                ? AppTheme
-                                                                    .primaryColor
-                                                                : Colors.white,
-                                                            fontSize: 13,
-                                                            fontWeight: s.seasonNumber ==
-                                                                    _selectedSeason
-                                                                        ?.seasonNumber
-                                                                ? FontWeight
-                                                                    .bold
-                                                                : FontWeight
-                                                                    .w500,
-                                                          ),
-                                                        ),
-                                                      ))
-                                                  .toList(),
-                                            );
-                                            if (val != null) {
-                                              setState(() {
-                                                _selectedSeason =
-                                                    m.seasons!.firstWhere(
-                                                  (s) => s.seasonNumber == val,
-                                                );
-                                                _selectedEpisode =
-                                                    null; // Reset episode
-                                              });
-                                              _loadSeasonDetails(val);
-                                            }
-                                          },
-                                        );
+                                    // Season picker — shared with the
+                                    // player's episode browser.
+                                    SeasonPicker(
+                                      seasons: m.seasons!
+                                          .where(
+                                            (s) =>
+                                                s.seasonNumber > 0 ||
+                                                s.seasonNumber ==
+                                                    _selectedSeason
+                                                        ?.seasonNumber,
+                                          )
+                                          .toList(),
+                                      current:
+                                          _selectedSeason?.seasonNumber ?? 1,
+                                      onSelected: (val) {
+                                        setState(() {
+                                          _selectedSeason =
+                                              m.seasons!.firstWhere(
+                                            (s) => s.seasonNumber == val,
+                                          );
+                                          _selectedEpisode =
+                                              null; // Reset episode
+                                        });
+                                        _loadSeasonDetails(val);
                                       },
                                     ),
                                   ],
@@ -1591,9 +1511,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                       fallbackImage: m.backdrop,
                                       progress: currentProgress,
                                       hidePlayback: hidePlayback,
-                                      // The episode popup — also for
-                                      // unaired episodes and with playback
-                                      // hidden (see _openEpisode).
+                                      // The episode popup — also with
+                                      // playback hidden (see _openEpisode).
+                                      // Unaired episodes' cards are greyed
+                                      // out and ignore taps (EpisodeCard).
                                       onTap: () => _openEpisode(ep),
                                     );
                                   },
@@ -1665,11 +1586,17 @@ class TorrentQualitySelectorSheet extends StatefulWidget {
       List<TorrentStream> updatedStreams)? onStreamSelected;
   final bool resolveOnSelect;
 
-  /// Makes this the episode / movie popup: [header] (a DetailHeader)
-  /// scrolls above the sources, all on an EpisodeSheetFrame showing
-  /// [backgroundImage] (the still / backdrop) blurred behind.
+  /// Makes this the episode / movie popup: the sources on an
+  /// EpisodeSheetFrame showing [backgroundImage] (the still / backdrop)
+  /// blurred behind, with [header] (a DetailHeader — episodes only)
+  /// scrolling above them.
   final Widget? header;
   final String? backgroundImage;
+
+  /// The torrents, if the caller already started looking them up (the
+  /// movie popup does, on page load). Looked up afresh when null — or when
+  /// that lookup came back empty, which is also how a failed one ends.
+  final Future<List<TorrentStream>>? prefetchedStreams;
 
   const TorrentQualitySelectorSheet({
     required this.imdbId,
@@ -1685,7 +1612,12 @@ class TorrentQualitySelectorSheet extends StatefulWidget {
     this.resolveOnSelect = true,
     this.header,
     this.backgroundImage,
+    this.prefetchedStreams,
   });
+
+  /// "Alternative Web Servers (No Torrenting)" is hidden for now; flip this
+  /// to bring the menu back. (EpisodeBrowser has the same switch.)
+  static const bool showWebServers = false;
 
   @override
   State<TorrentQualitySelectorSheet> createState() =>
@@ -1695,8 +1627,15 @@ class TorrentQualitySelectorSheet extends StatefulWidget {
 class _TorrentQualitySelectorSheetState
     extends State<TorrentQualitySelectorSheet> {
   List<TorrentStream>? _streams;
+  // What the sheet actually lists: one entry per quality, each holding its
+  // torrents best-first (see StreamResolver.qualityOptions).
+  List<QualityOption>? _options;
+  int? _recommendedTier;
   bool _loading = true;
   String? _error;
+  // The quality being started, and how that's going — shown on its row
+  // (see QualityOptionList.starting).
+  QualityOption? _startingOption;
   String? _resolvingMessage;
   // Why the last tapped stream failed to start. Shown inside the sheet —
   // a SnackBar would land on the details screen *behind* this modal sheet.
@@ -1717,14 +1656,25 @@ class _TorrentQualitySelectorSheetState
           : 'last_played_torrent_${widget.imdbId}';
       _lastPlayedHash = prefs.getString(key);
 
-      final list = await widget.resolver.getAvailableStreams(
-        imdbId: widget.imdbId,
-        type: widget.type,
-        season: widget.season,
-        episode: widget.episode,
-      );
+      final prefetched = widget.prefetchedStreams == null
+          ? null
+          : await widget.prefetchedStreams;
+      final list = prefetched != null && prefetched.isNotEmpty
+          // A copy: the reordering below mustn't change the shared list.
+          ? List.of(prefetched)
+          : await widget.resolver.getAvailableStreams(
+              imdbId: widget.imdbId,
+              type: widget.type,
+              season: widget.season,
+              episode: widget.episode,
+            );
 
       if (mounted) {
+        // The resolver sorts its overall pick first — that's the quality
+        // to recommend. (Read before the last-played reordering below.)
+        final recommendedTier =
+            list.isEmpty ? null : StreamResolver.tierOf(list.first);
+
         if (_lastPlayedHash != null && list.isNotEmpty) {
           final idx = list.indexWhere((s) =>
               s.infoHash.toLowerCase() == _lastPlayedHash!.toLowerCase());
@@ -1736,6 +1686,11 @@ class _TorrentQualitySelectorSheetState
 
         setState(() {
           _streams = list;
+          _options = StreamResolver.qualityOptions(
+            list,
+            preferHash: _lastPlayedHash,
+          );
+          _recommendedTier = recommendedTier;
           _loading = false;
         });
       }
@@ -1749,7 +1704,8 @@ class _TorrentQualitySelectorSheetState
     }
   }
 
-  void _selectStream(TorrentStream stream) async {
+  void _selectQuality(QualityOption option) async {
+    final stream = option.best;
     if (widget.onStreamSelected != null && !widget.resolveOnSelect) {
       Navigator.pop(context);
       widget.onStreamSelected!(
@@ -1762,17 +1718,22 @@ class _TorrentQualitySelectorSheetState
     }
 
     setState(() {
-      _resolvingMessage = 'Connecting to peers & starting stream...';
+      _startingOption = option;
+      _resolvingMessage = 'Connecting…';
       _resolveError = null;
     });
 
     try {
-      // Resolve the tapped stream, automatically trying the next-best
-      // candidates if it fails or times out — Torrentio's seed counts are
-      // often stale, so one dead pick shouldn't send the user straight to
-      // the web-embed fallback when another torrent would have worked.
-      final resolved = await widget.resolver
-          .resolveWithFallback(stream, _streams ?? [stream]);
+      // Start the quality's best torrent, automatically trying its others
+      // if it fails or times out — Torrentio's seed counts are often
+      // stale, so one dead pick shouldn't be a dead end. Only the same
+      // quality is tried, so the user never silently gets a lower one.
+      // Closing the popup (unmounting this) abandons the start.
+      final resolved = await widget.resolver.resolveWithFallback(
+        stream,
+        option.streams,
+        isCancelled: () => !mounted,
+      );
       final resolvedStream = resolved.stream;
       final result = resolved.result;
 
@@ -1799,6 +1760,13 @@ class _TorrentQualitySelectorSheetState
           totalBytes: TorrentDownloadRegistry.parseSizeBytes(resolvedStream.size),
         ),
       );
+
+      // Closed during the saves above: stop the torrent, and don't count
+      // it as watched.
+      if (!mounted) {
+        widget.resolver.pause(result.torrentId);
+        return;
+      }
 
       // Add to history
       await SavedMoviesService().addToHistory(
@@ -1838,13 +1806,16 @@ class _TorrentQualitySelectorSheetState
           ),
         ),
       );
+    } on ResolveCancelledException {
+      // The popup was closed — nothing to report.
     } catch (e) {
       if (mounted) {
         setState(() {
+          _startingOption = null;
           _resolvingMessage = null;
-          _resolveError = 'Couldn\'t start this source: '
+          _resolveError = 'Couldn\'t start ${option.name}: '
               '${e.toString().replaceFirst(RegExp(r'^(Exception|Bad state): '), '')}\n'
-              'Try another source, or use "Alternative Web Servers" below.';
+              'Try another quality.';
         });
       }
     }
@@ -1854,36 +1825,42 @@ class _TorrentQualitySelectorSheetState
   Widget build(BuildContext context) {
     final isLandscape =
         MediaQuery.of(context).orientation == Orientation.landscape;
-    // The episode popup's header takes room, so it opens taller.
-    final hasHeader = widget.header != null;
-    final double initialSize = isLandscape || hasHeader ? 0.85 : 0.6;
-    final double minSize = isLandscape ? 0.45 : 0.4;
-    final double maxSize = isLandscape || hasHeader ? 0.95 : 0.9;
     final bottomPadding =
         (isLandscape ? 10 : 20) + MediaQuery.of(context).padding.bottom;
 
-    return DraggableScrollableSheet(
-      initialChildSize: initialSize,
-      minChildSize: minSize,
-      maxChildSize: maxSize,
-      expand: false,
-      builder: (context, scrollController) {
-        // The episode popup (see EpisodeDetailHeader): the episode in its
-        // card styling scrolls along with the sources below it, on the
-        // cards' blurred-still backdrop.
-        if (hasHeader) {
-          return EpisodeSheetFrame(
-            image: widget.backgroundImage,
+    // The episode / movie popup: the qualities on the cards' blurred-still
+    // backdrop, below the episode's header (see DetailHeader) if there is
+    // one. Sized to its content, up to most of the screen (like
+    // EpisodeInfoSheet), so a short popup isn't padded out with empty
+    // space — growing smoothly as the qualities load in.
+    if (widget.header != null || widget.backgroundImage != null) {
+      return EpisodeSheetFrame(
+        image: widget.backgroundImage,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight:
+                MediaQuery.sizeOf(context).height * (isLandscape ? 0.95 : 0.9),
+          ),
+          child: AnimatedSize(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
+                Flexible(
                   child: CustomScrollView(
-                    controller: scrollController,
+                    shrinkWrap: true,
+                    // Pulling past the top drags the sheet (EpisodeSheetFrame).
+                    physics: const ClampingScrollPhysics(),
                     slivers: [
-                      SliverToBoxAdapter(child: widget.header),
+                      if (widget.header != null)
+                        SliverToBoxAdapter(child: widget.header),
                       SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                        // Without a header, clear the frame's drag handle.
+                        padding: EdgeInsets.fromLTRB(
+                            20, widget.header != null ? 16 : 32, 20, 0),
                         sliver: SliverToBoxAdapter(
                           child: _buildTitleRow(context, closeButton: false),
                         ),
@@ -1895,16 +1872,27 @@ class _TorrentQualitySelectorSheetState
                     ],
                   ),
                 ),
-                Padding(
-                  padding: EdgeInsets.fromLTRB(
-                      20, isLandscape ? 8 : 12, 20, bottomPadding),
-                  child: _buildWebServersMenu(context),
-                ),
+                if (TorrentQualitySelectorSheet.showWebServers)
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                        20, isLandscape ? 8 : 12, 20, bottomPadding),
+                    child: _buildWebServersMenu(context),
+                  )
+                else
+                  SizedBox(height: bottomPadding),
               ],
             ),
-          );
-        }
+          ),
+        ),
+      );
+    }
 
+    return DraggableScrollableSheet(
+      initialChildSize: isLandscape ? 0.85 : 0.6,
+      minChildSize: isLandscape ? 0.45 : 0.4,
+      maxChildSize: isLandscape ? 0.95 : 0.9,
+      expand: false,
+      builder: (context, scrollController) {
         return Container(
           decoration: const BoxDecoration(
             color: Color(0xFF0C0C0C),
@@ -1943,8 +1931,10 @@ class _TorrentQualitySelectorSheetState
                   slivers: [_buildSources(isLandscape)],
                 ),
               ),
-              SizedBox(height: isLandscape ? 8 : 16),
-              _buildWebServersMenu(context),
+              if (TorrentQualitySelectorSheet.showWebServers) ...[
+                SizedBox(height: isLandscape ? 8 : 16),
+                _buildWebServersMenu(context),
+              ],
             ],
           ),
         );
@@ -1955,20 +1945,7 @@ class _TorrentQualitySelectorSheetState
   Widget _buildTitleRow(BuildContext context, {required bool closeButton}) {
     return Row(
       children: [
-        Icon(Icons.bolt, color: AppTheme.primaryColor, size: 22),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            _resolvingMessage != null
-                ? 'Preparing Playback'
-                : 'Select Stream Quality',
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-            ),
-          ),
-        ),
+        const Expanded(child: QualitySectionLabel('Choose quality')),
         if (closeButton && _resolvingMessage == null)
           IconButton(
             icon: const Icon(Icons.close, color: Colors.white38, size: 20),
@@ -1979,42 +1956,16 @@ class _TorrentQualitySelectorSheetState
   }
 
   /// The sheet's scrolling body, as a sliver: the last start attempt's
-  /// error, then the current state — preparing playback, searching, an
-  /// error, nothing found, or the list of streams.
+  /// error, then the current state — searching, an error, nothing found,
+  /// or the qualities (which also show a start in progress).
   Widget _buildSources(bool isLandscape) {
     Widget message(List<Widget> children) => SliverToBoxAdapter(
           child: Column(mainAxisSize: MainAxisSize.min, children: children),
         );
 
     final Widget state;
-    if (_resolvingMessage != null) {
-      state = message([
-        SizedBox(height: isLandscape ? 12 : 24),
-        const Center(child: ShimmerLoader(size: 90)),
-        const SizedBox(height: 16),
-        Center(
-          child: Text(
-            _resolvingMessage!,
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white70, fontSize: 14),
-          ),
-        ),
-        SizedBox(height: isLandscape ? 16 : 32),
-      ]);
-    } else if (_loading) {
-      state = message([
-        SizedBox(height: isLandscape ? 20 : 40),
-        const Center(child: ShimmerLoader(size: 90)),
-        const SizedBox(height: 16),
-        const Center(
-          child: Text(
-            'Searching peer networks for torrents...',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white54, fontSize: 13),
-          ),
-        ),
-        SizedBox(height: isLandscape ? 20 : 40),
-      ]);
+    if (_loading) {
+      state = const SliverToBoxAdapter(child: QualityOptionListSkeleton());
     } else if (_error != null) {
       state = message([
         SizedBox(height: isLandscape ? 10 : 20),
@@ -2027,32 +1978,31 @@ class _TorrentQualitySelectorSheetState
         ),
         SizedBox(height: isLandscape ? 10 : 20),
       ]);
-    } else if (_streams == null || _streams!.isEmpty) {
+    } else if (_options == null || _options!.isEmpty) {
       state = message([
         SizedBox(height: isLandscape ? 10 : 20),
         const Center(
           child: Text(
-            'No direct torrent streams available.',
+            'Not available to stream right now.',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.white54),
           ),
         ),
-        const SizedBox(height: 8),
-        Center(
-          child: Text(
-            'Try "Alternative Web Servers" below instead.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                color: Colors.white.withOpacity(0.3), fontSize: 12),
+        if (TorrentQualitySelectorSheet.showWebServers) ...[
+          const SizedBox(height: 8),
+          Center(
+            child: Text(
+              'Try "Alternative Web Servers" below instead.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.3), fontSize: 12),
+            ),
           ),
-        ),
+        ],
         SizedBox(height: isLandscape ? 10 : 20),
       ]);
     } else {
-      state = SliverList.builder(
-        itemCount: _streams!.length,
-        itemBuilder: (context, index) => _buildStreamCard(index),
-      );
+      state = SliverToBoxAdapter(child: _buildOptionList(_options!));
     }
 
     return SliverMainAxisGroup(
@@ -2099,168 +2049,25 @@ class _TorrentQualitySelectorSheetState
     );
   }
 
-  Widget _buildStreamCard(int index) {
-    final stream = _streams![index];
-    final isLastPlayed = _lastPlayedHash != null &&
-        stream.infoHash.toLowerCase() == _lastPlayedHash!.toLowerCase();
-    final isRecommended = index == 0 && !isLastPlayed;
-    final isHighlighted = isLastPlayed || isRecommended;
+  Widget _buildOptionList(List<QualityOption> options) {
+    bool isLastPlayed(QualityOption option) =>
+        _lastPlayedHash != null &&
+        option.streams.any((s) =>
+            s.infoHash.toLowerCase() == _lastPlayedHash!.toLowerCase());
+    final hasLastPlayed = options.any(isLastPlayed);
 
-    return Card(
-      color: Colors.white.withOpacity(0.03),
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: isHighlighted
-              ? (isLastPlayed ? AppTheme.primaryColor : Colors.amber)
-                  .withOpacity(0.4)
-              : Colors.white.withOpacity(0.05),
-          width: isHighlighted ? 1.5 : 1,
-        ),
-      ),
-      child: InkWell(
-        onTap: () => _selectStream(stream),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  // Quality Badge
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: stream.quality == '4K'
-                          ? Colors.amber.withOpacity(0.15)
-                          : AppTheme.primaryColor.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      stream.quality ?? '1080p',
-                      style: TextStyle(
-                        color: stream.quality == '4K'
-                            ? Colors.amber
-                            : AppTheme.primaryColor,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  // Size Badge
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      stream.size ?? 'Unknown size',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  if (isLastPlayed) ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppTheme.primaryColor,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: const Text(
-                        'LAST PLAYED',
-                        style: TextStyle(
-                          color: Colors.black,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 9,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                  ] else if (isRecommended) ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.amber,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: const Text(
-                        'RECOMMENDED',
-                        style: TextStyle(
-                          color: Colors.black,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 9,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  // Seeders
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.speed,
-                        size: 14,
-                        color: Colors.green,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        '${stream.seeders ?? 0} seeds',
-                        style: const TextStyle(
-                          color: Colors.green,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 11,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              // Name of the torrent release
-              Text(
-                stream.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  height: 1.3,
-                ),
-              ),
-              const SizedBox(height: 8),
-              // Provider/Source
-              Text(
-                'Source: ${stream.source ?? "P2P"}',
-                style: TextStyle(
-                  color: Colors.white.withOpacity(0.3),
-                  fontSize: 11,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    return QualityOptionList(
+      options: options,
+      onSelected: _selectQuality,
+      starting: _startingOption,
+      startingMessage: _resolvingMessage,
+      tagFor: (option) => isLastPlayed(option)
+          ? 'Last watched'
+          : (option.tier == _recommendedTier ? 'Recommended' : null),
+      // Resuming is the likeliest pick when there's something to resume.
+      isPrimary: (option) => hasLastPlayed
+          ? isLastPlayed(option)
+          : option.tier == _recommendedTier,
     );
   }
 
@@ -2473,6 +2280,47 @@ class _PillInk extends StatelessWidget {
         highlightColor: Colors.black12,
       ),
       child: Material(type: MaterialType.transparency, child: child),
+    );
+  }
+}
+
+/// A 50px-tall frosted-glass pill (round at [width] 50) for the details
+/// screen's secondary actions — Trailer and Like — in the app's glass (see
+/// GlassCircleButton): the backdrop blurred under a dark tint, with a faint
+/// edge.
+class _GlassActionButton extends StatelessWidget {
+  final Widget child;
+  final VoidCallback onTap;
+  final double? width;
+
+  const _GlassActionButton({
+    required this.child,
+    required this.onTap,
+    this.width,
+  });
+
+  static const _shape = StadiumBorder();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 50,
+      width: width,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(30),
+        child: GlassBlur(
+          reducedTint: Colors.black.withValues(alpha: 0.45),
+          child: Material(
+            color: kGlassTint,
+            shape: _shape.copyWith(side: BorderSide(color: kGlassEdge)),
+            child: InkWell(
+              customBorder: _shape,
+              onTap: onTap,
+              child: Center(child: child),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

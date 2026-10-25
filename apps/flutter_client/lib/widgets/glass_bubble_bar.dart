@@ -1,6 +1,9 @@
 import 'dart:math' as math;
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import '../models/movie.dart';
 import 'glass_blur.dart';
 import 'package:flutter/rendering.dart';
 
@@ -240,5 +243,60 @@ class _RenderSizeReporter extends RenderProxyBox {
       // Can't setState during layout; report once this frame is done.
       WidgetsBinding.instance.addPostFrameCallback((_) => onWidth(width));
     }
+  }
+}
+
+/// The title for a [GlassBubbleBar]'s bubble: [movie]'s logo, or its name
+/// in text when it has none — on the details screen and over the player.
+class MovieTitleLogo extends StatelessWidget {
+  final Movie movie;
+
+  const MovieTitleLogo({super.key, required this.movie});
+
+  @override
+  Widget build(BuildContext context) {
+    final logo = movie.logoUrl;
+    if (logo == null) {
+      return Text(
+        movie.title,
+        style: const TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      );
+    }
+    // Fixed width+height (not just a maxWidth cap) — CachedNetworkImage/
+    // SvgPicture.network report zero size while their first frame is
+    // still loading (octo_image's placeholder for the "loading" state is
+    // a bare zero-size Container), so a maxWidth-only box collapsed to
+    // nothing and then snapped to full size the instant the logo finished
+    // decoding — only on first load, since after that it's served
+    // synchronously from Flutter's image cache. A tight box keeps the
+    // space stable from the very first frame, loaded or not.
+    //
+    // The box is sized to the logo's own aspect ratio (from TMDB) rather
+    // than a flat 120 wide: the title bubble wraps this box, so a squarer
+    // logo contain-fitted into 120×28 left the bubble with a long empty
+    // tail. Capped at 120 wide; unknown ratio falls back to 120.
+    final ratio = movie.logoAspectRatio;
+    final width = ratio == null ? 120.0 : math.min(120.0, 28 * ratio);
+    return SizedBox(
+      width: width,
+      height: 28,
+      child: logo.toLowerCase().endsWith('.svg')
+          ? SvgPicture.network(
+              logo,
+              alignment: Alignment.centerLeft,
+              fit: BoxFit.contain,
+            )
+          : CachedNetworkImage(
+              imageUrl: logo,
+              memCacheHeight:
+                  (28 * MediaQuery.of(context).devicePixelRatio).toInt(),
+              alignment: Alignment.centerLeft,
+              fit: BoxFit.contain,
+            ),
+    );
   }
 }

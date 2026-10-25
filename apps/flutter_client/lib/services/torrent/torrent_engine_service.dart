@@ -66,16 +66,17 @@ class TorrentEngineService {
   // High-availability public trackers — appended to every magnet so
   // libtorrent can connect to the swarm immediately via announce URLs
   // instead of relying solely on DHT bootstrap (which can take 1–2 min).
+  // Long-running ones from ngosang/trackerslist's "best" list (Oct 2026);
+  // UDP only, as our own engine build has no HTTPS support.
   static const _trackers = [
-    'udp://open.tracker.cl:1337/announce',
     'udp://tracker.opentrackr.org:1337/announce',
-    'udp://tracker.openbittorrent.com:6969/announce',
-    'udp://open.demonii.com:1337/announce',
+    'udp://open.stealth.si:80/announce',
     'udp://tracker.torrent.eu.org:451/announce',
+    'udp://open.demonii.com:1337/announce',
+    'udp://exodus.desync.com:6969/announce',
     'udp://explodie.org:6969/announce',
-    'udp://tracker.internetwarriors.net:1337/announce',
-    'udp://9.rarbg.to:2710/announce',
-    'https://tracker.tamersunion.org:443/announce',
+    'udp://tracker.dler.org:6969/announce',
+    'udp://open.tracker.cl:1337/announce',
   ];
 
   /// Add magnet, wait for metadata, start stream, return local URL
@@ -102,14 +103,12 @@ class TorrentEngineService {
     final savePath = await TorrentPaths.savePathFor(infoHash);
     final id = engine.addMagnet(magnetUri, savePath);
 
-    // release() (normal player close) stops the HTTP stream reader but
-    // deliberately leaves the torrent registered and downloading, so a
-    // resumed watch doesn't need to refetch already-cached bytes. Left
-    // unchecked, every previously-watched-then-closed title keeps pulling
-    // data forever, all sharing the same session-wide _downloadLimitBytesPerSec
-    // cap — starving whatever's actually on screen right now. Pause
-    // everything else so the current stream gets the full budget; their
-    // downloaded bytes stay on disk untouched.
+    // Torrents stay registered after their player closes (see pause()), so
+    // a resumed watch doesn't need to refetch already-cached bytes. Pause
+    // everything else so the current stream gets the full session-wide
+    // _downloadLimitBytesPerSec budget; their downloaded bytes stay on disk
+    // untouched. (A failed start leaves the previous stream paused — see
+    // resume().)
     for (final otherId in engine.torrents.keys) {
       if (otherId != id) {
         try {
@@ -182,9 +181,12 @@ class TorrentEngineService {
       }
     });
 
-    // Timeout after 30 seconds if metadata cannot be fetched
+    // Give up after 20 seconds: a well-shared torrent's metadata arrives in
+    // a few, and the caller usually has other copies to try next (see
+    // StreamResolver.resolveWithFallback), so waiting longer mostly just
+    // keeps the user staring at "Starting…".
     await completer.future.timeout(
-      const Duration(seconds: 30),
+      const Duration(seconds: 20),
       onTimeout: () {
         subscription?.cancel();
         throw TimeoutException(
@@ -217,18 +219,28 @@ class TorrentEngineService {
     }
   }
 
-  /// Stop streaming without deleting downloaded data — used when the player
-  /// closes but playback might resume later. Keeps whatever was already
-  /// fetched (including the read-ahead buffer) on disk instead of the old
-  /// delete-everything behavior, so resuming doesn't re-download it. Only
-  /// releases the HTTP stream/reader resources; the torrent itself stays
-  /// registered in the session and keeps downloading at the same rate as
-  /// before — no separate "finish downloading" mode.
-  void release(int torrentId) {
+  /// Stop a torrent entirely — its stream and its downloading — but keep
+  /// what it downloaded on disk, so resuming later only fetches the rest.
+  /// For a normal player close, and a start the user abandoned (closed the
+  /// popup mid-way). Starting the same content again resumes it (see
+  /// [streamMagnet]).
+  void pause(int torrentId) {
     try {
       engine.stopAllStreamsForTorrent(torrentId);
+      engine.pauseTorrent(torrentId);
     } catch (e) {
-      print('Error releasing torrent $torrentId: $e');
+      print('Error pausing torrent $torrentId: $e');
+    }
+  }
+
+  /// Undo the pause [streamMagnet] puts every other torrent in — for going
+  /// back to what was playing when starting something else failed. Its
+  /// stream was never stopped, so the player can just carry on.
+  void resume(int torrentId) {
+    try {
+      engine.resumeTorrent(torrentId);
+    } catch (e) {
+      print('Error resuming torrent $torrentId: $e');
     }
   }
 

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'glass_blur.dart';
 import '../services/torrent/torrent_index_service.dart';
-import '../theme/app_theme.dart';
+import '../services/torrent/stream_resolver.dart';
+import 'quality_option_list.dart';
 import '../services/subtitle_service.dart';
 
 /// How the video is scaled to the screen.
@@ -241,32 +242,40 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
   Widget _buildMainMenuView() {
     final activeSubtitleLabel = widget.selectedSubtitle != null
         ? widget.getLanguageName(widget.selectedSubtitle!.lang)
-        : (widget.isLoadingSubtitles ? 'Loading...' : 'Off');
+        : (widget.isLoadingSubtitles ? 'Loading…' : 'Off');
+    const chevron =
+        Icon(Icons.chevron_right_rounded, color: Colors.white38, size: 20);
 
     return ListView(
       key: const ValueKey('main-settings'),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       children: [
-        _buildMenuTile(
-          icon: Icons.hd_rounded,
-          title: 'Quality',
-          subtitle: widget.currentStream.quality ?? 'Auto',
-          onTap: () => setState(() => _currentView = 'quality'),
-        ),
-        const SizedBox(height: 12),
-        _buildMenuTile(
-          icon: Icons.subtitles_rounded,
-          title: 'Subtitles',
-          subtitle: activeSubtitleLabel,
-          onTap: () => setState(() => _currentView = 'subtitles'),
-        ),
-        const SizedBox(height: 12),
-        _buildMenuTile(
-          icon: widget.videoFit.icon,
-          title: 'Video Size',
-          subtitle: widget.videoFit.label,
-          onTap: () => setState(() => _currentView = 'videoSize'),
-        ),
+        _buildGroup([
+          _buildRow(
+            icon: Icons.hd_rounded,
+            title: 'Quality',
+            subtitle: QualityOption(
+              StreamResolver.tierOf(widget.currentStream),
+              [widget.currentStream],
+            ).name,
+            trailing: chevron,
+            onTap: () => setState(() => _currentView = 'quality'),
+          ),
+          _buildRow(
+            icon: Icons.subtitles_rounded,
+            title: 'Subtitles',
+            subtitle: activeSubtitleLabel,
+            trailing: chevron,
+            onTap: () => setState(() => _currentView = 'subtitles'),
+          ),
+          _buildRow(
+            icon: widget.videoFit.icon,
+            title: 'Video Size',
+            subtitle: widget.videoFit.label,
+            trailing: chevron,
+            onTap: () => setState(() => _currentView = 'videoSize'),
+          ),
+        ]),
       ],
     );
   }
@@ -276,60 +285,127 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
       key: const ValueKey('video-size-settings'),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       children: [
-        for (final fit in VideoFit.values)
-          _buildSelectionTile(
-            title: fit.label,
-            subtitle: fit.description,
-            isSelected: fit == widget.videoFit,
-            // Stays open, like Subtitles, so the change can be seen behind
-            // the panel.
-            onTap: () => widget.onVideoFitSelected(fit),
-          ),
+        _buildGroup([
+          for (final fit in VideoFit.values)
+            _buildRow(
+              title: fit.label,
+              subtitle: fit.description,
+              trailing: fit == widget.videoFit ? _check : null,
+              // Stays open, like Subtitles, so the change can be seen
+              // behind the panel.
+              onTap: () => widget.onVideoFitSelected(fit),
+            ),
+        ]),
       ],
     );
   }
 
-  Widget _buildMenuTile({
-    required IconData icon,
+  static const _check =
+      Icon(Icons.check_rounded, color: Colors.white, size: 20);
+  static const _groupRadius = BorderRadius.all(Radius.circular(16));
+
+  /// The panel's lists, in the quality list's style (see
+  /// QualityOptionList): one rounded panel with a faint edge, its rows
+  /// split by hairlines.
+  Widget _buildGroup(List<Widget> rows) {
+    return ClipRRect(
+      borderRadius: _groupRadius,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.06),
+          borderRadius: _groupRadius,
+          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < rows.length; i++) ...[
+                if (i > 0)
+                  Container(
+                    height: 0.5,
+                    margin: const EdgeInsets.only(left: 16),
+                    color: Colors.white.withValues(alpha: 0.1),
+                  ),
+                rows[i],
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRow({
+    IconData? icon,
     required String title,
-    required String subtitle,
+    String? subtitle,
+    Widget? trailing,
     required VoidCallback onTap,
   }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.04),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
-      ),
-      child: ListTile(
-        onTap: onTap,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        leading: Icon(icon, color: AppTheme.primaryColor, size: 22),
-        title: Text(
-          title,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w600,
-            fontSize: 14,
-          ),
-        ),
-        subtitle: Text(
-          subtitle,
-          style: TextStyle(
-            color: Colors.white.withOpacity(0.5),
-            fontSize: 12,
-          ),
-        ),
-        trailing: const Icon(
-          Icons.chevron_right_rounded,
-          color: Colors.white38,
-          size: 20,
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            if (icon != null) ...[
+              Icon(icon, color: Colors.white70, size: 20),
+              const SizedBox(width: 14),
+            ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      height: 1.25,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontSize: 12,
+                        height: 1.2,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (trailing != null) ...[
+              const SizedBox(width: 12),
+              trailing,
+            ],
+          ],
         ),
       ),
     );
   }
 
   Widget _buildSubtitlesView() {
+    // Several tracks often share a language — number those so they can
+    // be told apart.
+    final perLanguage = <String, int>{};
+    for (final t in widget.availableSubtitles) {
+      final name = widget.getLanguageName(t.lang);
+      perLanguage[name] = (perLanguage[name] ?? 0) + 1;
+    }
+    final seen = <String, int>{};
+
     return Column(
       key: const ValueKey('subtitle-settings'),
       children: [
@@ -341,31 +417,31 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
                     style: TextStyle(color: Colors.white38, fontSize: 13),
                   ),
                 )
-              : ListView.builder(
+              : ListView(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  itemCount: widget.availableSubtitles.length + 1,
-                  itemBuilder: (context, index) {
-                    if (index == 0) {
-                      final isSelected = widget.selectedSubtitle == null;
-                      return _buildSelectionTile(
-                        title: 'Subtitles Off',
-                        isSelected: isSelected,
+                  children: [
+                    _buildGroup([
+                      _buildRow(
+                        title: 'Off',
+                        trailing:
+                            widget.selectedSubtitle == null ? _check : null,
                         onTap: () => widget.onSubtitleSelected(null),
-                      );
-                    }
-
-                    final track = widget.availableSubtitles[index - 1];
-                    final isSelected = widget.selectedSubtitle?.id == track.id;
-                    final langName = widget.getLanguageName(track.lang);
-
-                    return _buildSelectionTile(
-                      title: langName,
-                      subtitle: 'Track $index',
-                      isSelected: isSelected,
-                      onTap: () => widget.onSubtitleSelected(track),
-                    );
-                  },
+                      ),
+                      for (final track in widget.availableSubtitles)
+                        () {
+                          final name = widget.getLanguageName(track.lang);
+                          final n = seen[name] = (seen[name] ?? 0) + 1;
+                          return _buildRow(
+                            title: perLanguage[name]! > 1 ? '$name $n' : name,
+                            trailing: widget.selectedSubtitle?.id == track.id
+                                ? _check
+                                : null,
+                            onTap: () => widget.onSubtitleSelected(track),
+                          );
+                        }(),
+                    ]),
+                  ],
                 ),
         ),
       ],
@@ -373,94 +449,47 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
   }
 
   Widget _buildQualityView() {
+    final options = StreamResolver.qualityOptions(
+      widget.availableStreams,
+      preferHash: widget.currentStream.infoHash,
+    );
+    final currentTier = StreamResolver.tierOf(widget.currentStream);
+
     return Column(
       key: const ValueKey('quality-settings'),
       children: [
         Expanded(
-          child: widget.availableStreams.isEmpty
+          child: options.isEmpty
               ? const Center(
                   child: Text(
-                    'No quality streams available',
+                    'No other qualities available',
                     style: TextStyle(color: Colors.white38, fontSize: 13),
                   ),
                 )
-              : ListView.builder(
+              : ListView(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  itemCount: widget.availableStreams.length,
-                  itemBuilder: (context, index) {
-                    final stream = widget.availableStreams[index];
-                    final isSelected =
-                        stream.infoHash == widget.currentStream.infoHash;
-
-                    // Display details about the stream
-                    final infoParts = <String>[];
-                    if (stream.size != null) infoParts.add(stream.size!);
-                    if (stream.seeders != null) {
-                      infoParts.add('🚀 ${stream.seeders}');
-                    }
-
-                    return _buildSelectionTile(
-                      title: stream.quality ?? 'Unknown Quality',
-                      subtitle: infoParts.isNotEmpty
-                          ? infoParts.join(' • ')
-                          : stream.name,
-                      isSelected: isSelected,
-                      onTap: () {
-                        widget.onStreamSelected(stream);
+                  children: [
+                    QualityOptionList(
+                      options: options,
+                      compact: true,
+                      isCurrent: (option) => option.tier == currentTier,
+                      tagFor: (option) =>
+                          option.tier == currentTier ? 'Playing' : null,
+                      onSelected: (option) {
+                        // Picking the quality that's already playing just
+                        // closes the menu instead of restarting the video.
+                        if (option.tier != currentTier) {
+                          widget.onStreamSelected(option.best);
+                        }
                         _close();
                       },
-                    );
-                  },
+                    ),
+                  ],
                 ),
         ),
       ],
     );
   }
 
-  Widget _buildSelectionTile({
-    required String title,
-    String? subtitle,
-    required bool isSelected,
-    required VoidCallback onTap,
-  }) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: isSelected
-            ? AppTheme.primaryColor.withOpacity(0.12)
-            : Colors.white.withOpacity(0.03),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isSelected ? AppTheme.primaryColor : Colors.transparent,
-          width: 1,
-        ),
-      ),
-      child: ListTile(
-        dense: true,
-        onTap: onTap,
-        title: Text(
-          title,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 13,
-          ),
-        ),
-        subtitle: subtitle != null
-            ? Text(
-                subtitle,
-                style: TextStyle(
-                  color: Colors.white.withOpacity(0.4),
-                  fontSize: 10,
-                ),
-              )
-            : null,
-        trailing: isSelected
-            ? const Icon(Icons.check_circle_rounded,
-                color: AppTheme.primaryColor, size: 18)
-            : null,
-      ),
-    );
-  }
 }

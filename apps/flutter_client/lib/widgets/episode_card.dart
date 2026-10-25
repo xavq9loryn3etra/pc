@@ -24,8 +24,12 @@ class EpisodeCard extends StatelessWidget {
   /// Playback hidden (FeatureFlagsService.hidePlayback): no play glyph.
   final bool hidePlayback;
 
+  /// The episode the player is on (its episode browser): says so beside
+  /// "EPISODE n" and brightens the card's edge.
+  final bool playing;
+
   /// Opens the episode (on the details screen, its popup). Null makes the
-  /// card inert.
+  /// card inert — as is an episode that hasn't aired yet, whatever this is.
   final VoidCallback? onTap;
 
   const EpisodeCard({
@@ -34,6 +38,7 @@ class EpisodeCard extends StatelessWidget {
     this.fallbackImage,
     this.progress,
     this.hidePlayback = false,
+    this.playing = false,
     this.onTap,
   });
 
@@ -126,7 +131,7 @@ class EpisodeCard extends StatelessWidget {
       final width = constraints.maxWidth;
       final imageHeight = _imageHeight(width);
 
-      return ClipRRect(
+      final card = ClipRRect(
         borderRadius: BorderRadius.circular(_radius),
         child: Stack(
           fit: StackFit.expand,
@@ -156,9 +161,12 @@ class EpisodeCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'EPISODE ${episode.episodeNumber}',
+                    playing
+                        ? 'EPISODE ${episode.episodeNumber}  ·  PLAYING'
+                        : 'EPISODE ${episode.episodeNumber}',
                     style: _labelStyle,
                     maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 2),
                   Text(
@@ -230,13 +238,14 @@ class EpisodeCard extends StatelessWidget {
               ),
             ),
 
-            // Faint edge, as on the reference cards.
+            // Faint edge, as on the reference cards — brighter on the
+            // episode that's playing.
             IgnorePointer(
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(_radius),
                   border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.12),
+                    color: Colors.white.withValues(alpha: playing ? 0.5 : 0.12),
                   ),
                 ),
               ),
@@ -245,13 +254,27 @@ class EpisodeCard extends StatelessWidget {
             // Ink on top, so the ripple shows over the image.
             Material(
               type: MaterialType.transparency,
-              child: InkWell(onTap: onTap),
+              child: InkWell(onTap: unreleased ? null : onTap),
             ),
           ],
         ),
       );
+
+      // Not out yet: greyed out, and inert (see onTap).
+      return unreleased
+          ? ColorFiltered(colorFilter: greyscale, child: card)
+          : card;
     });
   }
+
+  /// Drains the colour out of an episode that hasn't aired yet. Shared
+  /// with the player's episode browser.
+  static const greyscale = ColorFilter.matrix([
+    0.2126, 0.7152, 0.0722, 0, 0, //
+    0.2126, 0.7152, 0.0722, 0, 0, //
+    0.2126, 0.7152, 0.0722, 0, 0, //
+    0, 0, 0, 1, 0, //
+  ]);
 }
 
 /// An [EpisodeCard] while its season loads: the same size and layout, with
@@ -345,7 +368,14 @@ class EpisodeCardSkeleton extends StatelessWidget {
 class EpisodeBackdrop extends StatelessWidget {
   final String? image;
 
-  const EpisodeBackdrop({super.key, required this.image});
+  /// How much the image is darkened (0–1) for the text on it.
+  final double dim;
+
+  const EpisodeBackdrop({super.key, required this.image, this.dim = 0.45});
+
+  /// The width [image] is decoded at — for preloading it (see
+  /// precacheNetworkImage), so it paints on the first frame.
+  static const int cacheWidth = 12;
 
   @override
   Widget build(BuildContext context) {
@@ -356,7 +386,7 @@ class EpisodeBackdrop extends StatelessWidget {
         if (image != null)
           CachedNetworkImage(
             imageUrl: image!,
-            memCacheWidth: 12,
+            memCacheWidth: cacheWidth,
             fit: BoxFit.cover,
             filterQuality: FilterQuality.medium,
             placeholder: (_, __) => fallback,
@@ -364,7 +394,7 @@ class EpisodeBackdrop extends StatelessWidget {
           )
         else
           fallback,
-        ColoredBox(color: Colors.black.withValues(alpha: 0.45)),
+        ColoredBox(color: Colors.black.withValues(alpha: dim)),
       ],
     );
   }
@@ -380,34 +410,49 @@ class EpisodeStill extends StatelessWidget {
   final int decodeWidth;
   final bool dimmed;
 
+  /// Also fade out the right-hand side — for when it ends mid-screen
+  /// (the player's sideways episode view) rather than at a card's edge.
+  final bool fadeRight;
+
   const EpisodeStill({
     super.key,
     required this.image,
     required this.decodeWidth,
     this.dimmed = false,
+    this.fadeRight = false,
   });
+
+  static ShaderMask _fade(Alignment end, List<double> stops, Widget child) =>
+      ShaderMask(
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (rect) => LinearGradient(
+          begin: -end,
+          end: end,
+          colors: const [Colors.white, Colors.white, Colors.transparent],
+          stops: stops,
+        ).createShader(rect),
+        child: child,
+      );
 
   @override
   Widget build(BuildContext context) {
+    final faded = _fade(
+      Alignment.bottomCenter,
+      const [0, 0.6, 1],
+      CachedNetworkImage(
+        imageUrl: image,
+        memCacheWidth: decodeWidth,
+        fit: BoxFit.cover,
+        fadeInDuration: const Duration(milliseconds: 200),
+        placeholder: (_, __) => const SizedBox.shrink(),
+        errorWidget: (_, __, ___) => const SizedBox.shrink(),
+      ),
+    );
     return Opacity(
       opacity: dimmed ? 0.5 : 1,
-      child: ShaderMask(
-        blendMode: BlendMode.dstIn,
-        shaderCallback: (rect) => const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Colors.white, Colors.white, Colors.transparent],
-          stops: [0, 0.6, 1],
-        ).createShader(rect),
-        child: CachedNetworkImage(
-          imageUrl: image,
-          memCacheWidth: decodeWidth,
-          fit: BoxFit.cover,
-          fadeInDuration: const Duration(milliseconds: 200),
-          placeholder: (_, __) => const SizedBox.shrink(),
-          errorWidget: (_, __, ___) => const SizedBox.shrink(),
-        ),
-      ),
+      child: fadeRight
+          ? _fade(Alignment.centerRight, const [0, 0.65, 1], faded)
+          : faded,
     );
   }
 }
@@ -416,7 +461,7 @@ class EpisodeStill extends StatelessWidget {
 /// the [image] fading into the backdrop, then a small [label] line, the
 /// [title], a [meta] line (with a watch-progress bar) and the full
 /// [description]. Sits on an [EpisodeSheetFrame], which paints the
-/// backdrop. See [EpisodeDetailHeader] and [MovieDetailHeader].
+/// backdrop. See [EpisodeDetailHeader].
 class DetailHeader extends StatelessWidget {
   final String? image;
 
@@ -430,6 +475,12 @@ class DetailHeader extends StatelessWidget {
   final double? progress;
   final String description;
 
+  /// For the player's sideways episode view: the image also fades out on
+  /// the right ([EpisodeStill.fadeRight]), and the text keeps an extra
+  /// [textInset] clear of a camera cutout the image runs under.
+  final bool sideways;
+  final EdgeInsets textInset;
+
   const DetailHeader({
     super.key,
     required this.image,
@@ -439,6 +490,8 @@ class DetailHeader extends StatelessWidget {
     required this.meta,
     this.progress,
     required this.description,
+    this.sideways = false,
+    this.textInset = EdgeInsets.zero,
   });
 
   @override
@@ -461,16 +514,17 @@ class DetailHeader extends StatelessWidget {
                 image: image!,
                 decodeWidth: (width * dpr).toInt(),
                 dimmed: dimmed,
+                fadeRight: sideways,
               ),
             ),
           Padding(
             // Over the bottom of the image, as on the cards; below the drag
             // handle when there's no image.
             padding: EdgeInsets.fromLTRB(
-              20,
+              20 + textInset.left,
               image != null ? imageHeight - 28 : 40,
-              20,
-              8,
+              20 + textInset.right,
+              8 + textInset.bottom,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -535,11 +589,17 @@ class EpisodeDetailHeader extends StatelessWidget {
   final String? fallbackImage;
   final double? progress;
 
+  /// See [DetailHeader.sideways] and [DetailHeader.textInset].
+  final bool sideways;
+  final EdgeInsets textInset;
+
   const EpisodeDetailHeader({
     super.key,
     required this.episode,
     this.fallbackImage,
     this.progress,
+    this.sideways = false,
+    this.textInset = EdgeInsets.zero,
   });
 
   @override
@@ -561,33 +621,8 @@ class EpisodeDetailHeader extends StatelessWidget {
       ].join('  ·  '),
       progress: progress,
       description: episode.overview,
-    );
-  }
-}
-
-/// [DetailHeader] for a movie: its genres, title, year · rating ·
-/// runtime · score, and its overview, over its backdrop.
-class MovieDetailHeader extends StatelessWidget {
-  final Movie movie;
-  final double? progress;
-
-  const MovieDetailHeader({super.key, required this.movie, this.progress});
-
-  @override
-  Widget build(BuildContext context) {
-    final genres = movie.genres ?? const <String>[];
-    return DetailHeader(
-      image: movie.backdrop ?? movie.posterUrl,
-      label: genres.take(3).join('  ·  ').toUpperCase(),
-      title: movie.title,
-      meta: [
-        if (movie.year > 0) '${movie.year}',
-        if (movie.certification != null) movie.certification!,
-        if (movie.runtime != null) movie.runtime!,
-        if (movie.voteAverage > 0) '★ ${movie.rating}',
-      ].join('  ·  '),
-      progress: progress,
-      description: movie.description,
+      sideways: sideways,
+      textInset: textInset,
     );
   }
 }
@@ -596,7 +631,14 @@ class MovieDetailHeader extends StatelessWidget {
 /// rounded top, faint edge, the blurred still ([EpisodeBackdrop]) behind
 /// everything, and a drag handle over the top of the image. [child] is
 /// laid out over it and sets its height.
-class EpisodeSheetFrame extends StatelessWidget {
+///
+/// Dragged down — by the handle, or by pulling down on [child]'s content
+/// once it's scrolled to the top — it follows the finger and closes when
+/// let go far or fast enough, springing back otherwise. (The modal sheet's
+/// own drag-to-close only works while nothing inside can scroll; give
+/// [child]'s scrollable ClampingScrollPhysics, so pulling past its top
+/// reaches this on iOS too instead of bouncing.)
+class EpisodeSheetFrame extends StatefulWidget {
   final String? image;
   final Widget child;
 
@@ -610,41 +652,119 @@ class EpisodeSheetFrame extends StatelessWidget {
   static final _edge = BorderSide(color: Colors.white.withValues(alpha: 0.12));
 
   @override
+  State<EpisodeSheetFrame> createState() => _EpisodeSheetFrameState();
+}
+
+class _EpisodeSheetFrameState extends State<EpisodeSheetFrame> {
+  // How far the sheet has been pulled down, in pixels.
+  double _drag = 0;
+  bool _dragging = false;
+
+  // Let go past this share of the sheet's height, or flicked down faster
+  // than this (px/s), and it closes.
+  static const _closeFraction = 0.25;
+  static const _closeVelocity = 700.0;
+
+  void _dragBy(double dy) {
+    setState(() {
+      _dragging = true;
+      _drag = math.max(0, _drag + dy);
+    });
+  }
+
+  void _dragEnd(double velocity) {
+    if (!_dragging) return;
+    // The sheet's last laid-out height, read off its render box: context.size
+    // asserts here, since the drag's setState has just marked it dirty (a
+    // scroll's end notification arrives in that same frame).
+    final box = context.findRenderObject() as RenderBox?;
+    final height =
+        box != null && box.hasSize ? box.size.height : double.infinity;
+    if (_drag > height * _closeFraction || velocity > _closeVelocity) {
+      Navigator.of(context).maybePop();
+    } else {
+      setState(() {
+        _dragging = false;
+        _drag = 0;
+      });
+    }
+  }
+
+  bool _onScroll(ScrollNotification n) {
+    if (n is OverscrollNotification && n.dragDetails != null) {
+      // Pulling down past the top of the content pulls the sheet down.
+      if (n.overscroll < 0 || _drag > 0) _dragBy(-n.overscroll);
+    } else if (n is ScrollUpdateNotification &&
+        n.dragDetails != null &&
+        _drag > 0) {
+      // Pushing back up lifts the sheet before scrolling the content.
+      _dragBy(n.dragDetails!.delta.dy);
+    } else if (n is ScrollEndNotification) {
+      _dragEnd(n.dragDetails?.velocity.pixelsPerSecond.dy ?? 0);
+    }
+    return false;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: _radius,
-      child: Stack(
-        children: [
-          Positioned.fill(child: EpisodeBackdrop(image: image)),
-          child,
-          Positioned(
-            top: 8,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.white54,
-                  borderRadius: BorderRadius.circular(2),
+    return AnimatedContainer(
+      duration: _dragging ? Duration.zero : const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      transform: Matrix4.translationValues(0, _drag, 0),
+      child: NotificationListener<ScrollNotification>(
+        onNotification: _onScroll,
+        child: ClipRRect(
+          borderRadius: EpisodeSheetFrame._radius,
+          child: Stack(
+            children: [
+              // A bit darker than the cards': the sheet is much bigger, so
+              // the colours read stronger.
+              Positioned.fill(
+                child: EpisodeBackdrop(image: widget.image, dim: 0.6),
+              ),
+              widget.child,
+              // The handle, with a generous strip around it to grab.
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: 28,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onVerticalDragUpdate: (d) => _dragBy(d.delta.dy),
+                  onVerticalDragEnd: (d) => _dragEnd(d.primaryVelocity ?? 0),
+                  child: Align(
+                    alignment: const Alignment(0, -0.15),
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.white54,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
-          Positioned.fill(
-            child: IgnorePointer(
-              child: DecoratedBox(
-                // No bottom edge: the sheet runs off the bottom of the
-                // screen.
-                decoration: BoxDecoration(
-                  borderRadius: _radius,
-                  border: Border(top: _edge, left: _edge, right: _edge),
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    // No bottom edge: the sheet runs off the bottom of the
+                    // screen.
+                    decoration: BoxDecoration(
+                      borderRadius: EpisodeSheetFrame._radius,
+                      border: Border(
+                        top: EpisodeSheetFrame._edge,
+                        left: EpisodeSheetFrame._edge,
+                        right: EpisodeSheetFrame._edge,
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -674,6 +794,8 @@ class EpisodeInfoSheet extends StatelessWidget {
           maxHeight: MediaQuery.sizeOf(context).height * 0.9,
         ),
         child: SingleChildScrollView(
+          // Pulling past the top drags the sheet (EpisodeSheetFrame).
+          physics: const ClampingScrollPhysics(),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,

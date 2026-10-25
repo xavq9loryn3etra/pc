@@ -87,6 +87,14 @@ class StreamResolver {
     // Fan edits only when there's nothing else.
     final unedited = streams.where((s) => !_isCustomEdit(s, title)).toList();
     if (unedited.isNotEmpty) streams = unedited;
+    // English audio is preferred only for titles made in English: for, say,
+    // a Tamil film, an untagged (assumed English) copy with 11 sharers
+    // otherwise outranked the Tamil one with 235, and every fallback
+    // attempt went to barely-shared copies.
+    final madeIn = title?.originalLanguage;
+    if (madeIn != null && madeIn != 'en') {
+      streams = [for (final s in streams) s.withoutLanguagePreference()];
+    }
 
     final recommendedTier = _recommendedTierRank(streams);
     streams.sort((a, b) =>
@@ -281,6 +289,7 @@ class StreamResolver {
   ///      player asks for English audio first, see PlayerScreen)
   ///  2 — no English at all
   static int languageRank(TorrentStream stream) {
+    if (stream.ignoreLanguage) return 0;
     final flags =
         _flagPattern.allMatches(stream.languages).map((m) => m[0]!).toSet();
     final multiAudio = _multiAudioPattern.hasMatch(stream.languages);

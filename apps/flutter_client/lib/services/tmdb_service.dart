@@ -1,5 +1,6 @@
 import 'dart:io' show Platform;
 import 'dart:ui' show PlatformDispatcher;
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:dio/dio.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/movie.dart';
@@ -479,6 +480,7 @@ class TMDBService {
       type: isTv ? 'tv' : 'movie',
       inCinemas: base.inCinemas,
       releaseDateRaw: base.releaseDateRaw,
+      originalLanguage: m['original_language'] as String?,
       lastAirYear: isTv
           ? int.tryParse('${m['last_air_date'] ?? ''}'.split('-').first)
           : null,
@@ -576,22 +578,69 @@ class TMDBService {
   }
 
   /// The country whose streaming catalogue the provider button uses: the
-  /// device's Region setting when TMDB covers it, otherwise the first
-  /// covered country of the language preferences, else US.
+  /// first of the SIM's country (Android), the device's Region setting and
+  /// the language preferences' countries that TMDB covers — directly or
+  /// through a stand-in (see _catalogueStandIns) — else US.
   ///
   /// TMDB has no data at all for some countries (e.g. Sri Lanka), so iOS —
   /// which reports the real Region setting — found no provider for any
   /// title there, while Android, whose region follows the language
   /// ("English (US)" → US), did.
   Future<String> _watchCountry() async {
-    final candidates = _countryCandidates();
+    final sim = await _simCountry();
+    final candidates = [
+      if (sim != null) sim,
+      ..._countryCandidates().where((c) => c != sim),
+    ];
     final regions = await (_watchRegions ??= _loadWatchRegions());
     if (regions == null) {
       _watchRegions = null; // retry on the next details fetch
-      return candidates.first;
+      return _standInFor(candidates.first);
     }
-    return candidates.firstWhere(regions.contains,
-        orElse: () => candidates.first);
+    for (final country in candidates) {
+      if (regions.contains(country)) return country;
+      // A country TMDB doesn't cover but that has a close neighbour it does.
+      final standIn = _catalogueStandIns[country];
+      if (standIn != null && regions.contains(standIn)) return standIn;
+    }
+    return candidates.first;
+  }
+
+  /// Countries TMDB (JustWatch) has no streaming data for → the covered
+  /// country whose catalogues are the closest match. Sri Lanka's Netflix and
+  /// Prime Video libraries track India's far more closely than the US
+  /// fallback (rights for the region are usually sold together), so
+  /// "Also on" there was mostly wrong — e.g. Disney+, which isn't offered
+  /// in Sri Lanka, for a film that's on Netflix.
+  static const _catalogueStandIns = {
+    'LK': 'IN',
+    'NP': 'IN',
+    'BD': 'IN',
+    'BT': 'IN',
+    'MV': 'IN',
+  };
+
+  static String _standInFor(String country) =>
+      _catalogueStandIns[country] ?? country;
+
+  static const _deviceChannel = MethodChannel('popcorn/device');
+  String? _simCountryCache;
+  bool _simCountryLooked = false;
+
+  /// The SIM's (else the mobile network's) country on Android — where the
+  /// phone actually is, unlike the language setting's country, which is
+  /// "US" for anyone using US English. Null elsewhere or without a SIM.
+  Future<String?> _simCountry() async {
+    if (_simCountryLooked) return _simCountryCache;
+    _simCountryLooked = true;
+    if (!Platform.isAndroid) return null;
+    try {
+      final code = await _deviceChannel.invokeMethod<String>('networkCountry');
+      if (code != null && RegExp(r'^[A-Z]{2}$').hasMatch(code)) {
+        _simCountryCache = code;
+      }
+    } catch (_) {}
+    return _simCountryCache;
   }
 
   /// The device's countries, most specific first: the Region setting, then

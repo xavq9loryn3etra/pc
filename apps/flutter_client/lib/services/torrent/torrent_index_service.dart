@@ -15,6 +15,10 @@ class TorrentStream {
   // Part of a season pack (or other multi-file torrent) rather than a
   // torrent of its own — slower to start: its metadata covers every file.
   final bool isPack;
+  // For a title not made in English, whose original audio is what people
+  // want: its languages line then doesn't affect ranking (see
+  // StreamResolver.languageRank).
+  final bool ignoreLanguage;
 
   TorrentStream({
     required this.infoHash,
@@ -27,7 +31,23 @@ class TorrentStream {
     this.seeders,
     this.languages = '',
     this.isPack = false,
+    this.ignoreLanguage = false,
   });
+
+  /// This stream with [ignoreLanguage] set.
+  TorrentStream withoutLanguagePreference() => TorrentStream(
+        infoHash: infoHash,
+        title: title,
+        name: name,
+        quality: quality,
+        size: size,
+        source: source,
+        fileIdx: fileIdx,
+        seeders: seeders,
+        languages: languages,
+        isPack: isPack,
+        ignoreLanguage: true,
+      );
 
   factory TorrentStream.fromJson(Map<String, dynamic> json) {
     final String rawTitle = json['title'] ?? '';

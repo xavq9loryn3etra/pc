@@ -17,6 +17,9 @@ class Movie {
   // TV only: the year its latest episode aired (TMDB's last_air_date).
   // Details only, not persisted.
   final int? lastAirYear;
+  // ISO 639-1 code of the language it was made in ("en", "ta", "ja"),
+  // from TMDB. Details only, not persisted.
+  final String? originalLanguage;
 
   // Extra Details
   final String? director;
@@ -96,6 +99,7 @@ class Movie {
     required this.inCinemas,
     this.releaseDateRaw,
     this.lastAirYear,
+    this.originalLanguage,
     this.director,
     this.cast,
     this.castMembers,

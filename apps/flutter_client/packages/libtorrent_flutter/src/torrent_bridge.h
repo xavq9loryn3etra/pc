@@ -117,6 +117,15 @@ TORRENT_API lt_session_t lt_create_session(const char* listen_interface,
                                            int upload_limit);
 TORRENT_API void         lt_destroy_session(lt_session_t session);
 
+/* Like lt_create_session, also restoring the DHT state saved at
+   state_path by lt_save_session_state (NULL, missing or unreadable: a
+   cold start). */
+TORRENT_API lt_session_t lt_create_session_with_state(
+    const char* listen_interface, int download_limit, int upload_limit,
+    const char* state_path);
+/* Saves the session's DHT state to path. Returns 1 on success. */
+TORRENT_API int lt_save_session_state(lt_session_t session, const char* path);
+
 /* engine config — port of settings/btsets.go + btserver.go configure() */
 TORRENT_API void lt_configure_session(lt_session_t session,
                                       const lt_bt_config* config);

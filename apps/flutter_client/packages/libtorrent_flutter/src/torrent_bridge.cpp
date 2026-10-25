@@ -22,6 +22,7 @@
 #include "torrent_bridge.h"
 
 #include <libtorrent/session.hpp>
+#include <libtorrent/session_params.hpp>
 #include <libtorrent/settings_pack.hpp>
 #include <libtorrent/add_torrent_params.hpp>
 #include <libtorrent/torrent_handle.hpp>
@@ -79,6 +80,8 @@
 #include <cinttypes>
 #include <functional>
 #include <cstdio>
+#include <fstream>
+#include <iterator>
 
 namespace lt  = libtorrent;
 namespace chr = std::chrono;
@@ -962,7 +965,8 @@ struct SessionWrapper {
     std::mutex              dart_queue_mu;
     std::deque<AlertRecord> dart_queue;
 
-    explicit SessionWrapper(lt::settings_pack sp) : session(std::move(sp)) {}
+    explicit SessionWrapper(lt::session_params params)
+        : session(std::move(params)) {}
 
     // ── TorrServer config — port of settings.BTSets (session-level defaults) ──
     lt_bt_config bt_config;
@@ -1808,6 +1812,30 @@ static void preload_stream(StreamEngine* s, int64_t preload_bytes) {
 extern "C" {
 
 TORRENT_API lt_session_t lt_create_session(const char* iface, int dl, int ul) {
+    return lt_create_session_with_state(iface, dl, ul, nullptr);
+}
+
+// The DHT routing table saved by lt_save_session_state, read back so a new
+// session starts out knowing live nodes instead of bootstrapping from the
+// router nodes alone — which can take a minute or more, and is why the
+// first stream after launch was the slow one. Missing or unreadable state
+// just means a cold start, as before.
+static lt::session_params read_saved_state(const char* path) {
+    if (!path || !*path) return {};
+    try {
+        std::ifstream in(path, std::ios::binary);
+        std::vector<char> buf((std::istreambuf_iterator<char>(in)),
+                              std::istreambuf_iterator<char>());
+        if (buf.empty()) return {};
+        return lt::read_session_params(buf, lt::session_handle::save_dht_state);
+    } catch (...) {
+        return {};
+    }
+}
+
+TORRENT_API lt_session_t lt_create_session_with_state(const char* iface,
+                                                      int dl, int ul,
+                                                      const char* state_path) {
     try {
         lt::settings_pack sp;
 
@@ -1954,12 +1982,36 @@ TORRENT_API lt_session_t lt_create_session(const char* iface, int dl, int ul) {
         sp.set_int (lt::settings_pack::recv_socket_buffer_size,   1024 * 1024);
         sp.set_int (lt::settings_pack::send_socket_buffer_size,   1024 * 1024);
 
-        auto* sw = new SessionWrapper(std::move(sp));
+        lt::session_params params = read_saved_state(state_path);
+        params.settings = std::move(sp);
+        auto* sw = new SessionWrapper(std::move(params));
         sw->init_default_config();
         sw->start_alert_thread();
         set_err("");
         return reinterpret_cast<lt_session_t>(sw);
     } catch (const std::exception& e) { set_err(e.what()); return nullptr; }
+}
+
+TORRENT_API int lt_save_session_state(lt_session_t session,
+                                      const char* path) {
+    if (!session || !path || !*path) return 0;
+    try {
+        auto* sw = to_sw(session);
+        const auto flags = lt::session_handle::save_dht_state;
+        const std::vector<char> buf =
+            lt::write_session_params_buf(sw->session.session_state(flags), flags);
+        // Written aside and moved into place, so a crash mid-write can't
+        // leave a truncated file for the next launch.
+        const std::string tmp = std::string(path) + ".tmp";
+        {
+            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+            out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+            if (!out) return 0;
+        }
+        std::remove(path);
+        if (std::rename(tmp.c_str(), path) != 0) return 0;
+        return 1;
+    } catch (const std::exception& e) { set_err(e.what()); return 0; }
 }
 
 TORRENT_API void lt_destroy_session(lt_session_t session) {

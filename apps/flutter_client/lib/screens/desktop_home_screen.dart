@@ -361,7 +361,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: const Icon(
-                      Icons.search,
+                      Icons.search_rounded,
                       color: Colors.white,
                       size: 20,
                     ),
@@ -383,7 +383,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: const Icon(
-                      Icons.favorite_border,
+                      Icons.favorite_border_rounded,
                       color: Colors.white,
                       size: 20,
                     ),
@@ -436,7 +436,11 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
         const SizedBox(height: 16),
         // Year and Rating
         Text(
-          '${widget.featuredMovie.year} • ${widget.featuredMovie.certification ?? "PG-13"}',
+          [
+            '${widget.featuredMovie.year}',
+            if (widget.featuredMovie.certification?.isNotEmpty ?? false)
+              widget.featuredMovie.certification!,
+          ].join(' • '),
           style: const TextStyle(
             color: Colors.white70,
             fontSize: 16,
@@ -472,7 +476,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
             ElevatedButton.icon(
               onPressed: () => _onMovieSelect(widget.featuredMovie),
               icon: const Icon(
-                Icons.info_outline,
+                Icons.info_outline_rounded,
                 color: Colors.black,
                 size: 26,
               ),
@@ -505,7 +509,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                   child: ElevatedButton.icon(
                     onPressed: widget.onTrailerHero,
                     icon: const Icon(
-                      Icons.movie_creation_outlined,
+                      Icons.movie_creation_rounded,
                       color: Colors.white,
                     ),
                     label: const Text("Trailer"),

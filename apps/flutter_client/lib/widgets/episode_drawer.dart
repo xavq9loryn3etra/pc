@@ -199,7 +199,7 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                               _buildSeasonSelector(),
                             const SizedBox(width: 16),
                             IconButton(
-                              icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                              icon: const Icon(Icons.close_rounded, color: Colors.white, size: 28),
                               onPressed: _dismiss,
                             ),
                           ],
@@ -268,7 +268,7 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                 ),
               ),
               const SizedBox(width: 4),
-              const Icon(Icons.keyboard_arrow_down, color: Colors.white54, size: 14),
+              const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white54, size: 14),
             ],
           ),
           onPressed: () async {
@@ -403,11 +403,11 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
 
                     if (isFuture)
                       const Center(
-                          child: Icon(Icons.lock_outline,
+                          child: Icon(Icons.lock_outline_rounded,
                               color: Colors.white54, size: 32))
                     else if (isWatched)
                       const Center(
-                          child: Icon(Icons.check_circle_outline,
+                          child: Icon(Icons.check_circle_outline_rounded,
                               color: Colors.white54, size: 32))
                     else if (!isCurrent)
                       Center(
@@ -520,7 +520,7 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                 padding: const EdgeInsets.only(top: 4),
                 child: Row(
                   children: [
-                    const Icon(Icons.calendar_today, color: Colors.white54, size: 12),
+                    const Icon(Icons.calendar_today_rounded, color: Colors.white54, size: 12),
                     const SizedBox(width: 6),
                     Text(
                       "Available on: $formattedDate",

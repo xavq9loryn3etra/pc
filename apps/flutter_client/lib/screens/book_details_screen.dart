@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import '../widgets/player_route.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -106,7 +107,7 @@ class _BookDetailsScreenState extends State<BookDetailsScreen> {
         if (mounted) {
           Navigator.push(
             context,
-            MaterialPageRoute(
+            PlayerRoute(
               builder: (_) => EpubPlayerScreen(file: file),
             ),
           );
@@ -259,7 +260,7 @@ class _BookDetailsScreenState extends State<BookDetailsScreen> {
                                   height: 24,
                                   child:
                                       CustomLoader(size: 24))
-                              : const Icon(Icons.menu_book),
+                              : const Icon(Icons.menu_book_rounded),
                           label:
                               Text(_isLoading ? 'Downloading...' : 'Read Now'),
                           style: ElevatedButton.styleFrom(
@@ -274,7 +275,7 @@ class _BookDetailsScreenState extends State<BookDetailsScreen> {
                       const SizedBox(width: 16),
                       IconButton.filledTonal(
                         onPressed: () {}, // TODO: Favorites
-                        icon: const Icon(Icons.favorite_border),
+                        icon: const Icon(Icons.favorite_border_rounded),
                       ),
                     ],
                   ),

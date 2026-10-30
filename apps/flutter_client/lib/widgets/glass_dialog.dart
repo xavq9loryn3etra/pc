@@ -121,7 +121,7 @@ class GlassPanel extends StatelessWidget {
         reducedTint: const Color(0xF2161616),
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.55),
+            color: kGlassSheetTint,
             borderRadius: _radius,
             border: Border.all(color: kGlassEdge),
           ),

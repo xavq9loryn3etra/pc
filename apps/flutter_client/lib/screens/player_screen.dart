@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../widgets/player_route.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:media_kit/media_kit.dart' hide WebPlayer;
@@ -176,6 +177,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   // _checkOpeningFinished) — drives the loading spinner along with
   // _isBuffering.
   bool _isMediaOpening = true;
+  // Time since the media was handed to the player, for the "[timing]" log
+  // of how long the video took to appear.
+  final Stopwatch _openingStopwatch = Stopwatch();
   // Last position seen while opening, to tell real playback (small steady
   // steps) from the initial jump to the resume point.
   Duration? _openingLastPosition;
@@ -425,6 +429,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _positionNotifier.value = pos;
         if (_isMediaOpening) _checkOpeningFinished(pos);
         if (_seekPending) _checkSeekFinished(pos);
+        _maybeReadyNextEpisode(pos);
         // Save progress periodically (throttled) ONLY after initial position is restored
         if (_initialPositionRestored) {
           _saveProgress();
@@ -480,6 +485,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     final step = pos - last;
     if (step > Duration.zero && step < const Duration(seconds: 2)) {
       setState(() => _isMediaOpening = false);
+      print('[timing] video playing ${_openingStopwatch.elapsedMilliseconds} '
+          'ms after the player opened it');
       // Loaded: now the controls can start counting down to hide.
       _resetControlsTimer();
       final resumedFrom = _pendingResumeBadge;
@@ -661,7 +668,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       final StreamResolveResult resolved;
       if (otherCopies.isNotEmpty) {
         // Starting one pauses the stuck copy (see
-        // TorrentEngineService.streamMagnet), so a failure can go back to
+        // TorrentEngineService.startStream), so a failure can go back to
         // it.
         resolved = await _resolver.resolveWithFallback(
           otherCopies.first,
@@ -892,6 +899,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     int? overrideEpisode,
   }) async {
     final mpv = player.platform as NativePlayer;
+    _openingStopwatch
+      ..reset()
+      ..start();
 
     if (precisePosition != null) {
       await mpv.setProperty('start', '${precisePosition.inSeconds}');
@@ -1226,7 +1236,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     try {
       // 1. The old torrent stays until the new one is up (just paused by
-      // starting it — see TorrentEngineService.streamMagnet), so a failed
+      // starting it — see TorrentEngineService.startStream), so a failed
       // switch can go back to it instead of leaving nothing to play.
 
       // 2. Spin up new torrent, falling back to the quality's other
@@ -1286,7 +1296,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// After a quality or episode switch failed: carry on with what was
   /// playing. Its torrent was only paused by the attempt (see
-  /// TorrentEngineService.streamMagnet) and its media is still loaded.
+  /// TorrentEngineService.startStream) and its media is still loaded.
   void _returnAfterFailedSwitch({required bool resumePlayback}) {
     _resolver.resume(_torrentId);
     if (resumePlayback) player.play();
@@ -1318,7 +1328,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     await Navigator.push(
       context,
-      MaterialPageRoute(
+      PlayerRoute(
         builder: (_) => WebPlayer(
           url: url,
           onClose: () => Navigator.pop(context),
@@ -1362,7 +1372,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     await Navigator.push(
       context,
-      MaterialPageRoute(
+      PlayerRoute(
         builder: (_) => WebPlayer(
           url: url,
           onClose: () => Navigator.pop(context),
@@ -1459,13 +1469,22 @@ class _PlayerScreenState extends State<PlayerScreen>
       // 2. Fetch streams for the episode — sorted by the same size/quality-
       // aware logic as the quality selector sheet (not seed count).
       final imdbId = widget.details.imdbId ?? widget.details.id;
-      final streams = await _resolver.getAvailableStreams(
-        imdbId: imdbId,
-        type: 'tv',
-        season: seasonNumber,
-        episode: targetEp.episodeNumber,
-        title: widget.details,
-      );
+      // Already looked up when it was readied (_maybeReadyNextEpisode).
+      final readied = _readiedNext;
+      final prefetched = readied != null &&
+              readied.season == seasonNumber &&
+              readied.episode == targetEp.episodeNumber
+          ? await readied.streams
+          : const <TorrentStream>[];
+      final streams = prefetched.isNotEmpty
+          ? prefetched
+          : await _resolver.getAvailableStreams(
+              imdbId: imdbId,
+              type: 'tv',
+              season: seasonNumber,
+              episode: targetEp.episodeNumber,
+              title: widget.details,
+            );
 
       if (streams.isEmpty) {
         throw Exception('No streams found for this episode.');
@@ -1654,16 +1673,77 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
-  /// Netflix Auto Play Next Episode Feature
-  Future<void> _playNextEpisode() async {
-    if (_currentEpisode == null || _episodes.isEmpty) return;
-
+  /// The episode after the playing one this season, if any.
+  Episode? get _nextEpisode {
+    if (_currentEpisode == null || _episodes.isEmpty) return null;
     final currentIndex =
         _episodes.indexWhere((e) => e.episodeNumber == _currentEpisode);
-    if (currentIndex == -1 || currentIndex >= _episodes.length - 1) return;
+    if (currentIndex == -1 || currentIndex >= _episodes.length - 1) {
+      return null;
+    }
+    return _episodes[currentIndex + 1];
+  }
 
-    final nextEp = _episodes[currentIndex + 1];
+  /// Netflix Auto Play Next Episode Feature
+  Future<void> _playNextEpisode() async {
+    final nextEp = _nextEpisode;
+    if (nextEp == null) return;
     _playEpisode(nextEp, _currentSeason ?? 1);
+  }
+
+  // The next episode, readied near the end of this one (see
+  // _maybeReadyNextEpisode): which one, its torrents (_playEpisode uses
+  // them rather than looking them up again), and its head start's.
+  ({int season, int episode, Future<List<TorrentStream>> streams})?
+      _readiedNext;
+  List<TorrentStream> _nextHeadStart = const [];
+  // The episode ("season:episode") the next one was readied from, so it's
+  // done once per episode.
+  String? _readiedFrom;
+
+  /// Near the end of an episode — its last 3 minutes, or past 85% — gets
+  /// the next one ready: finds its torrents and gives the likely pick a
+  /// head start (StreamResolver.warmUp: on Wi-Fi, downloading its start),
+  /// so Next Episode starts it at once.
+  void _maybeReadyNextEpisode(Duration pos) {
+    if (widget.details.type != 'tv' || _duration <= Duration.zero) return;
+    final from = '$_currentSeason:$_currentEpisode';
+    if (_readiedFrom == from) return;
+    final left = _duration - pos;
+    if (left > const Duration(minutes: 3) &&
+        pos < _duration * 0.85) {
+      return;
+    }
+    _readiedFrom = from;
+    final next = _nextEpisode;
+    if (next == null || next.isUnreleased) return;
+    final season = _currentSeason ?? 1;
+    final imdbId = widget.details.imdbId ?? widget.details.id;
+    final streams = _resolver.getAvailableStreams(
+      imdbId: imdbId,
+      type: 'tv',
+      season: season,
+      episode: next.episodeNumber,
+      title: widget.details,
+    );
+    _readiedNext =
+        (season: season, episode: next.episodeNumber, streams: streams);
+    () async {
+      final list = await streams;
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted || list.isEmpty) return;
+      final candidates = StreamResolver.headStartCandidates(
+        list,
+        lastPlayedHash: prefs.getString(
+            'last_played_torrent_${imdbId}_${season}_${next.episodeNumber}'),
+      );
+      _nextHeadStart = [..._nextHeadStart, ...candidates];
+      _resolver.warmUp(
+        candidates,
+        resumeAt: SavedMoviesService()
+            .getEpisodeProgress(widget.movie.id, season, next.episodeNumber),
+      );
+    }();
   }
 
   /// Browse and fetch details of a different season
@@ -1756,6 +1836,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     // remainder.
     player.dispose();
     _resolver.pause(_torrentId);
+    // A readied next episode not played: what it got ahead goes (one
+    // that was played is now a download of its own, and stays).
+    _resolver.coolDown(_nextHeadStart);
 
     // 5. Dispose seek bar / stats notifiers
     _positionNotifier.dispose();
@@ -1979,7 +2062,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                         ),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.close,
+                        icon: const Icon(Icons.close_rounded,
                             color: Colors.white38, size: 20),
                         onPressed: () => Navigator.pop(sheetContext),
                       ),

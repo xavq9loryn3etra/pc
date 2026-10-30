@@ -104,6 +104,9 @@ flutter:
     - assets/welcome/music/
     - assets/welcome/books/
     - assets/fonts/Yellowtail-LICENSE.txt
+    # The app font (Outfit, through google_fonts) — bundled so every device
+    # shows it from the first frame, offline too. See main().
+    - assets/google_fonts/
     - assets/providers/
 
   # Bundled rather than fetched via google_fonts: the offline status

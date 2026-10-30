@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,11 +19,13 @@ import 'screens/maintenance_overlay.dart';
 import 'screens/no_internet_overlay.dart';
 import 'screens/splash_screen.dart';
 import 'theme/app_theme.dart';
+import 'widgets/glass_blur.dart';
 
 import 'services/app_mode_service.dart';
 import 'services/saved_movies_service.dart';
 import 'services/deep_link_service.dart';
 import 'services/feature_flags_service.dart';
+import 'services/torrent/download_ahead_settings.dart';
 import 'services/torrent/torrent_engine_service.dart';
 import 'services/trending_service.dart';
 import 'services/visual_effects_service.dart';
@@ -37,6 +40,18 @@ void main() async {
       await rootBundle.loadString('assets/fonts/Yellowtail-LICENSE.txt'),
     );
   });
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(
+      ['Outfit font'],
+      await rootBundle.loadString('assets/google_fonts/OFL.txt'),
+    );
+  });
+
+  // The app font comes from assets/google_fonts/ only, never downloaded:
+  // a phone that hadn't downloaded it yet (or couldn't) showed the
+  // system font instead, which looks heavier, so text weight differed
+  // from phone to phone.
+  GoogleFonts.config.allowRuntimeFetching = false;
 
   // Always start in portrait, regardless of whatever orientation the OS
   // Activity was left in. PlayerScreen/WebPlayer lock to landscape and only
@@ -62,6 +77,7 @@ void main() async {
   await AppModeService().init();
   await FeatureFlagsService().init();
   await VisualEffectsService().init();
+  await DownloadAheadSettings().init();
   // Not awaited: this spins up the native libtorrent engine (DHT bootstrap,
   // tracker connections), which isn't needed until the user actually starts
   // streaming something. Awaiting it here delayed the first frame on every
@@ -408,10 +424,9 @@ class _ShaderWarmup extends StatelessWidget {
       height: 1,
       child: ClipRect(
         child: BackdropFilter(
-          // Kept in sync with the sigma actually used app-wide (see
-          // custom_app_bar.dart/floating_bottom_nav_bar.dart/etc.) — this
-          // widget's only job is to precompile that exact blur variant.
-          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          // The glass's own filter (GlassBlur.filterFor, at its default
+          // sigma) — this widget's only job is to precompile it.
+          filter: GlassBlur.filterFor(12),
           child: Container(color: Colors.transparent),
         ),
       ),

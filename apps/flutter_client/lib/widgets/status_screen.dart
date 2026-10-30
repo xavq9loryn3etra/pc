@@ -227,8 +227,8 @@ class _StatusPillState extends State<StatusPill>
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(30),
-            color: Colors.black.withValues(alpha: 0.35),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+            color: kGlassTint,
+            border: Border.all(color: kGlassEdge),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,

@@ -11,7 +11,7 @@ import 'package:flutter/rendering.dart';
 /// joined by a thin, concave neck — like two water droplets barely touching.
 ///
 /// The circle, the pill and the neck are one shape under one blur (same
-/// recipe as the app's other glass: 10px blur, 35% black), so they read as
+/// recipe as the app's other glass: GlassBlur under kGlassTint), so they read as
 /// a single piece of glass. [reveal] (0–1) grows the title bubble out of
 /// the button and back.
 class GlassBubbleBar extends StatefulWidget {
@@ -75,10 +75,8 @@ class _GlassBubbleBarState extends State<GlassBubbleBar> {
                     pillWidth: pillWidth,
                     grow: grow,
                   ),
-                  child: GlassBlur(
-                    child: ColoredBox(
-                      color: Colors.black.withValues(alpha: 0.35),
-                    ),
+                  child: const GlassBlur(
+                    child: ColoredBox(color: kGlassTint),
                   ),
                 ),
               ),

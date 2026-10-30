@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/movie.dart';
+import 'torrent/last_played_torrents.dart';
 
 class SavedMoviesService with ChangeNotifier {
   static const String _favoritesKey = 'favorites_v1';
@@ -241,9 +242,14 @@ class SavedMoviesService with ChangeNotifier {
 
   Future<void> removeFromHistory(String movieId) async {
     if (_history.containsKey(movieId)) {
+      final imdbId = getMovieFromHistory(movieId)?.imdbId;
       _history.remove(movieId);
       _historyCache = null;
       await _saveHistory();
+
+      // And which copy it last played: nothing to resume any more, so its
+      // quality shouldn't come up as "Last watched".
+      await LastPlayedTorrents.forgetTitle([movieId, if (imdbId != null) imdbId]);
 
       // Clear associated episode history
       _episodeHistory.removeWhere((key, _) => key.startsWith('${movieId}_'));

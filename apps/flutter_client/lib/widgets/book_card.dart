@@ -63,14 +63,14 @@ class BookCard extends StatelessWidget {
                       ),
                       errorWidget: (context, url, error) => Container(
                         color: Colors.grey[900],
-                        child: const Icon(Icons.book, color: Colors.white24),
+                        child: const Icon(Icons.book_rounded, color: Colors.white24),
                       ),
                     )
                   : Container(
                       color: Colors.grey[900],
                       child: const Center(
                         child:
-                            Icon(Icons.book, color: Colors.white24, size: 40),
+                            Icon(Icons.book_rounded, color: Colors.white24, size: 40),
                       ),
                     ),
             ),

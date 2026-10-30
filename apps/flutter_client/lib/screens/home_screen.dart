@@ -121,6 +121,9 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
       print('Error loading home data: $e');
     }
     await _reveal();
+    // The hero's More Info is the likeliest first tap: have its page ready.
+    final featured = _featuredMovie;
+    if (featured != null && mounted) DetailsScreen.prefetch(context, featured);
   }
 
   Future<void> _precacheHero(Movie movie) {
@@ -244,6 +247,10 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
               MovieHeroBanner(
                 scrollController: _scrollController,
                 movie: _featuredMovie!,
+                // Where it stands in TMDB's weekly trending list.
+                trendingRank: _trendingMovies
+                        .indexWhere((m) => m.id == _featuredMovie!.id) +
+                    1,
                 onTrailer: onTrailer,
                 onInfo: () => _navigateToDetails(
                   _featuredMovie!,

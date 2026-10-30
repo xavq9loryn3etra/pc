@@ -7,6 +7,7 @@ import '../theme/app_theme.dart';
 import '../services/saved_movies_service.dart';
 import '../services/feature_flags_service.dart';
 import 'episode_card.dart';
+import '../screens/details_screen.dart';
 
 class MoviePoster extends StatefulWidget {
   final Movie movie;
@@ -34,6 +35,12 @@ class MoviePoster extends StatefulWidget {
 
 class _MoviePosterState extends State<MoviePoster> {
   bool _isHovered = false;
+
+  // A finger touching the poster usually means it's about to be opened:
+  // its page starts loading now, the moment before the tap lands.
+  void _prefetchDetails(TapDownDetails _) {
+    if (widget.onTap != null) DetailsScreen.prefetch(context, widget.movie);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -85,7 +92,7 @@ class _MoviePosterState extends State<MoviePoster> {
                 ? Container(
                     color: Colors.grey[900],
                     child: const Center(
-                      child: Icon(Icons.movie, color: Colors.white24),
+                      child: Icon(Icons.movie_rounded, color: Colors.white24),
                     ),
                   )
                 : isSvg
@@ -119,7 +126,7 @@ class _MoviePosterState extends State<MoviePoster> {
                           color: Colors.grey[900],
                           child: const Center(
                             child: Icon(
-                              Icons.broken_image,
+                              Icons.broken_image_rounded,
                               color: Colors.white24,
                             ),
                           ),
@@ -200,7 +207,10 @@ class _MoviePosterState extends State<MoviePoster> {
 
     // If height is infinite (e.g. in GridView), we want the image to take available space
     // minus the text height.
-    if (widget.height == double.infinity) {
+    // Only with the title: it's what puts the image in a Column. Without one
+    // the grid cell's own size bounds it, and Expanded outside a Column
+    // broke the layout (the person sheet's grid of their films).
+    if (widget.height == double.infinity && widget.showTitle) {
       imageContent = Expanded(child: imageContent);
     }
 
@@ -210,6 +220,7 @@ class _MoviePosterState extends State<MoviePoster> {
         onEnter: (_) => setState(() => _isHovered = true),
         onExit: (_) => setState(() => _isHovered = false),
         child: GestureDetector(
+          onTapDown: _prefetchDetails,
           onTap: widget.onTap,
           onLongPress: widget.onLongPress,
           child: AnimatedScale(
@@ -227,6 +238,7 @@ class _MoviePosterState extends State<MoviePoster> {
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
       child: GestureDetector(
+        onTapDown: _prefetchDetails,
         onTap: widget.onTap,
         onLongPress: widget.onLongPress,
         child: AnimatedScale(

@@ -32,11 +32,43 @@ class GlassBlur extends StatelessWidget {
 
   const GlassBlur({
     super.key,
-    this.sigma = 10,
+    // Measured on a Galaxy S10: at 20, drawing the app's glass ran past
+    // a 60 Hz frame's 16.7 ms several times a second while scrolling.
+    this.sigma = 12,
     this.grouped = false,
     this.reducedTint = const Color(0x4D000000), // black, 30%
     required this.child,
   });
+
+  /// How much more vivid the blurred backdrop is made. Apple's materials
+  /// do the same: without it, blurring mixes neighbouring colours into
+  /// mud, and the glass reads as dirty grey rather than frosted.
+  static const double _saturation = 1.8;
+
+  /// The glass's colour boost on its own — for "glass" faked with an
+  /// already-blurry image instead of a live blur (the mode selector's
+  /// panel, the episode popups' backdrop), so it matches the real thing.
+  static final ColorFilter saturate = () {
+    // The standard saturation matrix (Rec. 709 luminance weights).
+    const s = _saturation;
+    const r = 0.2126 * (1 - s), g = 0.7152 * (1 - s), b = 0.0722 * (1 - s);
+    return const ColorFilter.matrix([
+      r + s, g, b, 0, 0, //
+      r, g + s, b, 0, 0, //
+      r, g, b + s, 0, 0, //
+      0, 0, 0, 1, 0, //
+    ]);
+  }();
+
+  /// The glass's backdrop filter at [sigma]: blur, then [saturate].
+  static ImageFilter filterFor(double sigma) => ImageFilter.compose(
+        outer: saturate,
+        inner: ImageFilter.blur(
+          sigmaX: sigma,
+          sigmaY: sigma,
+          tileMode: TileMode.mirror,
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -49,7 +81,7 @@ class GlassBlur extends StatelessWidget {
             child: child,
           );
         }
-        final filter = ImageFilter.blur(sigmaX: sigma, sigmaY: sigma);
+        final filter = filterFor(sigma);
         return grouped
             ? BackdropFilter.grouped(filter: filter, child: child!)
             : BackdropFilter(filter: filter, child: child!);
@@ -60,22 +92,35 @@ class GlassBlur extends StatelessWidget {
 }
 
 // The app's frosted glass on top of a [GlassBlur] (as on the details
-// screen's back button and the bottom nav): a 35% black tint with a faint
-// edge.
-const kGlassTint = Color(0x59000000);
-final kGlassEdge = Colors.white.withValues(alpha: 0.12);
+// screen's back button and the bottom nav), after Apple's dark materials:
+// a neutral dark grey rather than black, so what's behind shows through
+// as soft colour, and only a hairline of an edge to keep it from vanishing
+// against black.
+const kGlassTint = Color(0x8C2C2C2E); // #2C2C2E, 55%
+final kGlassEdge = Colors.white.withValues(alpha: 0.06);
+
+// The thicker glass of big surfaces holding text — dialogs, sheets, side
+// panels — like Apple's thick material: the same grey, darker, so text
+// stays readable over anything behind.
+const kGlassSheetTint = Color(0xB81C1C1E); // #1C1C1E, 72%
 
 /// A round frosted-glass icon button — the back / close buttons over the
 /// player and its episode browser, matching the details screen's.
 class GlassCircleButton extends StatelessWidget {
   final IconData icon;
   final VoidCallback onPressed;
+  final double iconSize;
 
   const GlassCircleButton({
     super.key,
     required this.icon,
     required this.onPressed,
+    this.iconSize = 20,
   });
+
+  /// The back chevron: heavier than the "iOS arrow" icon, like Apple's.
+  static const IconData backIcon = Icons.chevron_left_rounded;
+  static const double backIconSize = 30;
 
   @override
   Widget build(BuildContext context) {
@@ -91,7 +136,7 @@ class GlassCircleButton extends StatelessWidget {
             child: SizedBox(
               width: 40,
               height: 40,
-              child: Icon(icon, color: Colors.white, size: 18),
+              child: Icon(icon, color: Colors.white, size: iconSize),
             ),
           ),
         ),

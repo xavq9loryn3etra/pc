@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 
 class TorrentStream {
@@ -19,6 +21,10 @@ class TorrentStream {
   // want: its languages line then doesn't affect ranking (see
   // StreamResolver.languageRank).
   final bool ignoreLanguage;
+  // Trackers the finder lists for this particular torrent (Torrentio's
+  // "sources") — added to the magnet next to our own general ones, so the
+  // engine also asks where this torrent's sharers are known to gather.
+  final List<String> trackers;
 
   TorrentStream({
     required this.infoHash,
@@ -32,6 +38,7 @@ class TorrentStream {
     this.languages = '',
     this.isPack = false,
     this.ignoreLanguage = false,
+    this.trackers = const [],
   });
 
   /// This stream with [ignoreLanguage] set.
@@ -47,7 +54,107 @@ class TorrentStream {
         languages: languages,
         isPack: isPack,
         ignoreLanguage: true,
+        trackers: trackers,
       );
+
+  /// This stream, as also found by another finder ([other], the same
+  /// torrent): the higher of the two sharer counts — finders' counts age
+  /// at different rates — and both tracker lists.
+  TorrentStream mergedWith(TorrentStream other) => TorrentStream(
+        infoHash: infoHash,
+        title: title,
+        name: name,
+        quality: quality,
+        size: size,
+        source: source,
+        fileIdx: fileIdx,
+        seeders: (other.seeders ?? 0) > (seeders ?? 0)
+            ? other.seeders
+            : seeders,
+        languages: languages,
+        isPack: isPack,
+        ignoreLanguage: ignoreLanguage,
+        trackers: {...trackers, ...other.trackers}.toList(),
+      );
+
+  /// A stream for a finder that gives plain fields rather than Torrentio's
+  /// text lines (YTS, The Pirate Bay). [title] is laid out the way
+  /// Torrentio's is, which the rest of the app reads.
+  factory TorrentStream.fromRelease({
+    required String infoHash,
+    required String name,
+    required int sizeBytes,
+    required int seeders,
+    required String source,
+    String? quality,
+  }) {
+    final size = formatSize(sizeBytes);
+    return TorrentStream(
+      infoHash: infoHash.toLowerCase(),
+      title: '$name\n👤 $seeders 💾 $size ⚙️ $source',
+      name: name,
+      quality: quality ?? qualityFromName(name) ?? 'HDRip',
+      size: size,
+      source: source,
+      seeders: seeders,
+      languages: languagesFromName(name),
+    );
+  }
+
+  /// "1.85 GB" / "700 MB", the way Torrentio writes sizes.
+  static String formatSize(int bytes) {
+    const mb = 1024 * 1024;
+    if (bytes >= 1024 * mb) {
+      return '${(bytes / (1024 * mb)).toStringAsFixed(2)} GB';
+    }
+    return '${(bytes / mb).toStringAsFixed(0)} MB';
+  }
+
+  /// The quality a release name gives ("…1080p BluRay…"), or null.
+  static String? qualityFromName(String name) {
+    final n = name.toLowerCase();
+    if (RegExp(r'2160p|\b4k\b|\buhd\b').hasMatch(n)) return '4K';
+    if (n.contains('1080p') || n.contains('1080i')) return '1080p';
+    if (n.contains('720p')) return '720p';
+    if (n.contains('480p') || n.contains('576p') || n.contains('dvdrip')) {
+      return '480p';
+    }
+    if (RegExp(r'\b(hd)?cam(rip)?\b|\btelesync\b|\bhdts\b|\bts(rip)?\b')
+        .hasMatch(n)) {
+      return 'CAM';
+    }
+    return null;
+  }
+
+  // Words in release names that mark their audio, as the flags Torrentio
+  // shows for them (see StreamResolver.languageRank).
+  static final _nameLanguages = <RegExp, String>{
+    RegExp(r'(?<![A-Za-z])(ENG|English)(?![A-Za-z])'): '🇬🇧',
+    RegExp(r'(?<![A-Za-z])(ITA|Italian)(?![A-Za-z])'): '🇮🇹',
+    RegExp(r'(?<![A-Za-z])(FRENCH|TRUEFRENCH|VFF|VFQ|VF2|French)(?![A-Za-z])'):
+        '🇫🇷',
+    RegExp(r'(?<![A-Za-z])(SPANISH|Spanish|Castellano|ESP)(?![A-Za-z])'): '🇪🇸',
+    RegExp(r'(?<![A-Za-z])(LATINO|Latino)(?![A-Za-z])'): '🇲🇽',
+    RegExp(r'(?<![A-Za-z])(GERMAN|German|GER)(?![A-Za-z])'): '🇩🇪',
+    RegExp(r'(?<![A-Za-z])(RUS|Russian)(?![A-Za-z])'): '🇷🇺',
+    RegExp(r'(?<![A-Za-z])(Hindi|HINDI|Tamil|TAMIL|Telugu|TELUGU)(?![A-Za-z])'):
+        '🇮🇳',
+  };
+  static final _multiPattern = RegExp(
+      r'(?<![A-Za-z])(MULTi|MULTI|Multi|Dual[ .-]?Audio|DUAL)(?![A-Za-z])');
+
+  /// A languages line like Torrentio's ("🇬🇧 / 🇮🇹", "Multi Audio") for a
+  /// release name — empty when it names no language (usually English).
+  static String languagesFromName(String name) {
+    final parts = <String>[
+      if (_multiPattern.hasMatch(name)) 'Multi Audio',
+      for (final e in _nameLanguages.entries)
+        if (e.key.hasMatch(name)) e.value,
+    ];
+    // English alone says nothing the empty line doesn't.
+    if (parts.length == 1 && parts.first == '🇬🇧') return '';
+    return parts.toSet().join(' / ');
+  }
 
   factory TorrentStream.fromJson(Map<String, dynamic> json) {
     final String rawTitle = json['title'] ?? '';
@@ -155,10 +262,31 @@ class TorrentStream {
       // A pack's title has the episode's file name between the release
       // name and the stats line (see above).
       isPack: statsIndex > 1,
+      trackers: _trackersFrom(json['sources']),
     );
+  }
+
+  /// The trackers in Torrentio's `sources` ("tracker:udp://…", next to
+  /// "dht:…" entries). HTTPS ones are left out: our engine build can't
+  /// reach them.
+  static List<String> _trackersFrom(Object? sources) {
+    if (sources is! List) return const [];
+    return sources
+        .whereType<String>()
+        .where((s) => s.startsWith('tracker:'))
+        .map((s) => s.substring('tracker:'.length))
+        .where((url) =>
+            (url.startsWith('udp://') || url.startsWith('http://')) &&
+            !url.contains('.local/'))
+        .toList();
   }
 }
 
+
+/// Finds a title's torrents. Asks several finders at once and combines what
+/// they return, so one being down or missing a title doesn't leave Play
+/// with nothing: Torrentio (the main one, which also searches many sites
+/// itself), YTS (movies — small, well-shared encodes) and The Pirate Bay.
 class TorrentIndexService {
   // Singleton — avoids constructing a fresh Dio client (and its interceptors/
   // adapter) every time a screen builds a TorrentIndexService/StreamResolver.
@@ -168,8 +296,77 @@ class TorrentIndexService {
 
   final Dio _dio = Dio();
 
-  Future<List<TorrentStream>> getMovieStreams(String imdbId) async {
-    final url = 'https://torrentio.strem.fun/stream/movie/$imdbId.json';
+  /// Once this long has passed and some finder has answered, the rest are
+  /// no longer waited for — a slow one (Torrentio on a cache miss can take
+  /// 20s) shouldn't hold up what the others already found.
+  static const _patience = Duration(seconds: 8);
+
+  // YTS keeps moving its address; the old ones forward to the new.
+  static const _ytsApis = [
+    'https://movies-api.accel.li/api/v2',
+    'https://yts.lt/api/v2',
+  ];
+
+  // The Pirate Bay's video categories: movies (201, 202, 207, 209, 211)
+  // and TV (205, 208, 212). Not 206 (phone-sized rips) or anything else.
+  static const _pirateBayMovieCategories = {'201', '202', '207', '209', '211'};
+  static const _pirateBayTvCategories = {'205', '208', '212'};
+
+  Future<List<TorrentStream>> getMovieStreams(String imdbId) => _gather([
+        _torrentio('movie/$imdbId'),
+        _yts(imdbId),
+        _pirateBay(imdbId),
+      ]);
+
+  Future<List<TorrentStream>> getSeriesStreams(
+          String imdbId, int season, int episode) =>
+      _gather([
+        _torrentio('series/$imdbId:$season:$episode'),
+        _pirateBay(imdbId, season: season, episode: episode),
+      ]);
+
+  /// Runs [lookups] together and combines their torrents, keeping the
+  /// first lookup's copy of a torrent several of them find (Torrentio's
+  /// carries the most: file index, season-pack info, languages).
+  Future<List<TorrentStream>> _gather(
+      List<Future<List<TorrentStream>>> lookups) async {
+    final found = List<List<TorrentStream>?>.filled(lookups.length, null);
+    final done = Completer<void>();
+    var pending = lookups.length;
+    var patienceUp = false;
+    void check() {
+      if (done.isCompleted) return;
+      final anyFound = found.any((f) => f != null && f.isNotEmpty);
+      if (pending == 0 || (patienceUp && anyFound)) done.complete();
+    }
+
+    for (var i = 0; i < lookups.length; i++) {
+      lookups[i].then((streams) {
+        found[i] = streams;
+        pending--;
+        check();
+      });
+    }
+    final patience = Timer(_patience, () {
+      patienceUp = true;
+      check();
+    });
+    await done.future;
+    patience.cancel();
+
+    final byHash = <String, TorrentStream>{};
+    for (final streams in found) {
+      for (final s in streams ?? const <TorrentStream>[]) {
+        final key = s.infoHash.toLowerCase();
+        final known = byHash[key];
+        byHash[key] = known == null ? s : known.mergedWith(s);
+      }
+    }
+    return byHash.values.toList();
+  }
+
+  Future<List<TorrentStream>> _torrentio(String path) async {
+    final url = 'https://torrentio.strem.fun/stream/$path.json';
     try {
       final response = await _dio.get(
         url,
@@ -193,37 +390,97 @@ class TorrentIndexService {
       }
       print('Torrentio $url -> unexpected status ${response.statusCode}');
     } catch (e) {
-      print('Error fetching movie torrents ($url): $e');
+      print('Error fetching torrents from Torrentio ($url): $e');
     }
     return [];
   }
 
-  Future<List<TorrentStream>> getSeriesStreams(String imdbId, int season, int episode) async {
-    final url = 'https://torrentio.strem.fun/stream/series/$imdbId:$season:$episode.json';
-    try {
-      final response = await _dio.get(
-        url,
-        options: Options(
-          headers: {'User-Agent': 'Mozilla/5.0'},
-          sendTimeout: const Duration(seconds: 10),
-          // Torrentio's free public instance has to live-scrape trackers on
-          // a cache miss, which can take 15-20s for less popular titles —
-          // 10s was cutting the response off right before it arrived.
-          receiveTimeout: const Duration(seconds: 25),
-        ),
+  Options get _quickOptions => Options(
+        headers: {'User-Agent': 'Mozilla/5.0'},
+        sendTimeout: const Duration(seconds: 6),
+        receiveTimeout: const Duration(seconds: 8),
       );
 
-      if (response.statusCode == 200 && response.data != null) {
-        final List<dynamic> streamsJson = response.data['streams'] ?? [];
-        print('Torrentio $url -> ${streamsJson.length} stream(s)');
-        return streamsJson
-            .where((json) => json['infoHash'] != null)
-            .map((json) => TorrentStream.fromJson(json))
-            .toList();
+  Future<List<TorrentStream>> _yts(String imdbId) async {
+    for (final api in _ytsApis) {
+      try {
+        final response = await _dio.get(
+          '$api/movie_details.json',
+          queryParameters: {'imdb_id': imdbId},
+          options: _quickOptions,
+        );
+        final movie = response.data?['data']?['movie'];
+        // An unknown movie comes back as an empty one, not an error.
+        if (movie == null || movie['imdb_code'] != imdbId) return [];
+        final torrents = (movie['torrents'] as List?) ?? const [];
+        final title = '${movie['title_long'] ?? movie['title']}';
+        final streams = [
+          for (final t in torrents)
+            if (t['hash'] is String)
+              TorrentStream.fromRelease(
+                infoHash: t['hash'],
+                name: '$title ${t['quality']} ${t['type']} '
+                    '${t['video_codec'] ?? ''} YTS',
+                sizeBytes: (t['size_bytes'] as num?)?.toInt() ?? 0,
+                seeders: (t['seeds'] as num?)?.toInt() ?? 0,
+                source: 'YTS',
+                quality: TorrentStream.qualityFromName('${t['quality']}'),
+              ),
+        ];
+        print('YTS $imdbId -> ${streams.length} stream(s)');
+        return streams;
+      } catch (e) {
+        print('Error fetching torrents from YTS ($api): $e');
       }
-      print('Torrentio $url -> unexpected status ${response.statusCode}');
+    }
+    return [];
+  }
+
+  /// The Pirate Bay's torrents tagged with [imdbId]. For an episode
+  /// ([season] and [episode] given), only torrents of that one episode:
+  /// which of a season pack's files is the episode can't be told before
+  /// its metadata arrives.
+  Future<List<TorrentStream>> _pirateBay(
+    String imdbId, {
+    int? season,
+    int? episode,
+  }) async {
+    final isEpisode = season != null && episode != null;
+    final categories =
+        isEpisode ? _pirateBayTvCategories : _pirateBayMovieCategories;
+    // "S01E05" but not "S01E05-E08" or "S01E05E06".
+    final episodePattern = RegExp(
+        'S0?${season}E0?$episode(?![0-9])(?!\\s*[-–]\\s*E?[0-9])(?!E[0-9])',
+        caseSensitive: false);
+    try {
+      final response = await _dio.get(
+        'https://apibay.org/q.php',
+        queryParameters: {'q': imdbId},
+        options: _quickOptions,
+      );
+      final results = response.data is List ? response.data as List : const [];
+      final streams = [
+        for (final r in results)
+          // "No results returned" comes back as a single id-0 entry.
+          if (r['id'] != '0' &&
+              r['imdb'] == imdbId &&
+              categories.contains(r['category']) &&
+              r['info_hash'] is String &&
+              (!isEpisode || episodePattern.hasMatch('${r['name']}')))
+            TorrentStream.fromRelease(
+              infoHash: r['info_hash'],
+              name: '${r['name']}',
+              sizeBytes: int.tryParse('${r['size']}') ?? 0,
+              seeders: int.tryParse('${r['seeders']}') ?? 0,
+              source: 'ThePirateBay',
+            ),
+      ];
+      print('The Pirate Bay $imdbId'
+          '${isEpisode ? ' S${season}E$episode' : ''} -> '
+          '${streams.length} stream(s)');
+      return streams;
     } catch (e) {
-      print('Error fetching series torrents ($url): $e');
+      print('Error fetching torrents from The Pirate Bay ($imdbId): $e');
     }
     return [];
   }

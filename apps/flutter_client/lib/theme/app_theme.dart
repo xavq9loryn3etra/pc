@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -45,6 +46,21 @@ class AppTheme {
       brightness: Brightness.dark,
       scaffoldBackgroundColor: scaffoldColor,
       primaryColor: primaryColor,
+
+      // One way of moving between screens everywhere, Apple's: a slide in
+      // from the side, and back with a swipe from the left edge. Pages
+      // opened with a plain MaterialPageRoute zoomed in, Android-style,
+      // while those opened as CupertinoPageRoute slid. Players and the book
+      // reader fade instead (see PlayerRoute).
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.windows: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.linux: CupertinoPageTransitionsBuilder(),
+        },
+      ),
 
       // Color Scheme
       colorScheme: const ColorScheme.dark(

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -15,6 +16,7 @@ import '../services/torrent/torrent_storage_service.dart';
 import '../services/torrent/torrent_download_registry.dart';
 import '../services/movie_tab_service.dart';
 import '../services/visual_effects_service.dart';
+import '../services/torrent/download_ahead_settings.dart';
 import '../theme/app_theme.dart';
 import '../main.dart';
 
@@ -64,6 +66,8 @@ class SettingsScreen extends StatelessWidget {
                   onImport: () => _importBackup(context),
                 ),
                 if (showStorage) ...[
+                  const _SectionLabel('PLAYBACK'),
+                  const _DownloadAheadRow(),
                   const _SectionLabel('STORAGE'),
                   const _StorageSection(),
                 ],
@@ -261,7 +265,7 @@ class _BackupRestoreRow extends StatelessWidget {
             children: [
               Expanded(
                 child: _BackupButton(
-                  icon: Icons.file_upload_outlined,
+                  icon: Icons.file_upload_rounded,
                   label: 'Export',
                   onTap: onExport,
                 ),
@@ -269,7 +273,7 @@ class _BackupRestoreRow extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(
                 child: _BackupButton(
-                  icon: Icons.file_download_outlined,
+                  icon: Icons.file_download_rounded,
                   label: 'Import',
                   onTap: onImport,
                 ),
@@ -469,7 +473,7 @@ class _Poster extends StatelessWidget {
           color: Colors.white10,
           borderRadius: BorderRadius.circular(6),
         ),
-        child: const Icon(Icons.movie_outlined, color: Colors.white38, size: 20),
+        child: const Icon(Icons.movie_rounded, color: Colors.white38, size: 20),
       );
     }
     return ClipRRect(
@@ -481,7 +485,7 @@ class _Poster extends StatelessWidget {
         fit: BoxFit.cover,
         errorWidget: (_, __, ___) => Container(
           color: Colors.white10,
-          child: const Icon(Icons.movie_outlined, color: Colors.white38, size: 20),
+          child: const Icon(Icons.movie_rounded, color: Colors.white38, size: 20),
         ),
       ),
     );
@@ -568,7 +572,7 @@ class _DownloadTile extends StatelessWidget {
         totalBytes: info?.totalBytes,
       ),
       trailing: IconButton(
-        icon: const Icon(Icons.delete_outline, color: Colors.white38),
+        icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38),
         onPressed: onDelete,
       ),
     );
@@ -628,7 +632,7 @@ class _ShowGroupTile extends StatelessWidget {
                 totalBytes: infos[i].totalBytes,
               ),
               trailing: IconButton(
-                icon: const Icon(Icons.delete_outline, color: Colors.white38),
+                icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38),
                 onPressed: () => onDelete(entries[i]),
               ),
             ),
@@ -645,35 +649,75 @@ class _ReduceGlassRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return _SwitchRow(
+      title: 'Reduce glass effects',
+      description: 'Uses a plain tint instead of the frosted blur behind '
+          'bars and buttons. Smoother scrolling on slower phones.',
+      value: VisualEffectsService().reduceGlass,
+      onChanged: VisualEffectsService().setReduceGlass,
+    );
+  }
+}
+
+/// "Download ahead on mobile data": lets the head start download a few MB
+/// of what's likely to be played next on mobile data too (see
+/// DownloadAheadSettings) — on Wi-Fi it always does.
+class _DownloadAheadRow extends StatelessWidget {
+  const _DownloadAheadRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return _SwitchRow(
+      title: 'Download ahead on mobile data',
+      description: 'Starts downloading what you\'ll likely play — about '
+          '6 MB a title — so it starts sooner. On Wi-Fi it always does.',
+      value: DownloadAheadSettings().onMobileData,
+      onChanged: DownloadAheadSettings().setOnMobileData,
+    );
+  }
+}
+
+/// A setting's title and description, with its on/off switch.
+class _SwitchRow extends StatelessWidget {
+  final String title;
+  final String description;
+  final ValueListenable<bool> value;
+  final ValueChanged<bool> onChanged;
+
+  const _SwitchRow({
+    required this.title,
+    required this.description,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
-      valueListenable: VisualEffectsService().reduceGlass,
-      builder: (context, reduce, _) => Padding(
+      valueListenable: value,
+      builder: (context, on, _) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
         child: Row(
           children: [
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Reduce glass effects',
-                    style: TextStyle(color: Colors.white, fontSize: 15),
+                    title,
+                    style: const TextStyle(color: Colors.white, fontSize: 15),
                   ),
-                  SizedBox(height: 4),
+                  const SizedBox(height: 4),
                   Text(
-                    'Uses a plain tint instead of the frosted blur behind '
-                    'bars and buttons. Smoother scrolling on slower phones.',
-                    style: TextStyle(
+                    description,
+                    style: const TextStyle(
                         color: Colors.white70, fontSize: 13, height: 1.4),
                   ),
                 ],
               ),
             ),
             const SizedBox(width: 4),
-            GlassSwitch(
-              value: reduce,
-              onChanged: VisualEffectsService().setReduceGlass,
-            ),
+            GlassSwitch(value: on, onChanged: onChanged),
           ],
         ),
       ),

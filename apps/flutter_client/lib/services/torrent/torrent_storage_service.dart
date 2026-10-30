@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'last_played_torrents.dart';
 import 'torrent_download_registry.dart';
 import 'torrent_engine_service.dart';
 import 'torrent_paths.dart';
@@ -113,6 +114,7 @@ class TorrentStorageService {
     }
 
     await TorrentDownloadRegistry.remove(infoHash);
+    await LastPlayedTorrents.forgetTorrent(infoHash);
   }
 
   static String formatBytes(int bytes) {

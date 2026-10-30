@@ -202,7 +202,7 @@ class _ScrollingRowState extends State<_ScrollingRow>
             filterQuality: FilterQuality.medium,
             errorBuilder: (_, __, ___) => Container(
               color: Colors.grey[850],
-              child: const Icon(Icons.broken_image, color: Colors.grey),
+              child: const Icon(Icons.broken_image_rounded, color: Colors.grey),
             ),
           ),
         ),

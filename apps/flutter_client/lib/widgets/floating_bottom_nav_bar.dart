@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'glass_blur.dart';
-import '../theme/app_theme.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import '../services/movie_tab_service.dart';
@@ -167,7 +166,7 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
     switch (tab) {
       case BottomNavTab.home:
         return _NavCircle(
-          icon: Icons.home_outlined,
+          icon: Icons.home_rounded,
           activeIcon: Icons.home_rounded,
           isActive: widget.activeTab == BottomNavTab.home,
           activeColor: activeColor,
@@ -181,7 +180,7 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
         );
       case BottomNavTab.favorites:
         return _NavCircle(
-          icon: Icons.favorite_border,
+          icon: Icons.favorite_rounded,
           activeIcon: Icons.favorite_rounded,
           isActive: widget.activeTab == BottomNavTab.favorites,
           activeColor: activeColor,
@@ -189,7 +188,7 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
         );
       case BottomNavTab.settings:
         return _NavCircle(
-          icon: Icons.settings_outlined,
+          icon: Icons.settings_rounded,
           activeIcon: Icons.settings_rounded,
           isActive: widget.activeTab == BottomNavTab.settings,
           activeColor: activeColor,
@@ -338,14 +337,14 @@ class _SearchPill extends StatelessWidget {
     // Blur comes from the bar's shared glass layer behind it; this paints
     // just the tint, border and ink (clipped to the pill).
     return Material(
-      color: AppTheme.scaffoldColor.withValues(alpha: 0.35),
+      color: kGlassTint,
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(26),
         side: BorderSide(
           color: isActive
               ? activeColor.withValues(alpha: 0.45)
-              : Colors.white.withValues(alpha: 0.14),
+              : kGlassEdge,
           width: isActive ? 1.5 : 1,
         ),
       ),
@@ -368,7 +367,7 @@ class _SearchPill extends StatelessWidget {
                 AnimatedSwitcher(
                   duration: _kTransitionDuration,
                   child: Icon(
-                    isActive ? Icons.search_rounded : Icons.search_outlined,
+                    isActive ? Icons.search_rounded : Icons.search_rounded,
                     key: ValueKey(isActive),
                     color: isActive ? activeColor : Colors.white,
                     size: 22,
@@ -423,13 +422,13 @@ class _NavCircle extends StatelessWidget {
     // Blur comes from the bar's shared glass layer behind it; this paints
     // just the tint, border and ink (clipped to the circle).
     return Material(
-      color: AppTheme.scaffoldColor.withValues(alpha: 0.35),
+      color: kGlassTint,
       clipBehavior: Clip.antiAlias,
       shape: CircleBorder(
         side: BorderSide(
           color: isActive
               ? activeColor.withValues(alpha: 0.45)
-              : Colors.white.withValues(alpha: 0.14),
+              : kGlassEdge,
           width: isActive ? 1.5 : 1,
         ),
       ),

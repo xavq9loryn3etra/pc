@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import '../../models/movie.dart';
@@ -73,10 +74,13 @@ class StreamResolver {
     int? episode,
     Movie? title,
   }) async {
+    final stopwatch = Stopwatch()..start();
     final found = type == 'movie'
         ? await _indexService.getMovieStreams(imdbId)
         : await _indexService.getSeriesStreams(
             imdbId, season ?? 1, episode ?? 1);
+    print('[timing] found ${found.length} copies in '
+        '${stopwatch.elapsedMilliseconds} ms');
     var streams = found
         .where((s) =>
             tierOf(s) > 0 &&
@@ -238,7 +242,10 @@ class StreamResolver {
     }
 
     final ordered = tiersPresent.toList()..sort((a, b) => b.compareTo(a));
-    int chosen = 0;
+    // 4K is never the recommendation when there's anything else: the next
+    // best quality looks much the same on most screens, for a fraction of
+    // the download. It's still listed for whoever wants it.
+    int chosen = ordered.first == 4 && ordered.length > 1 ? 1 : 0;
     while (chosen < ordered.length - 1) {
       final currentSize = bestSizePerTier[ordered[chosen]];
       final nextSize = bestSizePerTier[ordered[chosen + 1]];
@@ -331,6 +338,42 @@ class StreamResolver {
     ];
   }
 
+  /// What Play most likely starts from [streams] (as sorted by
+  /// [getAvailableStreams]): the last-played torrent when it's among them,
+  /// otherwise the best copy of the recommended quality — the popup's
+  /// highlighted row either way.
+  static TorrentStream? likelyPick(
+    List<TorrentStream> streams, {
+    String? lastPlayedHash,
+  }) {
+    if (streams.isEmpty) return null;
+    if (lastPlayedHash != null) {
+      for (final s in streams) {
+        if (s.infoHash.toLowerCase() == lastPlayedHash.toLowerCase()) return s;
+      }
+    }
+    final tier = tierOf(streams.first);
+    return qualityOptions(streams).firstWhere((o) => o.tier == tier).best;
+  }
+
+  /// What a head start (see [warmUp]) races, from [streams]: the
+  /// [likelyPick] and the next two of its quality — sharer counts are often
+  /// stale, so the pick may have no one sharing it. Just the last-played
+  /// torrent when there is one: resuming wants that one, with what it has
+  /// downloaded.
+  static List<TorrentStream> headStartCandidates(
+    List<TorrentStream> streams, {
+    String? lastPlayedHash,
+  }) {
+    final pick = likelyPick(streams, lastPlayedHash: lastPlayedHash);
+    if (pick == null) return const [];
+    if (lastPlayedHash != null &&
+        pick.infoHash.toLowerCase() == lastPlayedHash.toLowerCase()) {
+      return [pick];
+    }
+    return sameQuality(pick, streams).take(3).toList();
+  }
+
   /// The torrents to try when [stream] is picked: [stream] itself, then the
   /// rest of [all] that share its quality, best first — so a failed start
   /// falls back to the same quality rather than a lower one.
@@ -369,10 +412,17 @@ class StreamResolver {
         final pb = sb.infoHash.toLowerCase() == preferHash.toLowerCase();
         if (pa != pb) return pa ? -1 : 1;
       }
+      // No English audio goes last whatever its sharers.
       final la = languageRank(sa), lb = languageRank(sb);
-      if (la != lb) return la.compareTo(lb);
+      if ((la == 2) != (lb == 2)) return la == 2 ? 1 : -1;
+      // Then a healthy copy before a barely-shared one, even if the healthy
+      // one also has other languages: the player picks the English track,
+      // and a copy with 2,000 sharers starts far sooner than one with 300.
+      // (Matchbox's best Full HD copy lists a dozen languages and was
+      // ranked below every English-only one.)
       final ha = healthy(sa), hb = healthy(sb);
       if (ha != hb) return ha ? -1 : 1;
+      if (la != lb) return la.compareTo(lb);
       if (ha) {
         // A torrent of just this episode before a season pack: it starts
         // sooner, as there's only one file's metadata to fetch.
@@ -412,17 +462,44 @@ class StreamResolver {
     return await _engine.streamMagnet(
       selected.infoHash,
       fileIndex: selected.fileIdx,
+      trackers: selected.trackers,
     );
   }
 
-  /// Resolve [selected], automatically falling back through the next-best
-  /// candidates in [allStreams] if it fails or times out. Torrentio's seed
-  /// counts are scraped/cached and often stale — a "67 seeds" pick can turn
-  /// out unreachable while a "0 seeds" one streams fine — so one failed
-  /// attempt shouldn't be a dead end the user has to manually recover from.
+  /// Gives what Play will most likely start a head start: races
+  /// [candidates] (see [headStartCandidates]) and starts downloading the
+  /// first to connect — from [resumeAt] (0–1) when it's being resumed — so
+  /// pressing Play starts it at once. See [TorrentEngineService.warmUp].
+  void warmUp(List<TorrentStream> candidates, {double? resumeAt}) =>
+      _engine.warmUp([
+        for (final s in candidates)
+          (infoHash: s.infoHash, trackers: s.trackers, fileIndex: s.fileIdx),
+      ], resumeAt: resumeAt);
+
+  /// Ends a [warmUp] Play didn't take — see [TorrentEngineService.coolDown].
+  void coolDown(List<TorrentStream> candidates) =>
+      _engine.coolDown([for (final s in candidates) s.infoHash]);
+
+  /// How long a copy gets to connect on its own before the next one is
+  /// started alongside it. A healthy top pick usually connects within a
+  /// couple of seconds and so still wins; a dead one now costs this long
+  /// rather than its full 20s timeout.
+  static const _headStart = Duration(seconds: 3);
+
+  /// Resolve [selected], automatically falling back to the next-best
+  /// candidates in [allStreams] if it's slow, fails or times out.
+  /// Torrentio's seed counts are scraped/cached and often stale — a
+  /// "67 seeds" pick can turn out unreachable while a "0 seeds" one streams
+  /// fine — so one failed attempt shouldn't be a dead end the user has to
+  /// manually recover from.
+  ///
+  /// The candidates race rather than take turns: [selected] starts first,
+  /// each next one [_headStart] later (or as soon as one fails), and the
+  /// first to connect plays. The others are paused, or removed when they
+  /// time out.
   ///
   /// Once [isCancelled] returns true, no further candidates are tried, a
-  /// torrent that started meanwhile is paused (keeping what it
+  /// torrent that connected meanwhile is paused (keeping what it
   /// downloaded), and [ResolveCancelledException] is thrown.
   Future<StreamResolveResult> resolveWithFallback(
     TorrentStream selected,
@@ -430,31 +507,94 @@ class StreamResolver {
     int maxAttempts = 3,
     bool Function()? isCancelled,
   }) async {
-    final candidates = [
+    final ordered = [
       selected,
-      ...allStreams.where((s) => s.infoHash != selected.infoHash),
+      ...allStreams.where((s) =>
+          s.infoHash.toLowerCase() != selected.infoHash.toLowerCase()),
+    ];
+    // A copy a head start already connected to (see warmUp) goes first —
+    // it starts at once, where [selected] may be the one the head start
+    // found no one sharing.
+    final candidates = [
+      ...ordered.where((s) => _engine.isReady(s.infoHash)),
+      ...ordered.where((s) => !_engine.isReady(s.infoHash)),
     ].take(maxAttempts).toList();
     bool cancelled() => isCancelled?.call() ?? false;
+    if (cancelled()) throw const ResolveCancelledException();
 
-    // Note: a failed resolve() cleans up its own torrent internally (see
-    // TorrentEngineService.streamMagnet) — nothing to dispose here.
-    Object? lastError;
-    for (var i = 0; i < candidates.length; i++) {
-      if (cancelled()) throw const ResolveCancelledException();
-      try {
-        final result = await resolve(candidates[i]);
-        if (cancelled()) {
-          pause(result.torrentId);
-          throw const ResolveCancelledException();
+    final stopwatch = Stopwatch()..start();
+    final outcome = Completer<StreamResolveResult>();
+    var started = 0;
+    var failed = 0;
+
+    void startNext() {
+      if (outcome.isCompleted || started >= candidates.length) return;
+      final candidate = candidates[started++];
+      final number = started;
+      // A connection that fails cleans up its own torrent (see
+      // TorrentEngineService.connect) — nothing to dispose here.
+      _engine.connect(candidate.infoHash, trackers: candidate.trackers).then(
+          (id) {
+        if (outcome.isCompleted) {
+          // Lost the race, or the user gave up: stop it, keeping what it
+          // has, unless it's what's playing.
+          if (!_engine.isStreaming(id)) _engine.pause(id);
+          return;
         }
-        return StreamResolveResult(stream: candidates[i], result: result);
-      } on ResolveCancelledException {
-        rethrow;
-      } catch (e) {
-        lastError = e;
-      }
+        if (cancelled()) {
+          _engine.pause(id);
+          outcome.completeError(const ResolveCancelledException());
+          return;
+        }
+        try {
+          final result = _engine.startStream(id, fileIndex: candidate.fileIdx);
+          print('[timing] copy $number of ${candidates.length} connected '
+              'first, after ${stopwatch.elapsedMilliseconds} ms');
+          outcome.complete(
+              StreamResolveResult(stream: candidate, result: result));
+        } catch (e) {
+          _engine.cleanup(id);
+          failed++;
+          if (failed == candidates.length) {
+            outcome.completeError(e);
+          } else {
+            startNext();
+          }
+        }
+      }, onError: (Object e) {
+        if (outcome.isCompleted) return;
+        failed++;
+        if (failed == candidates.length) {
+          print('[timing] no copy connected, gave up after '
+              '${stopwatch.elapsedMilliseconds} ms');
+          outcome.completeError(e);
+        } else {
+          // A failure brings the next copy forward.
+          startNext();
+        }
+      });
     }
-    throw lastError ?? Exception('Failed to resolve any stream');
+
+    startNext();
+    var sinceLastStart = Duration.zero;
+    const tick = Duration(milliseconds: 250);
+    final ticker = Timer.periodic(tick, (_) {
+      if (outcome.isCompleted) return;
+      if (cancelled()) {
+        outcome.completeError(const ResolveCancelledException());
+        return;
+      }
+      sinceLastStart += tick;
+      if (sinceLastStart >= _headStart) {
+        sinceLastStart = Duration.zero;
+        startNext();
+      }
+    });
+    try {
+      return await outcome.future;
+    } finally {
+      ticker.cancel();
+    }
   }
 
   /// Stop a torrent — its stream and its downloading — while keeping what

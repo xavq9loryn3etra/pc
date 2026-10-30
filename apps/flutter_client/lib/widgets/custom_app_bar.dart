@@ -128,7 +128,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
           [
             if (showActions) ...[
               IconButton(
-                icon: const Icon(Icons.search, size: 28),
+                icon: const Icon(Icons.search_rounded, size: 28),
                 onPressed: onSearchTap ??
                     () {
                       Navigator.push(
@@ -138,7 +138,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
                     },
               ),
               IconButton(
-                icon: const Icon(Icons.favorite_border, size: 28),
+                icon: const Icon(Icons.favorite_border_rounded, size: 28),
                 onPressed: onFavoritesTap ??
                     () {
                       Navigator.push(
@@ -152,7 +152,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
             // App Mode Switcher (Mobile Only)
             if (showModeSwitch)
               IconButton(
-                icon: const Icon(Icons.grid_view, size: 28),
+                icon: const Icon(Icons.grid_view_rounded, size: 28),
                 onPressed:
                     onModeSwitchTap ?? () => showModeSwitcherDialog(context),
               ),

@@ -7,7 +7,7 @@ import '../services/tmdb_service.dart';
 import 'details_screen.dart';
 import '../widgets/movie_poster.dart';
 import '../widgets/screen_scaffold.dart';
-import '../widgets/shimmer_loader.dart';
+import 'package:shimmer/shimmer.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/glass_blur.dart';
 import '../services/movie_tab_service.dart';
@@ -141,7 +141,8 @@ class _SearchScreenState extends State<SearchScreen> {
       bottomNavTab: BottomNavTab.search,
       leading: Center(
         child: GlassCircleButton(
-          icon: Icons.arrow_back_rounded,
+          icon: GlassCircleButton.backIcon,
+          iconSize: GlassCircleButton.backIconSize,
           // Search is a bottom-nav tab, not a pushed route, so there's no
           // route to pop — "back" here means returning to the Home tab,
           // same as tapping the Home icon in FloatingBottomNavBar.
@@ -217,11 +218,67 @@ class _SearchScreenState extends State<SearchScreen> {
     );
   }
 
-  Widget _buildBody(BuildContext context, bool isDesktop, EdgeInsets padding) {
-    if (_isLoading) {
-      return const Center(
-        child: ShimmerLoader(),
+  // The results grid's layout, shared with its placeholder so they match.
+  SliverGridDelegate _resultsGrid(bool isDesktop) =>
+      SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: isDesktop ? 200 : 150,
+        childAspectRatio: isDesktop ? (200 / 340) : 0.58,
+        crossAxisSpacing: isDesktop ? 16 : 12,
+        mainAxisSpacing: isDesktop ? 16 : 12,
       );
+
+  EdgeInsets _resultsPadding(bool isDesktop, EdgeInsets padding) {
+    final horizontal = isDesktop ? 60.0 : 16.0;
+    return padding.copyWith(left: horizontal, right: horizontal, top: 100);
+  }
+
+  /// Poster-and-title placeholders in the results' own grid, shimmering —
+  /// the app's skeleton style (as on Home and the details page), for while
+  /// a fresh search loads.
+  Widget _buildResultsSkeleton(bool isDesktop, EdgeInsets padding) {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey[900]!,
+      highlightColor: Colors.grey[800]!,
+      child: GridView.builder(
+        physics: const NeverScrollableScrollPhysics(),
+        padding: _resultsPadding(isDesktop, padding),
+        gridDelegate: _resultsGrid(isDesktop),
+        itemCount: 12,
+        itemBuilder: (context, _) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            FractionallySizedBox(
+              widthFactor: 0.75,
+              child: Container(
+                height: 12,
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody(BuildContext context, bool isDesktop, EdgeInsets padding) {
+    // While a refined query loads, the current results stay up (below) and
+    // are swapped when the new ones arrive — wiping them on every letter
+    // typed made the screen flash. Placeholders only for a fresh search.
+    if (_isLoading && _results.isEmpty) {
+      return _buildResultsSkeleton(isDesktop, padding);
     }
 
     if (_error != null) {
@@ -229,7 +286,7 @@ class _SearchScreenState extends State<SearchScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.error_outline, size: 48, color: Colors.grey),
+            const Icon(Icons.error_outline_rounded, size: 48, color: Colors.grey),
             const SizedBox(height: 16),
             Text(_error!, style: const TextStyle(color: Colors.grey)),
           ],
@@ -246,7 +303,7 @@ class _SearchScreenState extends State<SearchScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.search, size: 64, color: Colors.white12),
+                  Icon(Icons.search_rounded, size: 64, color: Colors.white12),
                   SizedBox(height: 16),
                   Text(
                     'Find your next favorite.',
@@ -261,21 +318,10 @@ class _SearchScreenState extends State<SearchScreen> {
       );
     }
 
-    final horizontalPadding = isDesktop ? 60.0 : 16.0;
-
     return GridView.builder(
       controller: _scrollController,
-      padding: padding.copyWith(
-        left: horizontalPadding,
-        right: horizontalPadding,
-        top: 100,
-      ),
-      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: isDesktop ? 200 : 150,
-        childAspectRatio: isDesktop ? (200 / 340) : 0.58,
-        crossAxisSpacing: isDesktop ? 16 : 12,
-        mainAxisSpacing: isDesktop ? 16 : 12,
-      ),
+      padding: _resultsPadding(isDesktop, padding),
+      gridDelegate: _resultsGrid(isDesktop),
       itemCount: _results.length,
       itemBuilder: (context, index) {
         final movie = _results[index];
@@ -340,7 +386,7 @@ class _SearchScreenState extends State<SearchScreen> {
               padding: const EdgeInsets.only(left: 16, right: 4),
               child: Row(
                 children: [
-                  const Icon(Icons.history, color: Colors.white38, size: 22),
+                  const Icon(Icons.history_rounded, color: Colors.white38, size: 22),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Text(
@@ -352,7 +398,7 @@ class _SearchScreenState extends State<SearchScreen> {
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close,
+                    icon: const Icon(Icons.close_rounded,
                         color: Colors.white38, size: 18),
                     tooltip: 'Remove',
                     onPressed: () => SearchHistoryService().remove(query),

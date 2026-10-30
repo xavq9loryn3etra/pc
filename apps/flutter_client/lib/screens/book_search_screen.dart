@@ -106,7 +106,7 @@ class _BookSearchScreenState extends State<BookSearchScreen> {
     return ScreenScaffold(
       bottomNavTab: BottomNavTab.search,
       leading: IconButton(
-        icon: const Icon(Icons.arrow_back, color: Colors.white),
+        icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white),
         onPressed: () =>
             MovieTabService().currentTab.value = BottomNavTab.home,
       ),
@@ -133,7 +133,7 @@ class _BookSearchScreenState extends State<BookSearchScreen> {
           )
         else if (_searchController.text.isNotEmpty)
           IconButton(
-            icon: const Icon(Icons.clear, color: Colors.white54),
+            icon: const Icon(Icons.clear_rounded, color: Colors.white54),
             onPressed: () {
               _searchController.clear();
               _onSearchChanged('');
@@ -165,7 +165,7 @@ class _BookSearchScreenState extends State<BookSearchScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.library_books, size: 64, color: Colors.white10),
+            Icon(Icons.library_books_rounded, size: 64, color: Colors.white10),
             SizedBox(height: 16),
             Text("Search for your next read",
                 style: TextStyle(color: Colors.white24)),

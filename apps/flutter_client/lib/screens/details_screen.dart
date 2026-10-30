@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/material.dart';
+import '../widgets/player_route.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:dio/dio.dart';
@@ -21,8 +22,8 @@ import 'player_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:ui'; // For BackdropFilter
-import '../widgets/custom_app_bar.dart';
 import '../widgets/glass_blur.dart';
+import '../widgets/artwork_glow.dart';
 import '../widgets/glass_bubble_bar.dart';
 import '../widgets/details_overview.dart';
 import '../widgets/episode_card.dart';
@@ -44,6 +45,44 @@ class DetailsScreen extends StatefulWidget {
     this.onClose,
     this.isSidePanel = false,
   });
+
+  /// Starts loading [movie]'s page ahead of it opening — its details, then
+  /// its header image and logo, at the size the page will ask for — so it
+  /// usually opens already filled in rather than on its skeleton. For when
+  /// a finger touches its poster: the tap that opens it lands a moment
+  /// later. Cheap to repeat: the details are cached, the images too.
+  static Future<void> prefetch(BuildContext context, Movie movie) async {
+    final screen = MediaQuery.sizeOf(context);
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    try {
+      final details =
+          await TMDBService().prefetchDetails(movie.id, type: movie.type);
+      if (details == null || !context.mounted) return;
+      final header =
+          _DetailsScreenState.headerImageFor(details, screen);
+      if (header.isNotEmpty && !header.toLowerCase().endsWith('.svg')) {
+        final decode =
+            _DetailsScreenState.headerDecodeSize(details, screen, dpr);
+        precacheImage(
+          ResizeImage.resizeIfNeeded(decode.width, decode.height,
+              CachedNetworkImageProvider(header)),
+          context,
+          onError: (_, __) {},
+        );
+      }
+      final logo = _DetailsScreenState._logoUrlFor(details);
+      if (logo != null && !logo.toLowerCase().endsWith('.svg')) {
+        precacheImage(
+          ResizeImage.resizeIfNeeded(
+              (200 * dpr).toInt(), null, CachedNetworkImageProvider(logo)),
+          context,
+          onError: (_, __) {},
+        );
+      }
+    } catch (_) {
+      // Only a head start: the page loads it all itself anyway.
+    }
+  }
 
   @override
   State<DetailsScreen> createState() => _DetailsScreenState();
@@ -294,7 +333,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 borderRadius: BorderRadius.circular(6),
                 child: Padding(
                   padding: const EdgeInsets.all(3),
-                  child: _ProviderLogo(provider: p, size: 20),
+                  child: ProviderLogo(provider: p, size: 20),
                 ),
               ),
             ),
@@ -324,7 +363,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(10, 0, 14, 0),
               child: Center(
-                child: _ProviderLogo(provider: provider, size: 28),
+                child: ProviderLogo(provider: provider, size: 28),
               ),
             ),
           ),
@@ -333,8 +372,35 @@ class _DetailsScreenState extends State<DetailsScreen> {
     );
   }
 
+  // The movie's likely picks, connecting ahead of Play (see _warmUpMovie).
+  List<TorrentStream> _warmedStreams = const [];
+
+  /// Gives the copy Play will most likely start a head start, once
+  /// [streams] are found — it connects, and on Wi-Fi starts downloading,
+  /// while the user reads the page, so Play starts at once (see
+  /// StreamResolver.warmUp). From where it was left off, when it's being
+  /// resumed.
+  Future<void> _warmUpMovie(
+    String imdbId,
+    Future<List<TorrentStream>> streams,
+  ) async {
+    final list = await streams;
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    _warmedStreams = StreamResolver.headStartCandidates(
+      list,
+      lastPlayedHash: prefs.getString('last_played_torrent_$imdbId'),
+    );
+    StreamResolver().warmUp(
+      _warmedStreams,
+      resumeAt:
+          SavedMoviesService().getMovieFromHistory(widget.movie.id)?.progress,
+    );
+  }
+
   @override
   void dispose() {
+    StreamResolver().coolDown(_warmedStreams);
     // Aborts the in-flight TMDB request if the screen is closed before it
     // resolves, instead of letting it finish (and get silently discarded)
     // in the background — saves bandwidth/battery on a quick back-out.
@@ -351,6 +417,52 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // sources: the header is large enough that TMDB's standard tiers look soft.
   static String _backdropUrlFor(Movie m) =>
       m.backdropHighRes ?? m.backdrop ?? m.posterUrl ?? '';
+
+  /// Whether the header shows [m]'s textless poster rather than its
+  /// backdrop: on a phone's tall header, as Apple TV does with its key art.
+  /// A wide backdrop there shows only its middle half — about half its
+  /// detail, with the subject often cut off. Wide screens keep the backdrop.
+  static bool usesPosterHeader(Movie m, Size screen, {bool sidePanel = false}) =>
+      m.textlessPoster != null && !sidePanel && screen.width / _headerHeight < 1.2;
+
+  static String headerImageFor(Movie m, Size screen, {bool sidePanel = false}) =>
+      usesPosterHeader(m, screen, sidePanel: sidePanel)
+          ? m.textlessPosterHighRes!
+          : _backdropUrlFor(m);
+
+  /// The size to decode the header image at: one side only (see build()) —
+  /// the poster by the screen's width, which it fills, a backdrop by the
+  /// header's height.
+  static ({int? width, int? height}) headerDecodeSize(
+    Movie m,
+    Size screen,
+    double dpr, {
+    bool sidePanel = false,
+  }) =>
+      usesPosterHeader(m, screen, sidePanel: sidePanel)
+          ? (width: (screen.width * dpr).toInt(), height: null)
+          : (width: null, height: (_headerHeight * dpr).toInt());
+
+  bool _usesPosterHeader(Movie m) => usesPosterHeader(
+      m, MediaQuery.sizeOf(context),
+      sidePanel: widget.isSidePanel);
+
+  String _headerImageFor(Movie m) => headerImageFor(
+      m, MediaQuery.sizeOf(context),
+      sidePanel: widget.isSidePanel);
+
+  /// How far below the header image its glow (see ArtworkGlow) runs
+  /// before it has faded to black: past the title, buttons and synopsis.
+  static const double _glowHeight = 270;
+
+  /// The header image's height. Tall, so the title, buttons and synopsis
+  /// below it sit low on the picture, as on Apple TV.
+  static const double _headerHeight = 520;
+
+  ({int? width, int? height}) _headerDecodeSize(Movie m) => headerDecodeSize(
+      m, MediaQuery.sizeOf(context), MediaQuery.devicePixelRatioOf(context),
+      sidePanel: widget.isSidePanel);
+
   static String? _logoUrlFor(Movie m) =>
       m.logoUrl == null ? null : (m.logoHighRes ?? m.logoUrl!);
 
@@ -406,6 +518,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           type: _details!.type,
           title: _details,
         );
+        _warmUpMovie(_details!.imdbId ?? _details!.id, _movieStreams!);
       }
 
       // Init Season 1 if TV
@@ -447,15 +560,16 @@ class _DetailsScreenState extends State<DetailsScreen> {
   /// paint on the first frame.
   Future<void> _preloadHeader(Movie m) async {
     final dpr = MediaQuery.devicePixelRatioOf(context);
-    final backdrop = _backdropUrlFor(m);
+    final backdrop = _headerImageFor(m);
     final logo = _logoUrlFor(m);
     final jobs = <Future<void>>[];
     // SVGs render through SvgPicture, not the image cache — skip them.
     if (backdrop.isNotEmpty && !backdrop.toLowerCase().endsWith('.svg')) {
+      final decode = _headerDecodeSize(m);
       jobs.add(precacheImage(
         ResizeImage.resizeIfNeeded(
-          null,
-          (450 * dpr).toInt(),
+          decode.width,
+          decode.height,
           CachedNetworkImageProvider(backdrop),
         ),
         context,
@@ -604,8 +718,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
   /// episode popup's blurred backdrop (see _openEpisode) — the details
   /// screen behind it already shows everything about the movie.
   void _openMovie() {
-    // The header's own backdrop, preloaded tiny in _preloadHeader.
-    final backdrop = _backdropUrlFor(_details ?? widget.movie);
+    // The header's own image, preloaded tiny in _preloadHeader — not the
+    // backdrop when the header shows the poster: that's never downloaded,
+    // and the popup's background waited on it.
+    final backdrop = _headerImageFor(_details ?? widget.movie);
     _playWithTorrent(
       backgroundImage: backdrop.isEmpty ? null : backdrop,
       streams: _movieStreams,
@@ -686,7 +802,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
     await Navigator.push(
       context,
-      MaterialPageRoute(
+      PlayerRoute(
         builder: (_) => WebPlayer(
           url: url,
           onClose: () => Navigator.pop(context),
@@ -757,34 +873,60 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 tween: Tween<double>(end: showTitle ? 1.0 : 0.0),
                 duration: const Duration(milliseconds: 300),
                 builder: (context, reveal, child) {
-                  return CustomAppBar(
-                    forceOpacity: 0,
-                    automaticallyImplyLeading: false,
-                    // Puts the bubble's circle exactly where the old 56px
-                    // leading slot's padded back button sat.
-                    titleSpacing: 8,
-                    // The logo stays mounted while hidden, so its image has
-                    // usually finished loading by the time it's revealed.
-                    title: GlassBubbleBar(
-                      reveal: reveal,
-                      leading: CircleAvatar(
-                        backgroundColor: Colors.transparent,
-                        child: widget.isSidePanel
-                            ? IconButton(
-                                icon: const Icon(Icons.close,
-                                    color: Colors.white),
-                                onPressed: widget.onClose,
-                                iconSize: 20,
-                                padding: EdgeInsets.zero,
-                              )
-                            : const BackButton(color: Colors.white),
+                  // Not an AppBar: that catches every tap across the whole
+                  // bar, see-through or not, so the page's own buttons
+                  // scrolled up under it (the season picker) couldn't be
+                  // pressed. This only takes taps on the bubble itself.
+                  return SafeArea(
+                    bottom: false,
+                    child: SizedBox(
+                      height: kToolbarHeight,
+                      child: Padding(
+                        // Puts the bubble's circle exactly where the old
+                        // 56px leading slot's padded back button sat.
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          // A text title (no logo) styled as an AppBar's.
+                          child: DefaultTextStyle.merge(
+                            style: Theme.of(context).appBarTheme.titleTextStyle,
+                            // The logo stays mounted while hidden, so its
+                            // image has usually finished loading by the
+                            // time it's revealed.
+                            child: GlassBubbleBar(
+                              reveal: reveal,
+                              leading: CircleAvatar(
+                                backgroundColor: Colors.transparent,
+                                child: widget.isSidePanel
+                                    ? IconButton(
+                                        icon: const Icon(Icons.close_rounded,
+                                            color: Colors.white),
+                                        onPressed: widget.onClose,
+                                        iconSize: 20,
+                                        padding: EdgeInsets.zero,
+                                      )
+                                    // The same heavy chevron on every platform
+                                    // (BackButton is an arrow on Android).
+                                    : IconButton(
+                                        icon: const Icon(
+                                            GlassCircleButton.backIcon,
+                                            color: Colors.white),
+                                        tooltip:
+                                            MaterialLocalizations.of(context)
+                                                .backButtonTooltip,
+                                        onPressed: () =>
+                                            Navigator.maybePop(context),
+                                        iconSize:
+                                            GlassCircleButton.backIconSize,
+                                        padding: EdgeInsets.zero,
+                                      ),
+                              ),
+                              title: _buildAppBarTitle(m),
+                            ),
+                          ),
+                        ),
                       ),
-                      title: _buildAppBarTitle(m),
                     ),
-                    showActions: false,
-                    // Favorite/like toggle moved down to the action button row
-                    // (where Share used to be), so no actions shown up here.
-                    showModeSwitch: false,
                   );
                 },
               );
@@ -811,7 +953,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                     left: 0,
                     right: 0,
                     child: SizedBox(
-                      height: 450,
+                      height: _headerHeight + _glowHeight,
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
@@ -833,50 +975,84 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                 child: Stack(
                                   fit: StackFit.expand,
                                   children: [
-                                    Hero(
+                                    ArtworkGlow(url: _headerImageFor(m)),
+                                    // The picture melts into the glow
+                                    // rather than fading to black.
+                                    Positioned(
+                                      top: 0,
+                                      left: 0,
+                                      right: 0,
+                                      height: _headerHeight,
+                                      child: ShaderMask(
+                                        blendMode: BlendMode.dstIn,
+                                        shaderCallback: (rect) =>
+                                            const LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: [
+                                            Colors.white,
+                                            Colors.white,
+                                            Colors.transparent,
+                                          ],
+                                          stops: [0, 0.55, 1],
+                                        ).createShader(rect),
+                                        child: Hero(
                                       tag: 'movie_${m.id}',
                                       // Full-width parallax header — like the
                                       // home hero banners, this renders large
                                       // enough that TMDB's standard w1280
                                       // backdrop tier can look soft, so it
                                       // uses the full-resolution source.
-                                      child: _backdropUrlFor(m)
+                                      child: _headerImageFor(m)
                                               .toLowerCase()
                                               .endsWith('.svg')
                                           ? SvgPicture.network(
-                                              _backdropUrlFor(m),
+                                              _headerImageFor(m),
                                               fit: BoxFit.cover,
                                             )
                                           : CachedNetworkImage(
                                               // Preloaded behind the skeleton
                                               // (_preloadHeader) — keep the URL
-                                              // and memCacheHeight in sync.
-                                              imageUrl: _backdropUrlFor(m),
+                                              // and decode size in sync.
+                                              imageUrl: _headerImageFor(m),
                                               fit: BoxFit.cover,
-                                              // Only constrain height, not width — specifying
+                                              // A tall poster loses its bottom
+                                              // rather than its top: that's
+                                              // under the fade and the title.
+                                              alignment: _usesPosterHeader(m)
+                                                  ? const Alignment(0, -0.4)
+                                                  : Alignment.center,
+                                              // Only constrain one side, not both — specifying
                                               // both distorts the image whenever the source's
                                               // aspect ratio doesn't match this exact box
                                               // (ResizeImagePolicy.exact stretches to fit both
                                               // dimensions). One dimension lets the decoder
                                               // scale the other proportionally, matching how
                                               // BoxFit.cover actually crops at paint time.
-                                              memCacheHeight: (450 *
-                                                      MediaQuery.of(context)
-                                                          .devicePixelRatio)
-                                                  .toInt(),
+                                              memCacheWidth:
+                                                  _headerDecodeSize(m).width,
+                                              memCacheHeight:
+                                                  _headerDecodeSize(m).height,
                                             ),
+                                        ),
+                                      ),
                                     ),
-                                    // Gradient moves with image
-                                    Container(
-                                      decoration: const BoxDecoration(
+                                    // Shading moves with the image: darker
+                                    // where the title, buttons and synopsis
+                                    // sit over the glow, then to black.
+                                    const DecoratedBox(
+                                      decoration: BoxDecoration(
                                         gradient: LinearGradient(
                                           begin: Alignment.topCenter,
                                           end: Alignment.bottomCenter,
                                           colors: [
                                             Colors.transparent,
+                                            Colors.transparent,
+                                            Color(0x80000000), // 50%
+                                            Color(0xB3000000), // 70%
                                             Colors.black,
                                           ],
-                                          stops: [0.4, 1.0],
+                                          stops: [0, 0.38, 0.6, 0.8, 1],
                                         ),
                                       ),
                                     ),
@@ -891,18 +1067,18 @@ class _DetailsScreenState extends State<DetailsScreen> {
                   CustomScrollView(
                     controller: _scrollController,
                     slivers: [
-                      // Header spacer — reserves 450px of scroll space for
+                      // Header spacer — reserves the header's height in scroll space for
                       // the background image above, and carries the
                       // logo/title/rating overlay, which (unlike the image)
                       // scrolls in lockstep with the rest of the content
                       // instead of lagging behind.
                       SliverToBoxAdapter(
                         child: SizedBox(
-                          height: 450,
+                          height: _headerHeight,
                           child: Stack(
                             children: [
                               Positioned(
-                                bottom: 20,
+                                bottom: 8,
                                 left: 24,
                                 right: 24,
                                 child: Column(
@@ -948,7 +1124,17 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                     Row(
                                       children: [
                                         Text(
-                                          '${m.year}  •  ${m.certification ?? "PG-13"}  •  ${m.runtime ?? "N/A"}',
+                                          [
+                                            '${m.year}',
+                                            // Only what's known: no made-up
+                                            // rating or "N/A".
+                                            if (m.certification?.isNotEmpty ?? false)
+                                              m.certification!,
+                                            if (m.runtime != null &&
+                                                m.runtime!.isNotEmpty &&
+                                                m.runtime != 'N/A')
+                                              m.runtime!,
+                                          ].join('  •  '),
                                           style: const TextStyle(
                                             fontWeight: FontWeight.w500,
                                             color: Colors.white70,
@@ -956,7 +1142,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         ),
                                         const Spacer(),
                                         const Icon(
-                                          Icons.star,
+                                          Icons.star_rounded,
                                           color: Colors.amber,
                                           size: 16,
                                         ),
@@ -998,7 +1184,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                       ),
 
                       SliverPadding(
-                        padding: EdgeInsets.fromLTRB(24, 24, 24, isTv ? 0 : 24),
+                        // Close under the title block, as Apple TV's.
+                        padding: EdgeInsets.fromLTRB(24, 16, 24, isTv ? 0 : 24),
                         sliver: SliverList(
                           delegate: SliverChildListDelegate([
                             // Dynamic Torrent & Web Server Play Controls.
@@ -1112,7 +1299,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                       Icon(
                                                         movieUnreleased
                                                             ? Icons
-                                                                .event_available
+                                                                .event_available_rounded
                                                             : Icons
                                                                 .play_arrow_rounded,
                                                         color: movieUnreleased
@@ -1241,11 +1428,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                       Icon(
                                                         tvUnreleased
                                                             ? Icons
-                                                                .event_available
+                                                                .event_available_rounded
                                                             : (historyMovie?.currentSeason !=
                                                                     null
                                                                 ? Icons
-                                                                    .play_circle_filled
+                                                                    .play_circle_filled_rounded
                                                                 : Icons
                                                                     .play_arrow_rounded),
                                                         color: tvUnreleased
@@ -1312,7 +1499,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                             onTap: () =>
                                                 _openTrailer(m.trailerUrl!),
                                             child: const Icon(
-                                              Icons.movie_creation_outlined,
+                                              Icons.movie_creation_rounded,
                                               color: Colors.white,
                                               semanticLabel: 'Trailer',
                                             ),
@@ -1329,7 +1516,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                 children: [
                                                   Icon(
                                                     Icons
-                                                        .movie_creation_outlined,
+                                                        .movie_creation_rounded,
                                                     color: Colors.white,
                                                   ),
                                                   SizedBox(width: 8),
@@ -1362,7 +1549,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         //     borderRadius:
                                         //         BorderRadius.circular(30),
                                         //     child: const Icon(
-                                        //       Icons.share_outlined,
+                                        //       Icons.share_rounded,
                                         //       color: Colors.white,
                                         //     ),
                                         //   ),
@@ -1374,8 +1561,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                           child: Icon(
                                             SavedMoviesService()
                                                     .isFavorite(widget.movie.id)
-                                                ? Icons.favorite
-                                                : Icons.favorite_border,
+                                                ? Icons.favorite_rounded
+                                                : Icons.favorite_border_rounded,
                                             color: SavedMoviesService()
                                                     .isFavorite(widget.movie.id)
                                                 ? AppTheme.primaryColor
@@ -1399,11 +1586,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
                             // Series: the cast lives inside the synopsis's
                             // More, keeping the page compact above the
                             // episode list. Movies have nothing below, so
-                            // everything is shown up front.
+                            // their cast is always shown, under it.
                             ExpandableSynopsis(
                               text: m.description,
-                              collapsible: isTv,
-                              extra: m.castMembers != null &&
+                              extra: isTv &&
+                                      m.castMembers != null &&
                                       m.castMembers!.isNotEmpty
                                   // Bleeds 24px each side, matching this
                                   // list's horizontal padding, so it
@@ -1411,6 +1598,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                   ? CastRow(cast: m.castMembers!, bleed: 24)
                                   : null,
                             ),
+                            if (!isTv &&
+                                m.castMembers != null &&
+                                m.castMembers!.isNotEmpty) ...[
+                              const SizedBox(height: 28),
+                              CastRow(cast: m.castMembers!, bleed: 24),
+                            ],
 
                             // TV Show: Seasons & Episodes
                             if (isTv) ...[
@@ -1657,11 +1850,19 @@ class _TorrentQualitySelectorSheetState
   // a SnackBar would land on the details screen *behind* this modal sheet.
   String? _resolveError;
   String? _lastPlayedHash;
+  // The likely picks, connecting ahead of a tap (see StreamResolver.warmUp).
+  List<TorrentStream> _warmed = const [];
 
   @override
   void initState() {
     super.initState();
     _loadStreams();
+  }
+
+  @override
+  void dispose() {
+    widget.resolver.coolDown(_warmed);
+    super.dispose();
   }
 
   Future<void> _loadStreams() async {
@@ -1710,6 +1911,21 @@ class _TorrentQualitySelectorSheetState
           _recommendedTier = recommendedTier;
           _loading = false;
         });
+        // Not for a movie: its page already did, and owns it — closing
+        // this popup mustn't end the page's head start.
+        if (widget.prefetchedStreams == null) {
+          _warmed = StreamResolver.headStartCandidates(list,
+              lastPlayedHash: _lastPlayedHash);
+          final s = widget.season, e = widget.episode;
+          widget.resolver.warmUp(
+            _warmed,
+            resumeAt: s != null && e != null
+                ? SavedMoviesService().getEpisodeProgress(widget.movie.id, s, e)
+                : SavedMoviesService()
+                    .getMovieFromHistory(widget.movie.id)
+                    ?.progress,
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -1808,7 +2024,7 @@ class _TorrentQualitySelectorSheetState
       // Navigate to premium native player
       await Navigator.push(
         context,
-        MaterialPageRoute(
+        PlayerRoute(
           builder: (_) => PlayerScreen(
             url: result.streamUrl,
             torrentId: result.torrentId,
@@ -1852,6 +2068,7 @@ class _TorrentQualitySelectorSheetState
     // space — growing smoothly as the qualities load in.
     if (widget.header != null || widget.backgroundImage != null) {
       return EpisodeSheetFrame(
+        frosted: true,
         image: widget.backgroundImage,
         child: ConstrainedBox(
           constraints: BoxConstraints(
@@ -1965,7 +2182,8 @@ class _TorrentQualitySelectorSheetState
         const Expanded(child: QualitySectionLabel('Choose quality')),
         if (closeButton && _resolvingMessage == null)
           IconButton(
-            icon: const Icon(Icons.close, color: Colors.white38, size: 20),
+            icon: const Icon(Icons.close_rounded,
+                color: Colors.white38, size: 20),
             onPressed: () => Navigator.pop(context),
           ),
       ],
@@ -2102,7 +2320,7 @@ class _TorrentQualitySelectorSheetState
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.language,
+              Icon(Icons.language_rounded,
                   size: 16, color: Colors.white.withOpacity(0.5)),
               const SizedBox(width: 6),
               Text(
@@ -2115,7 +2333,7 @@ class _TorrentQualitySelectorSheetState
                 ),
               ),
               const SizedBox(width: 4),
-              Icon(Icons.arrow_drop_up,
+              Icon(Icons.arrow_drop_up_rounded,
                   size: 16, color: Colors.white.withOpacity(0.5)),
             ],
           ),
@@ -2171,11 +2389,11 @@ class _TorrentQualitySelectorSheetState
 /// A streaming service's square app-icon logo, rounded like an app icon:
 /// bundled for the major services (instant), otherwise loaded from TMDB,
 /// falling back to its initial if the image can't load.
-class _ProviderLogo extends StatelessWidget {
+class ProviderLogo extends StatelessWidget {
   final StreamingProvider provider;
   final double size;
 
-  const _ProviderLogo({required this.provider, required this.size});
+  const ProviderLogo({required this.provider, required this.size});
 
   @override
   Widget build(BuildContext context) {
@@ -2255,7 +2473,7 @@ class _WatchOnProviderButton extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _ProviderLogo(provider: provider, size: 26),
+                ProviderLogo(provider: provider, size: 26),
                 const SizedBox(width: 8),
                 Flexible(
                   child: Text(

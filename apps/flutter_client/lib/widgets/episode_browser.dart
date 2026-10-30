@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../models/movie.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/saved_movies_service.dart';
 import '../services/torrent/torrent_index_service.dart';
 import '../services/torrent/stream_resolver.dart';
@@ -326,7 +327,8 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
           top: 12 + safe.top,
           left: 16 + safe.left,
           child: GlassCircleButton(
-            icon: Icons.arrow_back_ios_new_rounded,
+            icon: GlassCircleButton.backIcon,
+            iconSize: GlassCircleButton.backIconSize,
             onPressed: () => setState(() => _selectedEpisode = null),
           ),
         ),
@@ -381,11 +383,19 @@ class _EpisodeSourcePickerState extends State<_EpisodeSourcePicker> {
   List<QualityOption>? _options;
   bool _loading = true;
   String? _error;
+  // The likely picks, connecting ahead of a tap (see StreamResolver.warmUp).
+  List<TorrentStream> _warmed = const [];
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    widget.resolver.coolDown(_warmed);
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -403,6 +413,18 @@ class _EpisodeSourcePickerState extends State<_EpisodeSourcePicker> {
           _options = StreamResolver.qualityOptions(list);
           _loading = false;
         });
+        final prefs = await SharedPreferences.getInstance();
+        if (!mounted) return;
+        _warmed = StreamResolver.headStartCandidates(
+          list,
+          lastPlayedHash: prefs.getString('last_played_torrent_'
+              '${widget.imdbId}_${widget.season}_${widget.episode}'),
+        );
+        widget.resolver.warmUp(
+          _warmed,
+          resumeAt: SavedMoviesService()
+              .getEpisodeProgress(widget.details.id, widget.season, widget.episode),
+        );
       }
     } catch (e) {
       if (mounted) {

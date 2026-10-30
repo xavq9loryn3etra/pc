@@ -128,9 +128,9 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
                 child: Container(
                   width: panelWidth,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF0C0C0C).withOpacity(0.85),
-                    border: const Border(
-                      left: BorderSide(color: Colors.white12, width: 0.5),
+                    color: kGlassSheetTint,
+                    border: Border(
+                      left: BorderSide(color: kGlassEdge, width: 0.5),
                     ),
                   ),
                   child: SafeArea(

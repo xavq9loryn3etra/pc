@@ -62,6 +62,10 @@ class Movie {
   // TMDB's actual source resolution for the few places that render a
   // backdrop that large: the home hero banners and the details-page hero.
   String? get backdropHighRes => backdrop?.replaceFirst('/w1280/', '/original/');
+  // Same for the textless poster (w500), for the details page's header on
+  // phones, where it fills the screen's width.
+  String? get textlessPosterHighRes =>
+      textlessPoster?.replaceFirst('/w500/', '/original/');
   // `logoUrl` is also built from TMDB's w500 tier. Logos are usually wide,
   // short wordmarks, so a 500px-wide source can have well under 200px of
   // real height — same shortfall as backdrop for the couple of places a
@@ -298,10 +302,48 @@ class StreamingProvider {
 }
 
 /// One billed cast member, from TMDB credits.
+/// Someone in a title's Cast & Crew row: an actor with the [character] they
+/// play, or — [isCrew] — a director or creator, with that job in
+/// [character]'s place.
 class CastMember {
+  /// TMDB's person id, for their page (see PersonSheet).
+  final int? id;
   final String name;
   final String? character;
   final String? profileUrl;
+  final bool isCrew;
 
-  const CastMember({required this.name, this.character, this.profileUrl});
+  const CastMember({
+    this.id,
+    required this.name,
+    this.character,
+    this.profileUrl,
+    this.isCrew = false,
+  });
+}
+
+/// A person's page: who they are and what they've been in (see
+/// TMDBService.getPerson).
+class Person {
+  final int id;
+  final String name;
+  final String? profileUrl;
+  final String biography;
+  final String? knownFor; // "Acting", "Directing", …
+  final String? birthday; // "1976-01-30"
+  final String? placeOfBirth;
+
+  /// Their movies and shows, best known first.
+  final List<Movie> credits;
+
+  const Person({
+    required this.id,
+    required this.name,
+    this.profileUrl,
+    this.biography = '',
+    this.knownFor,
+    this.birthday,
+    this.placeOfBirth,
+    this.credits = const [],
+  });
 }

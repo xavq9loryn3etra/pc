@@ -88,7 +88,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
-                  Icons.favorite_border,
+                  Icons.favorite_border_rounded,
                   size: 64,
                   color: Colors.white24,
                 ),

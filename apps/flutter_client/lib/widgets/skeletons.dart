@@ -11,7 +11,7 @@ class SkeletonHero extends StatelessWidget {
       highlightColor: Colors.grey[800]!,
       child: Container(
         width: double.infinity,
-        height: 500,
+        height: 620, // MovieHeroBanner's
         color: Colors.black,
       ),
     );

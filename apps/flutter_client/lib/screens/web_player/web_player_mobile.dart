@@ -734,7 +734,7 @@ if (window.flutterTrackingActive) {
                                   shape: BoxShape.circle,
                                 ),
                                 child: IconButton(
-                                  icon: const Icon(Icons.close, color: Colors.white),
+                                  icon: const Icon(Icons.close_rounded, color: Colors.white),
                                   onPressed: visible ? widget.onClose : null,
                                 ),
                               ),

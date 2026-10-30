@@ -6,8 +6,8 @@ import 'package:flutter/material.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import '../services/trending_service.dart';
-import '../theme/app_theme.dart';
 import '../theme/iridescent.dart';
+import '../widgets/glass_blur.dart';
 import '../widgets/mode_switch_row.dart';
 import 'main_screen.dart';
 
@@ -261,7 +261,7 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
                 ),
                 const SizedBox(height: 14),
                 // Same frosted glass as the floating bottom nav bar's
-                // buttons (blur, 35% black, faint white edge) — but faked:
+                // buttons (blur, colour boost, kGlassTint) — but faked:
                 // a blurred copy of the slideshow, lined up with the real
                 // one behind (the panel spans the screen's full width and
                 // sits on its bottom edge), instead of a live blur.
@@ -282,7 +282,10 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
                               child: Stack(
                                 fit: StackFit.expand,
                                 children: [
-                                  _slideshow(item, blurred: true),
+                                  ColorFiltered(
+                                    colorFilter: GlassBlur.saturate,
+                                    child: _slideshow(item, blurred: true),
+                                  ),
                                   _scrim,
                                 ],
                               ),
@@ -292,7 +295,7 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
                         Container(
                           width: double.infinity,
                           color:
-                              AppTheme.scaffoldColor.withValues(alpha: 0.35),
+                              kGlassTint,
                           padding: EdgeInsets.fromLTRB(
                               16, 40, 16, 28 + bottomInset),
                           child: ModeSwitchRow(onSelected: _selectMode),

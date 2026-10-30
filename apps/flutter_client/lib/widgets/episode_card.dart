@@ -6,6 +6,7 @@ import 'package:shimmer/shimmer.dart';
 
 import '../models/movie.dart';
 import '../theme/app_theme.dart';
+import 'glass_blur.dart';
 
 /// An episode as a card (Apple TV style): the still across the top,
 /// melting into a blurred, darkened copy of itself behind the text —
@@ -190,7 +191,7 @@ class EpisodeCard extends StatelessWidget {
                   if (unreleased)
                     Row(
                       children: [
-                        const Icon(Icons.lock_clock,
+                        const Icon(Icons.lock_clock_rounded,
                             size: 14, color: Colors.white60),
                         const SizedBox(width: 4),
                         Flexible(
@@ -383,6 +384,8 @@ class EpisodeBackdrop extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
+        // Plain, not colour-boosted like the glass: behind a popup's text
+        // the boost was too loud.
         if (image != null)
           CachedNetworkImage(
             imageUrl: image!,
@@ -661,14 +664,21 @@ class EpisodeSheetFrame extends StatefulWidget {
   final String? image;
   final Widget child;
 
+  /// Frosted glass behind [child] — the page underneath, blurred under the
+  /// app's thick dark glass (as its dialogs) — instead of the blurred
+  /// [image]: the quality selector and the person sheet, where the image's
+  /// colours competed with the content.
+  final bool frosted;
+
   const EpisodeSheetFrame({
     super.key,
     required this.image,
     required this.child,
+    this.frosted = false,
   });
 
   static const _radius = BorderRadius.vertical(top: Radius.circular(24));
-  static final _edge = BorderSide(color: Colors.white.withValues(alpha: 0.12));
+  static final _edge = BorderSide(color: kGlassEdge);
 
   @override
   State<EpisodeSheetFrame> createState() => _EpisodeSheetFrameState();
@@ -739,7 +749,15 @@ class _EpisodeSheetFrameState extends State<EpisodeSheetFrame> {
               // A bit darker than the cards': the sheet is much bigger, so
               // the colours read stronger.
               Positioned.fill(
-                child: EpisodeBackdrop(image: widget.image, dim: 0.6),
+                child: widget.frosted
+                    ? const GlassBlur(
+                        // Strong: a big surface, the page's detail would
+                        // show through a lighter blur.
+                        sigma: 30,
+                        reducedTint: Color(0xF2161616),
+                        child: ColoredBox(color: kGlassSheetTint),
+                      )
+                    : EpisodeBackdrop(image: widget.image, dim: 0.6),
               ),
               widget.child,
               // The handle, with a generous strip around it to grab.

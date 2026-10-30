@@ -309,7 +309,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
                 opacity: _showControls ? 1.0 : 0.0,
                 duration: const Duration(milliseconds: 300),
                 child: IconButton(
-                  icon: const Icon(Icons.arrow_back, color: Colors.white),
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white),
                   onPressed: _showControls ? widget.onClose : null,
                   style: IconButton.styleFrom(backgroundColor: Colors.black54),
                 ),

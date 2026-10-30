@@ -176,11 +176,40 @@ class TMDBService {
     }
   }
 
+  // Details lookups started by prefetchDetails, by cache key: getDetails
+  // joins one rather than fetching the same title again.
+  final Map<String, Future<Movie?>> _prefetches = {};
+
+  /// Starts loading [id]'s details ahead of its page — when a finger
+  /// touches its poster, say — so the page usually opens filled in.
+  /// Without a cancel token: a page that opens meanwhile joins this one
+  /// (see getDetails), and mustn't be cancelled by anything else.
+  Future<Movie?> prefetchDetails(String id, {String? type}) {
+    final key = 'details_${id}_$type';
+    final cached = _cache[key];
+    if (cached != null && cached.isValid(30)) {
+      return Future.value(cached.data as Movie);
+    }
+    return _prefetches[key] ??= getDetails(id, type: type).whenComplete(() {
+      _prefetches.remove(key);
+    });
+  }
+
   Future<Movie?> getDetails(String id,
       {String? type, CancelToken? cancelToken}) async {
     final key = 'details_${id}_$type';
     if (_cache.containsKey(key) && _cache[key]!.isValid(30)) {
       return _cache[key]!.data as Movie;
+    }
+    // Already on its way (prefetchDetails): wait for that instead.
+    final prefetch = _prefetches[key];
+    if (prefetch != null) {
+      try {
+        final movie = await prefetch;
+        if (movie != null) return movie;
+      } catch (_) {
+        // Fetch it ourselves below.
+      }
     }
     // Resolved alongside the details request (cached after the first).
     final watchCountry = _watchCountry();
@@ -246,6 +275,77 @@ class TMDBService {
     }
   }
 
+  /// A person's photo: TMDB's h632 tier, sharp in the cast row's circles
+  /// circles and the person sheet (w185 was soft at that size).
+  static String? _profileUrl(Object? path) =>
+      path is String ? 'https://image.tmdb.org/t/p/h632$path' : null;
+
+  /// A person's page: their details and every movie and show they've been
+  /// in or made: their best known (by TMDB's vote count — popularity also
+  /// counts recent buzz, which put minor new things above their classics),
+  /// newest first.
+  /// Talk shows, award shows and the like are left out: TMDB lists those
+  /// as credits too, for a "Self" appearance.
+  Future<Person?> getPerson(int id) async {
+    final key = 'person_$id';
+    final cached = _cache[key];
+    if (cached != null && cached.isValid(60)) return cached.data as Person;
+    try {
+      final response = await _dio.get(
+        '$_baseUrl/person/$id',
+        queryParameters: {
+          'api_key': _apiKey,
+          'append_to_response': 'combined_credits',
+        },
+      );
+      final p = response.data as Map<String, dynamic>;
+      final credits = p['combined_credits'] as Map? ?? const {};
+      final seen = <String>{};
+      final entries = <Map<String, dynamic>>[
+        for (final c in [
+          ...(credits['cast'] as List? ?? const []),
+          ...(credits['crew'] as List? ?? const []),
+        ])
+          if (c is Map<String, dynamic> &&
+              c['poster_path'] != null &&
+              (c['media_type'] == 'movie' || c['media_type'] == 'tv') &&
+              // Not talk shows, news and the like (TMDB genre ids).
+              !((c['genre_ids'] as List?)?.any(
+                      (g) => g == 10767 || g == 10763 || g == 10764) ??
+                  false) &&
+              c['character'] != 'Self' &&
+              c['character'] != 'Himself' &&
+              c['character'] != 'Herself' &&
+              seen.add('${c['media_type']}_${c['id']}'))
+            c,
+      ]..sort((a, b) =>
+          ((b['vote_count'] as num?) ?? 0).compareTo((a['vote_count'] as num?) ?? 0));
+      final bio = p['biography'];
+      final person = Person(
+        id: id,
+        name: p['name']?.toString() ?? '',
+        profileUrl: _profileUrl(p['profile_path']),
+        biography: bio is String ? bio.trim() : '',
+        knownFor: p['known_for_department'] as String?,
+        birthday: p['birthday'] as String?,
+        placeOfBirth: p['place_of_birth'] as String?,
+        credits: entries
+            .take(40)
+            .map(_formatMovie)
+            .whereType<Movie>()
+            .toList()
+          // Newest first; undated (unannounced) ones last.
+          ..sort((a, b) =>
+              (b.releaseDateRaw ?? '').compareTo(a.releaseDateRaw ?? '')),
+      );
+      _cache[key] = _CacheEntry(person);
+      return person;
+    } catch (e) {
+      print('Error fetching person $id: $e');
+      return null;
+    }
+  }
+
   Movie? _formatMovie(Map<String, dynamic> m) {
     // Only filter out if BOTH images are missing (need at least one)
     if (m['poster_path'] == null && m['backdrop_path'] == null) return null;
@@ -296,7 +396,9 @@ class TMDBService {
     if (base == null) throw Exception('Failed to format base movie');
 
     // Extract Certification
-    String certification = isTv ? 'TV-14' : 'PG-13';
+    // Only a real rating: no made-up default (it said "PG-13" for titles
+    // TMDB has no US rating for).
+    String? certification;
     if (!isTv) {
       final releaseDates = m['release_dates']?['results'] as List?;
       final usRelease = releaseDates?.firstWhere(
@@ -340,17 +442,37 @@ class TMDBService {
           .take(15)
           .map((c) {
         final character = c['character'];
-        final profile = c['profile_path'];
         return CastMember(
+          id: c['id'] is int ? c['id'] as int : null,
           name: c['name'] as String,
           character:
               character is String && character.isNotEmpty ? character : null,
-          profileUrl: profile is String
-              ? 'https://image.tmdb.org/t/p/w185$profile'
-              : null,
+          profileUrl: _profileUrl(c['profile_path']),
         );
       }).toList();
     }
+
+    // Cast & Crew leads with who made it: a movie's directors, a series'
+    // creators.
+    final crew = <CastMember>[];
+    final seen = <Object?>{};
+    final List<dynamic> makers = isTv
+        ? (m['created_by'] as List? ?? const [])
+        : [
+            for (final c in (credits?['crew'] as List? ?? const []))
+              if (c is Map && c['job'] == 'Director') c,
+          ];
+    for (final c in makers.whereType<Map>()) {
+      if (c['name'] is! String || !seen.add(c['id'] ?? c['name'])) continue;
+      crew.add(CastMember(
+        id: c['id'] is int ? c['id'] as int : null,
+        name: c['name'] as String,
+        character: isTv ? 'Creator' : 'Director',
+        profileUrl: _profileUrl(c['profile_path']),
+        isCrew: true,
+      ));
+    }
+    castMembers = [...crew.take(3), ...castMembers];
 
     // Genres
     final genres =
@@ -441,10 +563,20 @@ class TMDBService {
     final videos = m['videos'];
     if (videos != null && videos['results'] != null) {
       final results = videos['results'] as List;
-      final trailer = results.firstWhere(
-        (v) => v['site'] == 'YouTube' && v['type'] == 'Trailer',
-        orElse: () => null,
-      );
+      // The latest official trailer: TMDB lists them in no useful order,
+      // and the first was often an old teaser-era one, or a fan upload.
+      // Unofficial ones only when there's nothing else.
+      final trailers = results
+          .where((v) => v['site'] == 'YouTube' && v['type'] == 'Trailer')
+          .toList()
+        ..sort((a, b) {
+          final officialA = a['official'] == true, officialB = b['official'] == true;
+          if (officialA != officialB) return officialA ? -1 : 1;
+          // ISO timestamps: compared as text, later sorts first.
+          return '${b['published_at'] ?? ''}'
+              .compareTo('${a['published_at'] ?? ''}');
+        });
+      final trailer = trailers.isEmpty ? null : trailers.first;
       if (trailer != null) {
         trailerUrl = 'https://www.youtube.com/watch?v=${trailer['key']}';
       }
@@ -491,7 +623,8 @@ class TMDBService {
       logoUrl: logoUrl,
       logoAspectRatio: logoAspectRatio,
       runtime: runtime,
-      certification: certification,
+      certification:
+          certification != null && certification.isNotEmpty ? certification : null,
       mpaa: isTv ? certification : (m['adult'] == true ? 'R' : certification),
       seasons: seasons,
       trailerUrl: trailerUrl,

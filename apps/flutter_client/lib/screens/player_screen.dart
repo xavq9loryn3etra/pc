@@ -1916,6 +1916,50 @@ class _PlayerScreenState extends State<PlayerScreen>
       case 'hin':
       case 'hi':
         return 'Hindi';
+      case 'sin':
+      case 'si':
+        return 'Sinhala';
+      case 'tam':
+      case 'ta':
+        return 'Tamil';
+      case 'tel':
+      case 'te':
+        return 'Telugu';
+      case 'mal':
+      case 'ml':
+        return 'Malayalam';
+      case 'kan':
+      case 'kn':
+        return 'Kannada';
+      case 'ben':
+      case 'bn':
+        return 'Bengali';
+      case 'urd':
+      case 'ur':
+        return 'Urdu';
+      case 'may':
+      case 'msa':
+      case 'ms':
+        return 'Malay';
+      case 'tha':
+      case 'th':
+        return 'Thai';
+      case 'kor':
+      case 'ko':
+        return 'Korean';
+      case 'per':
+      case 'fas':
+      case 'fa':
+        return 'Persian';
+      case 'heb':
+      case 'he':
+        return 'Hebrew';
+      case 'ell':
+      case 'gre':
+      case 'el':
+        return 'Greek';
+      case 'pob':
+        return 'Portuguese (Brazil)';
       default:
         return code.toUpperCase();
     }

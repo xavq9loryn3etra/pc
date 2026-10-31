@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import '../services/trending_service.dart';
+import '../services/visual_effects_service.dart';
 import '../theme/iridescent.dart';
 import '../widgets/glass_blur.dart';
+import '../widgets/glass_probe.dart';
 import '../widgets/mode_switch_row.dart';
 import 'main_screen.dart';
 
@@ -205,6 +207,11 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
+          // Under the slideshow, out of sight: times the frosted glass on
+          // this phone, once per app version (see GlassProbe).
+          if (VisualEffectsService().needsProbe)
+            const Positioned.fill(child: GlassProbe()),
+
           // Background slideshow — full height, so the frosted panel at the
           // bottom has artwork behind it.
           Positioned.fill(child: _slideshow(item, blurred: false)),

@@ -11,13 +11,19 @@ import '../theme/app_theme.dart';
 /// paints [child] — usually the glass's translucent tint — on top.
 ///
 /// Use this instead of BackdropFilter directly, so every glass surface:
-///  * honours the "Reduce glass effects" setting (VisualEffectsService):
-///    no blur, just [child] over [reducedTint] so text on it stays
-///    readable without the blur behind it;
+///  * goes plain where VisualEffectsService says to — on phones too slow
+///    for the blur, and in battery saver: no blur, just [child] over
+///    [reducedTint] so text on it stays readable without the blur behind
+///    it;
 ///  * can share one backdrop capture with the app's other [grouped] glass
 ///    (the BackdropGroup at the app root), instead of each surface taking
-///    its own copy of the screen every frame.
-class GlassBlur extends StatelessWidget {
+///    its own copy of the screen every frame;
+///  * shows [reducedTint] instead of blurring while its own page slides
+///    in or out. Its blur starting up as the page appeared cost a frame or
+///    two at the start of the slide — a stutter at 120 Hz. Glass on the
+///    page being slid over keeps blurring: switching that off and on again
+///    made the bottom nav bar flicker.
+class GlassBlur extends StatefulWidget {
   final double sigma;
 
   /// Share the backdrop with the other grouped glass on screen. Only for
@@ -76,26 +82,57 @@ class GlassBlur extends StatelessWidget {
       );
 
   @override
+  State<GlassBlur> createState() => _GlassBlurState();
+}
+
+class _GlassBlurState extends State<GlassBlur> {
+  // The animation of the page this glass is on, which runs while the page
+  // slides in or out.
+  Animation<double>? _pageSlide;
+  bool _pageMoving = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final slide = ModalRoute.of(context)?.animation;
+    if (slide == _pageSlide) return;
+    _pageSlide?.removeStatusListener(_onSlideStatus);
+    _pageSlide = slide?..addStatusListener(_onSlideStatus);
+    _pageMoving = slide?.isAnimating ?? false;
+  }
+
+  void _onSlideStatus(AnimationStatus _) {
+    final moving = _pageSlide?.isAnimating ?? false;
+    if (moving != _pageMoving) setState(() => _pageMoving = moving);
+  }
+
+  @override
+  void dispose() {
+    _pageSlide?.removeStatusListener(_onSlideStatus);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
       valueListenable: VisualEffectsService().reduceGlass,
       builder: (context, reduce, child) {
-        final blur = !reduce && sigma > 0;
+        final blur = !reduce && !_pageMoving && widget.sigma > 0;
         // The same widgets whether blurring or not, only switched: a
         // different structure would rebuild everything on the glass.
         final tinted = DecoratedBox(
           decoration: BoxDecoration(
-            color: blur ? Colors.transparent : reducedTint,
+            color: blur ? Colors.transparent : widget.reducedTint,
           ),
           child: child,
         );
-        final filter = filterFor(math.max(sigma, 0.1));
-        return grouped
+        final filter = GlassBlur.filterFor(math.max(widget.sigma, 0.1));
+        return widget.grouped
             ? BackdropFilter.grouped(
                 filter: filter, enabled: blur, child: tinted)
             : BackdropFilter(filter: filter, enabled: blur, child: tinted);
       },
-      child: child,
+      child: widget.child,
     );
   }
 }

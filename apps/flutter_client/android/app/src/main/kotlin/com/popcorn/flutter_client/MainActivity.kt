@@ -1,12 +1,17 @@
 package com.popcorn.flutter_client
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.telephony.TelephonyManager
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -41,5 +46,31 @@ class MainActivity : FlutterActivity() {
                     result.notImplemented()
                 }
             }
+
+        // Whether battery saver is on, now and whenever it changes: the app
+        // drops its frosted-glass blur meanwhile (see VisualEffectsService).
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "popcorn/power_save")
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                private var receiver: BroadcastReceiver? = null
+
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                    val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+                    events.success(power.isPowerSaveMode)
+                    receiver = object : BroadcastReceiver() {
+                        override fun onReceive(context: Context, intent: Intent) {
+                            events.success(power.isPowerSaveMode)
+                        }
+                    }
+                    registerReceiver(
+                        receiver,
+                        IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+                    )
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    receiver?.let { unregisterReceiver(it) }
+                    receiver = null
+                }
+            })
     }
 }

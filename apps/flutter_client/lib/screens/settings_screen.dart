@@ -16,7 +16,6 @@ import '../services/feature_flags_service.dart';
 import '../services/torrent/torrent_storage_service.dart';
 import '../services/torrent/torrent_download_registry.dart';
 import '../services/movie_tab_service.dart';
-import '../services/visual_effects_service.dart';
 import '../services/torrent/download_ahead_settings.dart';
 import '../theme/app_theme.dart';
 import '../main.dart';
@@ -73,12 +72,6 @@ class SettingsScreen extends StatelessWidget {
                   const _SectionLabel('DOWNLOADS'),
                   const _StorageSection(),
                 ],
-                const _SectionLabel('APPEARANCE'),
-                const _SettingsGroup(
-                  footnote: 'A plain tint instead of the frosted blur behind '
-                      'bars and buttons. Smoother on slower phones.',
-                  children: [_ReduceGlassRow()],
-                ),
                 const _SectionLabel('BACKUP'),
                 _SettingsGroup(
                   footnote: 'Your favorites and watch history, saved to a '
@@ -677,22 +670,6 @@ class _ShowGroupTile extends StatelessWidget {
             ),
         ],
       ),
-    );
-  }
-}
-
-/// "Reduce glass effects": swaps the live frosted-glass blur for a plain
-/// tint (see GlassBlur), for phones that stutter while scrolling.
-class _ReduceGlassRow extends StatelessWidget {
-  const _ReduceGlassRow();
-
-  @override
-  Widget build(BuildContext context) {
-    return _SwitchRow(
-      icon: Icons.blur_on_rounded,
-      title: 'Reduce glass effects',
-      value: VisualEffectsService().reduceGlass,
-      onChanged: VisualEffectsService().setReduceGlass,
     );
   }
 }

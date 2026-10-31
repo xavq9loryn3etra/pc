@@ -6,7 +6,6 @@ import '../widgets/custom_app_bar.dart';
 import '../widgets/section_header.dart';
 import '../widgets/book_card.dart';
 import '../widgets/book_skeletons.dart';
-import '../widgets/floating_bottom_nav_bar.dart';
 import 'book_details_screen.dart';
 
 class BooksHomeScreen extends StatefulWidget {
@@ -104,12 +103,9 @@ class _BooksHomeScreenState extends State<BooksHomeScreen> {
       ),
     );
 
-    return Stack(
-      children: [
-        scaffold,
-        const FloatingBottomNavBar(activeTab: BottomNavTab.home),
-      ],
-    );
+    // The bottom nav bar is MovieTabShell's, over this.
+
+    return scaffold;
   }
 
   Widget _buildHorizontalList(Future<List<Book>> future) {

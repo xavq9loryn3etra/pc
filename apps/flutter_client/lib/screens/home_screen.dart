@@ -14,11 +14,15 @@ import '../widgets/skeletons.dart';
 import 'desktop_home_screen.dart';
 import '../widgets/desktop_skeletons.dart';
 import '../widgets/custom_app_bar.dart';
-import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/glass_dialog.dart';
 
 class MovieHomeScreen extends StatefulWidget {
   const MovieHomeScreen({super.key});
+
+  /// True once the home has loaded and its skeleton started fading, for
+  /// MovieTabShell's bottom nav bar to make its entrance then. Stays true
+  /// for the rest of the session, like the home's cached data.
+  static final revealed = ValueNotifier<bool>(false);
 
   @override
   State<MovieHomeScreen> createState() => _MovieHomeScreenState();
@@ -66,6 +70,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
       _featuredMovie = _cachedFeatured;
       _loading = false;
       _skeletonDone = true;
+      MovieHomeScreen.revealed.value = true;
     } else {
       _loadData();
     }
@@ -140,6 +145,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
   Future<void> _reveal() async {
     if (!mounted) return;
     setState(() => _loading = false);
+    MovieHomeScreen.revealed.value = true;
     await Future.delayed(const Duration(milliseconds: 120));
     if (mounted) setState(() => _skeletonFading = true);
   }
@@ -165,13 +171,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
                 builder: (context, _) => _buildContent(context, constraints),
               ),
             if (!_skeletonDone) _revealOverSkeleton(wide: wide),
-            // Above the skeleton, and only built once loaded: it plays a
-            // staggered pop-in entrance the first time it's built, which
-            // should show as the skeleton fades rather than happen out of
-            // sight or sit there statically while loading. The desktop
-            // layout has no bottom nav.
-            if (!_loading && !(wide && _featuredMovie != null))
-              const FloatingBottomNavBar(activeTab: BottomNavTab.home),
+            // The bottom nav bar is MovieTabShell's, over this.
           ],
         );
       },

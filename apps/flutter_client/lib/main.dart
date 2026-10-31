@@ -27,6 +27,7 @@ import 'services/deep_link_service.dart';
 import 'services/feature_flags_service.dart';
 import 'services/torrent/download_ahead_settings.dart';
 import 'services/torrent/torrent_engine_service.dart';
+import 'services/torrent/torrent_storage_service.dart';
 import 'services/trending_service.dart';
 import 'services/visual_effects_service.dart';
 
@@ -83,7 +84,10 @@ void main() async {
   // streaming something. Awaiting it here delayed the first frame on every
   // cold start, even for users who just want to browse. streamMagnet()
   // already awaits init() itself if it hasn't finished by the time it's needed.
-  unawaited(TorrentEngineService.instance.init());
+  // Then the downloads limit catches up on what the last run left over.
+  unawaited(TorrentEngineService.instance
+      .init()
+      .then((_) => TorrentStorageService.enforceLimit()));
 
   try {
     await dotenv.load(fileName: ".env");

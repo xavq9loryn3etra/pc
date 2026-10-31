@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -60,14 +61,18 @@ class GlassBlur extends StatelessWidget {
     ]);
   }();
 
-  /// The glass's backdrop filter at [sigma]: blur, then [saturate].
+  /// The glass's backdrop filter at [sigma]: [saturate], then blur. In
+  /// that order, though either gives the same picture (both are linear):
+  /// a blur is worked out on a scaled-down copy, and the other way round
+  /// the colour boost ran on that copy before it was scaled back up,
+  /// leaving a grid of little squares across the glass.
   static ImageFilter filterFor(double sigma) => ImageFilter.compose(
-        outer: saturate,
-        inner: ImageFilter.blur(
+        outer: ImageFilter.blur(
           sigmaX: sigma,
           sigmaY: sigma,
           tileMode: TileMode.mirror,
         ),
+        inner: saturate,
       );
 
   @override
@@ -75,16 +80,20 @@ class GlassBlur extends StatelessWidget {
     return ValueListenableBuilder<bool>(
       valueListenable: VisualEffectsService().reduceGlass,
       builder: (context, reduce, child) {
-        if (reduce || sigma <= 0) {
-          return DecoratedBox(
-            decoration: BoxDecoration(color: reducedTint),
-            child: child,
-          );
-        }
-        final filter = filterFor(sigma);
+        final blur = !reduce && sigma > 0;
+        // The same widgets whether blurring or not, only switched: a
+        // different structure would rebuild everything on the glass.
+        final tinted = DecoratedBox(
+          decoration: BoxDecoration(
+            color: blur ? Colors.transparent : reducedTint,
+          ),
+          child: child,
+        );
+        final filter = filterFor(math.max(sigma, 0.1));
         return grouped
-            ? BackdropFilter.grouped(filter: filter, child: child!)
-            : BackdropFilter(filter: filter, child: child!);
+            ? BackdropFilter.grouped(
+                filter: filter, enabled: blur, child: tinted)
+            : BackdropFilter(filter: filter, enabled: blur, child: tinted);
       },
       child: child,
     );

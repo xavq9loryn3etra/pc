@@ -63,10 +63,13 @@ class StreamResolver {
   /// pick — balancing quality against file size the way people actually
   /// choose — comes first. Only SD (480p) and up: cinema recordings and
   /// releases of unknown quality (tier 0, see [tierOf]) are left out
-  /// altogether, so nothing — a list, a fallback — ever lands on one.
+  /// altogether, so nothing — a list, a fallback — ever lands on one. So
+  /// are cinema recordings that claim a resolution ("1080p HDCAM"), see
+  /// [_isCamRecording].
   ///
   /// [title], when given, also drops releases of a different title — see
-  /// [_fitsTitle].
+  /// [_fitsTitle] — and, while it's only in cinemas ([Movie.isCinemaOnly]),
+  /// every copy not named as a home release (see [_isHomeRelease]).
   Future<List<TorrentStream>> getAvailableStreams({
     required String imdbId,
     required String type,
@@ -81,9 +84,12 @@ class StreamResolver {
             imdbId, season ?? 1, episode ?? 1);
     print('[timing] found ${found.length} copies in '
         '${stopwatch.elapsedMilliseconds} ms');
+    final cinemaOnly = title?.isCinemaOnly ?? false;
     var streams = found
         .where((s) =>
             tierOf(s) > 0 &&
+            !_isCamRecording(s, title) &&
+            (!cinemaOnly || _isHomeRelease(s, title)) &&
             !_isExtra(s, title) &&
             !(type != 'movie' && (season ?? 1) > 0 && _isSpecial(s, title)) &&
             _fitsTitle(s, title))
@@ -105,6 +111,45 @@ class StreamResolver {
         _score(b, recommendedTier).compareTo(_score(a, recommendedTier)));
     return streams;
   }
+
+  // Words that mark a release as filmed in a cinema: camera (CAM, HDCAM),
+  // telesync (TS, HDTS), telecine (TC), screeners (SCR, DVDScr, HdTScr) and
+  // the names Indian releases use for them ("PreDVDRip", "HQ Pre",
+  // "HQ S-Print").
+  static final _camPattern = RegExp(
+      r'(?<![A-Za-z])((hd|hq)[ .-]?)?(cam(rip)?|ts(rip)?|tc|telesync|telecine'
+      r'|pre[ .-]?dvd(rip)?|s[ .-]?print)(?![A-Za-z])'
+      r'|(?<![A-Za-z])((dvd|hdts?)[ .-]?)?scr(eener)?(?![A-Za-z])'
+      r'|(?<![A-Za-z])hq[ .-]?pre(?![A-Za-z])',
+      caseSensitive: false);
+
+  // Words that mark a release as copied from a streaming service, disc or
+  // TV broadcast — never from a cinema.
+  static final _homeSourcePattern = RegExp(
+      r'(?<![A-Za-z])(web([ .-]?(dl|rip))?|blu[ .-]?ray|bd(rip|remux)?'
+      r'|br[ .-]?rip|remux|hdtv|dvd(rip)?|amzn|nf|dsnp|hmax|atvp)(?![A-Za-z])',
+      caseSensitive: false);
+
+  /// Whether [pattern] matches [stream]'s release name, other than in
+  /// words of [title]'s own name ("Charlotte's Web", "Cam").
+  static bool _namedAs(RegExp pattern, TorrentStream stream, Movie? title) {
+    final ownWords =
+        (title?.title.toLowerCase() ?? '').split(RegExp('[^a-z0-9]+')).toSet();
+    return pattern
+        .allMatches(stream.name)
+        .any((m) => !ownWords.contains(m[0]!.toLowerCase()));
+  }
+
+  /// Whether [stream] was filmed in a cinema, whatever resolution it
+  /// claims — "Movie 2026 1080p HDCAM" is still a camera recording.
+  static bool _isCamRecording(TorrentStream stream, Movie? title) =>
+      _namedAs(_camPattern, stream, title);
+
+  /// Whether [stream]'s name shows it came from a streaming service, disc
+  /// or TV (WEB-DL, BluRay, HDTV, ...). Vaguer names ("HDRip", none at all)
+  /// are often camera recordings while a movie is still in cinemas.
+  static bool _isHomeRelease(TorrentStream stream, Movie? title) =>
+      _namedAs(_homeSourcePattern, stream, title);
 
   // Words that mark a pack's file as a bonus clip rather than the feature.
   static final _extraPattern = RegExp(
@@ -477,7 +522,7 @@ class StreamResolver {
       ], resumeAt: resumeAt);
 
   /// Ends a [warmUp] Play didn't take — see [TorrentEngineService.coolDown].
-  void coolDown(List<TorrentStream> candidates) =>
+  Future<void> coolDown(List<TorrentStream> candidates) =>
       _engine.coolDown([for (final s in candidates) s.infoHash]);
 
   /// How long a copy gets to connect on its own before the next one is

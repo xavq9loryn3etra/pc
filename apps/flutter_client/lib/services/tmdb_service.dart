@@ -125,21 +125,25 @@ class TMDBService {
     }
   }
 
-  // Original languages written in the Latin alphabet, whose logos read fine
-  // alongside the app's English UI (e.g. Lupin's French "LUPIN").
-  static const _latinScriptLanguages = {
+  // Original languages whose logos read fine alongside the app's English
+  // UI: those written in the Latin alphabet (e.g. Lupin's French "LUPIN"),
+  // and Indian ones, whose films' logos are nearly always in English
+  // letters even when tagged with the film's language (Trance, KGF,
+  // Kantara, Devara, Maharaja…).
+  static const _readableLogoLanguages = {
     'fr', 'es', 'de', 'it', 'pt', 'nl', 'sv', 'da', 'no', 'nb', 'nn', 'fi',
     'is', 'pl', 'cs', 'sk', 'sl', 'hr', 'bs', 'sr', 'hu', 'ro', 'tr', 'et',
     'lv', 'lt', 'ga', 'cy', 'ca', 'eu', 'gl', 'id', 'ms', 'tl', 'vi', 'sq',
     'af', 'sw', 'mt', 'lb',
+    'hi', 'ml', 'ta', 'te', 'kn', 'bn', 'mr', 'pa', 'gu', 'or',
   };
 
   /// Details are fetched with English / language-neutral images only, so a
   /// non-English production with no English-tagged logo (e.g. Lupin: 34
   /// logos, none English) fell back to a plain text title. When that
-  /// happens and its original language uses the Latin alphabet, fetch the
-  /// original-language logos and add them to [data]'s images. Other
-  /// scripts (Japanese, Korean, …) keep the English text title.
+  /// happens and its original language is one of [_readableLogoLanguages],
+  /// fetch the original-language logos and add them to [data]'s images.
+  /// Other scripts (Japanese, Korean, …) keep the English text title.
   Future<void> _addOriginalLanguageLogos(
     dynamic data,
     String type,
@@ -151,7 +155,7 @@ class TMDBService {
     final logos = images is Map ? images['logos'] : null;
     if (logos is List && logos.isNotEmpty) return;
     final language = data['original_language'];
-    if (language is! String || !_latinScriptLanguages.contains(language)) {
+    if (language is! String || !_readableLogoLanguages.contains(language)) {
       return;
     }
     try {
@@ -175,6 +179,60 @@ class TMDBService {
       // No logo is fine — the text title is shown instead.
     }
   }
+
+  /// Videos come English-only too, so a film whose trailers are all tagged
+  /// with its own language (e.g. Trance's Malayalam one) had none. When
+  /// [data] has no YouTube trailer, fetch its original-language videos and
+  /// add them to [data]'s — in any language: it's the film's own trailer.
+  Future<void> _addOriginalLanguageTrailers(
+    dynamic data,
+    String type,
+    String id,
+    CancelToken? cancelToken,
+  ) async {
+    if (data is! Map) return;
+    final videos = data['videos'];
+    final results = videos is Map ? videos['results'] : null;
+    if (results is List &&
+        results.any((v) =>
+            v is Map && v['site'] == 'YouTube' && v['type'] == 'Trailer')) {
+      return;
+    }
+    final language = data['original_language'];
+    if (language is! String || language == 'en') return;
+    try {
+      final response = await _dio.get(
+        '$_baseUrl/$type/$id/videos',
+        queryParameters: {
+          'api_key': _apiKey,
+          'include_video_language': language,
+        },
+        cancelToken: cancelToken,
+      );
+      final found = response.data is Map ? response.data['results'] : null;
+      if (found is List && found.isNotEmpty) {
+        data['videos'] = {
+          'results': [...?(results is List ? results : null), ...found],
+        };
+      }
+    } catch (e) {
+      if (e is DioException && CancelToken.isCancel(e)) rethrow;
+      // No trailer is fine — the Trailer button is hidden.
+    }
+  }
+
+  /// Adds the original-language logos and trailers [data] lacks (see
+  /// above), fetched side by side.
+  Future<void> _addOriginalLanguageExtras(
+    dynamic data,
+    String type,
+    String id,
+    CancelToken? cancelToken,
+  ) =>
+      Future.wait([
+        _addOriginalLanguageLogos(data, type, id, cancelToken),
+        _addOriginalLanguageTrailers(data, type, id, cancelToken),
+      ]);
 
   // Details lookups started by prefetchDetails, by cache key: getDetails
   // joins one rather than fetching the same title again.
@@ -227,7 +285,7 @@ class TMDBService {
           },
           cancelToken: cancelToken,
         );
-        await _addOriginalLanguageLogos(response.data, 'movie', id, cancelToken);
+        await _addOriginalLanguageExtras(response.data, 'movie', id, cancelToken);
         final movie = _formatMovieDetails(response.data,
             isTv: false, watchCountry: await watchCountry);
         _cache[key] = _CacheEntry(movie);
@@ -250,7 +308,7 @@ class TMDBService {
         },
         cancelToken: cancelToken,
       );
-      await _addOriginalLanguageLogos(response.data, 'tv', id, cancelToken);
+      await _addOriginalLanguageExtras(response.data, 'tv', id, cancelToken);
       final split = await _splitSeasons(id, response.data['seasons']);
       if (split != null) {
         response.data['seasons'] = [
@@ -328,6 +386,7 @@ class TMDBService {
         biography: bio is String ? bio.trim() : '',
         knownFor: p['known_for_department'] as String?,
         birthday: p['birthday'] as String?,
+        deathday: p['deathday'] as String?,
         placeOfBirth: p['place_of_birth'] as String?,
         credits: entries
             .take(40)
@@ -419,6 +478,23 @@ class TMDBService {
         orElse: () => null,
       );
       if (usRating != null) certification = usRating['rating'];
+    }
+
+    // The earliest digital (4), disc (5) or TV (6) release in any country —
+    // see Movie.isCinemaOnly.
+    String? homeReleaseRaw;
+    if (!isTv) {
+      final releases = m['release_dates']?['results'] as List? ?? const [];
+      for (final country in releases) {
+        for (final d in country['release_dates'] as List? ?? const []) {
+          final date = d['release_date']?.toString();
+          if (const {4, 5, 6}.contains(d['type']) &&
+              date != null &&
+              (homeReleaseRaw == null || date.compareTo(homeReleaseRaw) < 0)) {
+            homeReleaseRaw = date;
+          }
+        }
+      }
     }
 
     // Credits
@@ -556,6 +632,11 @@ class TMDBService {
     List<Season>? seasons;
     if (isTv && m['seasons'] != null) {
       seasons = (m['seasons'] as List).map((s) => Season.fromJson(s)).toList();
+      // Without seasons only announced so far — no episodes listed yet
+      // (e.g. All of Us Are Dead's season 2): picking one showed nothing.
+      // Unless that's all there is.
+      final listed = seasons.where((s) => s.episodeCount != 0).toList();
+      if (listed.isNotEmpty) seasons = listed;
     }
 
     // Trailer
@@ -612,6 +693,7 @@ class TMDBService {
       type: isTv ? 'tv' : 'movie',
       inCinemas: base.inCinemas,
       releaseDateRaw: base.releaseDateRaw,
+      homeReleaseRaw: homeReleaseRaw,
       originalLanguage: m['original_language'] as String?,
       lastAirYear: isTv
           ? int.tryParse('${m['last_air_date'] ?? ''}'.split('-').first)

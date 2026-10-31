@@ -59,8 +59,8 @@ class MovieHeroBanner extends StatelessWidget {
           ? (width: (screen.width * dpr).toInt(), height: null)
           : (width: null, height: (_backdropCacheHeight * dpr).toInt());
 
-  /// Downloads and decodes [movie]'s backdrop and logo as the banner will
-  /// request them, so they paint on its first frame.
+  /// Downloads and decodes [movie]'s backdrop, its glow and its logo as
+  /// the banner will request them, so they paint on its first frame.
   static Future<void> precache(BuildContext context, Movie movie) {
     final dpr = MediaQuery.devicePixelRatioOf(context);
     final screen = MediaQuery.sizeOf(context);
@@ -68,6 +68,7 @@ class MovieHeroBanner extends StatelessWidget {
     return Future.wait([
       precacheNetworkImage(context, _imageFor(movie, screen),
           cacheWidth: decode.width, cacheHeight: decode.height),
+      ArtworkGlow.precache(context, _imageFor(movie, screen)),
       precacheNetworkImage(context, _logoUrlFor(movie),
           cacheHeight: (_logoHeight * dpr).toInt()),
     ]);
@@ -323,25 +324,14 @@ class MovieHeroBanner extends StatelessWidget {
                   fit: BoxFit.cover,
                   alignment: Alignment.topCenter,
                 )
-              : ShaderMask(
-                  blendMode: BlendMode.dstIn,
-                  shaderCallback: (rect) => const LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.white, Colors.white, Colors.transparent],
-                    stops: [0, 0.55, 1],
-                  ).createShader(rect),
-                  child: CachedNetworkImage(
-                    imageUrl: imageUrl,
-                    fit: BoxFit.cover,
-                    // A tall poster loses its bottom rather than its top:
-                    // that's under the logo and buttons.
-                    alignment: poster
-                        ? const Alignment(0, -0.4)
-                        : Alignment.topCenter,
-                    memCacheWidth: decode.width,
-                    memCacheHeight: decode.height,
-                  ),
+              : FadingCoverImage(
+                  url: imageUrl,
+                  cacheWidth: decode.width,
+                  cacheHeight: decode.height,
+                  // A tall poster loses its bottom rather than its top:
+                  // that's under the logo and buttons.
+                  alignment:
+                      poster ? const Alignment(0, -0.4) : Alignment.topCenter,
                 ),
         ),
         // Darker where the logo and buttons sit over the glow, then black

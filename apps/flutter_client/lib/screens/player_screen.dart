@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../widgets/app_message.dart';
 import '../widgets/player_route.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -225,13 +226,23 @@ class _PlayerScreenState extends State<PlayerScreen>
   final _mediaSession = FlutterMediaSession();
   StreamSubscription? _mediaActionSub;
 
-  // Continuous gyro rotation — same approach as web_player_mobile.dart, so
-  // the native player rotates to match how the phone is physically held
-  // even when the OS's own auto-rotate lock is on (setPreferredOrientations
-  // alone only picks between allowed orientations when the system rotate
-  // lock is off).
-  StreamSubscription? _accelSubscription;
-  DeviceOrientation _currentOrientation = DeviceOrientation.landscapeLeft;
+  // Landscape: the phone really turns for the player, so the system's own
+  // bars and pull-down panel turn with it. Only once the player has faded
+  // in over the page, and back to portrait before it closes (see _close),
+  // so the page behind is never seen sideways.
+  static final _canTurn = Platform.isAndroid || Platform.isIOS;
+  bool _turnStarted = false;
+  // Followed with the accelerometer, so the picture turns to whichever
+  // side the phone is held even with the system's rotation lock on — with
+  // it, the system keeps whichever landscape side the player opened in.
+  StreamSubscription<AccelerometerEvent>? _tilt;
+  DeviceOrientation? _landscapeSide;
+  // Set once the player has passed the screen's orientation on — turned it
+  // back to portrait itself (_close), or to the web player — so dispose
+  // leaves it be.
+  bool _orientationHandedOn = false;
+  // Turning back to portrait before closing: the player shows black.
+  bool _closing = false;
 
   @override
   void initState() {
@@ -253,13 +264,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     _episodes = widget.episodes;
     _browsingEpisodes = widget.episodes;
 
-    // Enable auto-rotation for the player (landscape only)
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    // Landscape follows in didChangeDependencies, once it has faded in.
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    _initGyroRotation();
 
     // Episode drawer slide up/down — starts "dismissed" (off the bottom of
     // the screen) since the drawer isn't open yet.
@@ -304,52 +310,81 @@ class _PlayerScreenState extends State<PlayerScreen>
         .then((prefs) => prefs.setString(_videoFitPrefKey, fit.name));
   }
 
-  // Continuously monitor the accelerometer to auto-rotate between
-  // landscapeLeft and landscapeRight even when the OS auto-rotate lock is
-  // ON — matching web_player_mobile.dart's behavior. Without this, a user
-  // with system rotation lock enabled gets stuck in whichever landscape
-  // direction the player happened to open in.
-  void _initGyroRotation() {
-    _accelSubscription = accelerometerEventStream(
-      samplingPeriod: const Duration(milliseconds: 500),
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_turnStarted || !_canTurn) return;
+    _turnStarted = true;
+    // Turns once the player covers the page: turning while it fades in
+    // showed the page behind turn too.
+    final opening = ModalRoute.of(context)?.animation;
+    if (opening == null || opening.status == AnimationStatus.completed) {
+      _turnLandscape();
+      return;
+    }
+    void opened(AnimationStatus status) {
+      if (status == AnimationStatus.forward) return;
+      opening.removeStatusListener(opened);
+      if (status == AnimationStatus.completed && mounted && !_closing) {
+        _turnLandscape();
+      }
+    }
+
+    opening.addStatusListener(opened);
+  }
+
+  void _turnLandscape() {
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    _tilt = accelerometerEventStream(
+      samplingPeriod: const Duration(milliseconds: 300),
     ).listen((event) {
-      if (!mounted) return;
+      // Gravity along the phone's width: positive with its left edge down
+      // (top tilted left), negative with its right edge down. In between —
+      // held upright, or lying flat — stays on the current side.
+      final side = event.x > 4.0
+          ? DeviceOrientation.landscapeLeft
+          : event.x < -4.0
+              ? DeviceOrientation.landscapeRight
+              : null;
+      if (side == null || side == _landscapeSide || _closing) return;
+      _landscapeSide = side;
+      SystemChrome.setPreferredOrientations([side]);
+    }, onError: (_) {}); // No sensor: the system picks the side.
+  }
 
-      // Determine which landscape the phone is physically in:
-      // x < -4 => phone top pointing right => landscapeRight
-      // x >  4 => phone top pointing left  => landscapeLeft
-      // |x| <= 4 => ambiguous / in-between, keep current
-      DeviceOrientation? detected;
-      if (event.x < -4.0) {
-        detected = DeviceOrientation.landscapeRight;
-      } else if (event.x > 4.0) {
-        detected = DeviceOrientation.landscapeLeft;
+  /// Closes the player: first turning the phone back to portrait over
+  /// black, so the page it goes back to is never seen sideways.
+  Future<void> _close() async {
+    if (_closing) return;
+    setState(() => _closing = true);
+    _orientationHandedOn = true;
+    _tilt?.cancel();
+    player.pause();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    if (_canTurn && mounted) {
+      // Until the screen is portrait, and drawn so; or a moment, where it
+      // won't turn (a tablet that ignores the app's portrait lock).
+      final view = View.of(context);
+      final giveUp = DateTime.now().add(const Duration(milliseconds: 1200));
+      while (mounted &&
+          view.physicalSize.width > view.physicalSize.height &&
+          DateTime.now().isBefore(giveUp)) {
+        await Future.delayed(const Duration(milliseconds: 50));
       }
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    if (mounted) Navigator.pop(context);
+  }
 
-      if (detected != null && detected != _currentOrientation) {
-        _currentOrientation = detected;
-        SystemChrome.setPreferredOrientations([detected]);
-
-        // After rotating, unlock both landscape directions so that
-        // subsequent tilts are picked up naturally by the OS too.
-        Future.delayed(const Duration(milliseconds: 800), () {
-          if (mounted) {
-            SystemChrome.setPreferredOrientations([
-              DeviceOrientation.landscapeLeft,
-              DeviceOrientation.landscapeRight,
-            ]);
-          }
-        });
-      }
-    }, onError: (_) {
-      // Sensors unavailable — just allow both landscape directions
-      if (mounted) {
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.landscapeLeft,
-          DeviceOrientation.landscapeRight,
-        ]);
-      }
-    });
+  /// The player is closing to open the web player, which turns the screen
+  /// itself.
+  void _handOrientationToWebPlayer() {
+    _orientationHandedOn = true;
+    _tilt?.cancel();
   }
 
   Future<void> _initPlayer() async {
@@ -370,6 +405,11 @@ class _PlayerScreenState extends State<PlayerScreen>
         'yes'); // Pause at startup until initial cache fills
     await mpv.setProperty(
         'cache-pause-wait', '5'); // Re-pause if buffer drops below 5s
+    // Seeks land on the nearest keyframe rather than the exact second: an
+    // exact seek first downloads and decodes everything from the keyframe
+    // before it — up to ~10s of video in x265 releases, and slow to decode
+    // — which kept a seek spinning long after its data had arrived.
+    await mpv.setProperty('hr-seek', 'no');
     // Multi-language releases often make a dub their default audio track;
     // pick the English one when there is one (StreamResolver.languageRank
     // already prefers English-only releases).
@@ -621,15 +661,12 @@ class _PlayerScreenState extends State<PlayerScreen>
       // thrash. Surface it instead of silently looping.
       if (_stallMessageShown) return;
       _stallMessageShown = true;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: Colors.red[900],
-          duration: const Duration(seconds: 6),
-          content: const Text(
-            'Playback keeps stalling — this source may be unavailable. '
-            'Try a different one from the quality menu.',
-          ),
-        ),
+      showAppMessage(
+        context,
+        'Playback keeps stalling — this copy may not be available. '
+        'Try a different one from the quality menu.',
+        error: true,
+        duration: const Duration(seconds: 6),
       );
       return;
     }
@@ -717,11 +754,11 @@ class _PlayerScreenState extends State<PlayerScreen>
           _initialPositionRestored = true;
         });
         if (otherCopies.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              backgroundColor: Colors.red[900],
-              content: Text('Failed to recover playback: $e'),
-            ),
+          debugPrint('Failed to recover playback: $e');
+          showAppMessage(
+            context,
+            "Couldn't get playback going again. Try another quality.",
+            error: true,
           );
         }
       }
@@ -1283,12 +1320,12 @@ class _PlayerScreenState extends State<PlayerScreen>
         // Back to the video that was already playing: the controls can
         // hide again as usual.
         _resetControlsTimer();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.red[900],
-            content: Text('Couldn\'t switch quality, so it\'s staying on '
-                '${_currentStream.quality ?? "the current one"}. ($e)'),
-          ),
+        debugPrint('Quality switch failed: $e');
+        showAppMessage(
+          context,
+          "Couldn't switch quality, so it's staying on "
+          '${_currentStream.quality ?? "the current one"}.',
+          error: true,
         );
       }
     }
@@ -1324,6 +1361,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     if (!mounted) return;
 
+    _handOrientationToWebPlayer();
     Navigator.pop(context); // Close player
 
     await Navigator.push(
@@ -1368,6 +1406,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     if (!mounted) return;
 
+    _handOrientationToWebPlayer();
     Navigator.pop(context); // Close player
 
     await Navigator.push(
@@ -1435,12 +1474,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// Generalized Play Episode Function
   Future<void> _playEpisode(Episode targetEp, int seasonNumber) async {
     if (targetEp.isUnreleased) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: Colors.black87,
-          content: Text("This episode hasn't aired yet."),
-        ),
-      );
+      showAppMessage(context, "This episode hasn't aired yet.");
       return;
     }
 
@@ -1518,12 +1552,12 @@ class _PlayerScreenState extends State<PlayerScreen>
       _switchingQuality = false;
       _controlsVisible = true;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: Colors.red[900],
-        content: Text('Couldn\'t play S$seasonNumber E${targetEp.episodeNumber}'
-            ' — you\'re still on the episode you were watching. ($e)'),
-      ),
+    debugPrint('Episode switch failed: $e');
+    showAppMessage(
+      context,
+      "Couldn't play S$seasonNumber E${targetEp.episodeNumber}, so you're "
+      'still on the episode you were watching.',
+      error: true,
     );
   }
 
@@ -1540,12 +1574,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     List<TorrentStream> allStreams,
   ) async {
     if (targetEp.isUnreleased) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: Colors.black87,
-          content: Text("This episode hasn't aired yet."),
-        ),
-      );
+      showAppMessage(context, "This episode hasn't aired yet.");
       return;
     }
 
@@ -1771,11 +1800,11 @@ class _PlayerScreenState extends State<PlayerScreen>
         setState(() {
           _switchingQuality = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.red[900],
-            content: Text('Failed to load season details: $e'),
-          ),
+        debugPrint('Failed to load season details: $e');
+        showAppMessage(
+          context,
+          "Couldn't load this season's episodes.",
+          error: true,
         );
       }
     }
@@ -1788,15 +1817,18 @@ class _PlayerScreenState extends State<PlayerScreen>
     _screenTapTimer?.cancel();
     _bufferingRevealTimer?.cancel();
     _seekRevealTimer?.cancel();
-    _accelSubscription?.cancel();
     // Safety net in case this screen is disposed while still backgrounded.
     BackgroundDownloadService.instance.stop();
 
-    // 1. Reset system navigation and landscape orientation to app defaults
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-    ]);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    // 1. Reset system navigation and landscape orientation to app defaults,
+    // unless that's been done already, or is now the web player's.
+    _tilt?.cancel();
+    if (!_orientationHandedOn) {
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+      ]);
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
 
     // 2. Save final history position
     _saveProgress(force: true);
@@ -1837,8 +1869,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     player.dispose();
     _resolver.pause(_torrentId);
     // A readied next episode not played: what it got ahead goes (one
-    // that was played is now a download of its own, and stays).
-    _resolver.coolDown(_nextHeadStart);
+    // that was played is now a download of its own, and stays). Then the
+    // downloads are trimmed to their size limit, if this took them over.
+    _resolver
+        .coolDown(_nextHeadStart)
+        .whenComplete(TorrentStorageService.enforceLimit);
 
     // 5. Dispose seek bar / stats notifiers
     _positionNotifier.dispose();
@@ -2243,6 +2278,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   @override
   Widget build(BuildContext context) {
+    if (_closing) return const ColoredBox(color: Colors.black);
     final size = MediaQuery.of(context).size;
     // Camera cutout (punch hole / notch) — the video draws under it (see
     // MainActivity), but the controls stay clear of it.
@@ -2268,7 +2304,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
 
     return PopScope(
-      canPop: !_showEpisodeDrawer && !_showSettingsPanel,
+      // Back closes a panel, or else the player — via _close, to turn the
+      // phone back first.
+      canPop: false,
       onPopInvoked: (didPop) {
         if (didPop) return;
         if (_showEpisodeDrawer) {
@@ -2280,6 +2318,8 @@ class _PlayerScreenState extends State<PlayerScreen>
               _controlsVisible = true;
             }
           });
+        } else {
+          _close();
         }
       },
       child: Scaffold(

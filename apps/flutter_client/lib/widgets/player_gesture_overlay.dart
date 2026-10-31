@@ -15,9 +15,12 @@ class PlayerGestureOverlay extends StatefulWidget {
   final Widget child;
   final VoidCallback? onTap;
 
-  /// Like [onTap], but with where the tap landed (global coordinates), for
-  /// callers that act differently depending on the area tapped. Called
-  /// instead of [onTap] when set.
+  /// Like [onTap], but with where the tap landed, for callers that act
+  /// differently depending on the area tapped. Called instead of [onTap]
+  /// when set.
+  ///
+  /// Positions here are all in the overlay's own coordinates, which match
+  /// its MediaQuery size as it fills the screen.
   final ValueChanged<Offset>? onTapAt;
   final VoidCallback? onSwipeUp;
   final ValueChanged<bool>? onDoubleTapSeek;
@@ -175,25 +178,25 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
     final screenSize = MediaQuery.of(context).size;
     
     // Detect bottom edge swipe for drawer
-    if (event.position.dy > screenSize.height - 80) {
+    if (event.localPosition.dy > screenSize.height - 80) {
       _isBottomEdgeSwipe = true;
-      _pointerStart = event.position;
+      _pointerStart = event.localPosition;
       _isDragging = false;
       return;
     }
 
     // Ignore other edge swipes (50px on all sides) so the user can pull system UI
     // or trigger native back gestures without accidentally triggering volume/brightness.
-    if (event.position.dy < 50 || 
-        event.position.dy > screenSize.height - 50 ||
-        event.position.dx < 50 || 
-        event.position.dx > screenSize.width - 50) {
+    if (event.localPosition.dy < 50 || 
+        event.localPosition.dy > screenSize.height - 50 ||
+        event.localPosition.dx < 50 || 
+        event.localPosition.dx > screenSize.width - 50) {
       _pointerStart = null;
       _isDragging = false;
       return;
     }
     
-    _pointerStart = event.position;
+    _pointerStart = event.localPosition;
     _isDragging = false;
 
     _holdTimer?.cancel();
@@ -220,7 +223,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
     // a volume / brightness swipe.
     if (_holding) return;
 
-    final delta = event.position - _pointerStart!;
+    final delta = event.localPosition - _pointerStart!;
 
     if (!_isDragging && delta.distance < _dragThreshold) return;
 
@@ -282,7 +285,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
     if (_activeGesture == _GestureType.none) return;
 
     final screenHeight = MediaQuery.of(context).size.height;
-    final verticalDelta = _pointerStart!.dy - event.position.dy;
+    final verticalDelta = _pointerStart!.dy - event.localPosition.dy;
     final valueDelta = verticalDelta / (screenHeight * 0.7);
     final newValue = (_startValue + valueDelta).clamp(0.0, 1.0);
 
@@ -318,7 +321,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
 
     if (!_isDragging && _pointerStart != null && !_isBottomEdgeSwipe) {
       final now = DateTime.now();
-      final tapPos = event.position;
+      final tapPos = event.localPosition;
       final screenWidth = MediaQuery.of(context).size.width;
       final isForward = tapPos.dx > screenWidth / 2;
 

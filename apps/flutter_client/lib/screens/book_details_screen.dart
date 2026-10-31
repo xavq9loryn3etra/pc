@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import '../widgets/app_message.dart';
 import '../widgets/player_route.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -81,11 +82,10 @@ class _BookDetailsScreenState extends State<BookDetailsScreen> {
 
       // 2. Fallback to sample if no real book found (for demo purposes)
       if (downloadUrl == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Real copy not found. Opening sample book...'),
-            duration: Duration(seconds: 2),
-          ),
+        showAppMessage(
+          context,
+          "Couldn't find a copy of this book, so opening a sample instead.",
+          duration: const Duration(seconds: 2),
         );
         // Use a reliable Project Gutenberg link (Romeo and Juliet)
         downloadUrl = 'https://www.gutenberg.org/cache/epub/1513/pg1513.epub';
@@ -113,24 +113,16 @@ class _BookDetailsScreenState extends State<BookDetailsScreen> {
           );
         }
       } else {
-        // If the constructed URL fails (e.g. 404 because epub doesn't exist for that IA item), try fallback
-        if (downloadUrl.contains('archive.org')) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                content: Text('Book file not available. Opening sample...')),
-          );
-          // TODO: Retry with sample if real book fails?
-          // For now, let it fail so user knows.
-        }
-
+        // TODO: Retry with the sample when an archive.org copy fails (e.g.
+        // 404 because that item has no epub)? For now it fails, so the user
+        // knows.
         throw Exception(
             'Failed to download book: ${response.statusCode} from $downloadUrl');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error opening book: $e')),
-        );
+        debugPrint('Error opening book: $e');
+        showAppMessage(context, "Couldn't open this book.", error: true);
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);

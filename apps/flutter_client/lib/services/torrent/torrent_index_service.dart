@@ -180,7 +180,12 @@ class TorrentStream {
     // --- Quality (from name field, line 2) ---
     String? quality;
     final qualityStr = nameLines.length > 1 ? nameLines[1].trim().toLowerCase() : '';
-    if (qualityStr.contains('4k') || qualityStr.contains('2160')) {
+    // Torrentio's word for a cinema recording comes first: it says
+    // "TeleSync" for "Movie.2026.1080p.TELESYNC", which the release-name
+    // fallback below would otherwise take for 1080p.
+    if (RegExp(r'cam|scr|tele').hasMatch(qualityStr)) {
+      quality = 'CAM';
+    } else if (qualityStr.contains('4k') || qualityStr.contains('2160')) {
       quality = '4K';
     } else if (qualityStr.contains('1080')) {
       quality = '1080p';
@@ -190,8 +195,6 @@ class TorrentStream {
       // A DVD rip is standard definition (480p/576p) — often all there is
       // for older shows.
       quality = '480p';
-    } else if (qualityStr.contains('cam') || qualityStr.contains('scr')) {
-      quality = 'CAM';
     }
 
     // Fallback: also check the release name (line 1 of title) for quality

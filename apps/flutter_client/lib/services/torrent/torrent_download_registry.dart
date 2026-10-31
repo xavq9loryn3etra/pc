@@ -26,6 +26,11 @@ class TorrentDownloadInfo {
   /// including after the app restarts and the torrent is no longer live.
   final int? downloadedBytes;
 
+  /// When it was last played: set on [TorrentDownloadRegistry.save] and on
+  /// every progress update while it plays. The storage limit removes the
+  /// downloads played longest ago first (see TorrentStorageService).
+  final DateTime? lastPlayed;
+
   const TorrentDownloadInfo({
     required this.movieId,
     this.imdbId,
@@ -35,6 +40,7 @@ class TorrentDownloadInfo {
     this.episode,
     this.totalBytes,
     this.downloadedBytes,
+    this.lastPlayed,
   });
 
   bool get isEpisode => season != null && episode != null;
@@ -53,6 +59,7 @@ class TorrentDownloadInfo {
         'episode': episode,
         'totalBytes': totalBytes,
         'downloadedBytes': downloadedBytes,
+        'lastPlayed': lastPlayed?.millisecondsSinceEpoch,
       };
 
   factory TorrentDownloadInfo.fromJson(Map<String, dynamic> json) =>
@@ -65,6 +72,9 @@ class TorrentDownloadInfo {
         episode: json['episode'] as int?,
         totalBytes: json['totalBytes'] as int?,
         downloadedBytes: json['downloadedBytes'] as int?,
+        lastPlayed: json['lastPlayed'] is int
+            ? DateTime.fromMillisecondsSinceEpoch(json['lastPlayed'] as int)
+            : null,
       );
 }
 
@@ -74,7 +84,10 @@ class TorrentDownloadRegistry {
   static Future<void> save(String infoHash, TorrentDownloadInfo info) async {
     final prefs = await SharedPreferences.getInstance();
     final map = await _readAll(prefs);
-    map[infoHash.toLowerCase()] = info.toJson();
+    map[infoHash.toLowerCase()] = {
+      ...info.toJson(),
+      'lastPlayed': DateTime.now().millisecondsSinceEpoch,
+    };
     await prefs.setString(_storageKey, jsonEncode(map));
   }
 
@@ -121,6 +134,7 @@ class TorrentDownloadRegistry {
       episode: existing.episode,
       totalBytes: resolvedTotal,
       downloadedBytes: downloadedBytes,
+      lastPlayed: DateTime.now(),
     ).toJson();
     await prefs.setString(_storageKey, jsonEncode(map));
   }

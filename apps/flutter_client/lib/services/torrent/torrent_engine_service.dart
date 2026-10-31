@@ -331,6 +331,17 @@ class TorrentEngineService {
   /// Whether torrent [id] has a stream running.
   bool isStreaming(int id) => _streaming.contains(id);
 
+  /// Whether torrent [infoHash] is in use right now: playing, or getting a
+  /// head start (see warmUp). TorrentStorageService's size limit leaves
+  /// those alone.
+  bool isInUse(String infoHash) {
+    final key = infoHash.toLowerCase();
+    if (_warming.contains(key)) return true;
+    final id = _liveId(key);
+    return id != null &&
+        (_streaming.contains(id) || _warmStreams.containsKey(id));
+  }
+
   // Streams a head start opened ahead of Play (see warmUp), by torrent id:
   // startStream takes one over instead of opening its own.
   final Map<int, StreamInfo> _warmStreams = {};

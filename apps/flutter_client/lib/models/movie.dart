@@ -14,6 +14,9 @@ class Movie {
   final String type; // 'movie' or 'tv'
   final bool inCinemas;
   final String? releaseDateRaw; // Raw TMDB release_date/first_air_date
+  // Movies only: the earliest digital, disc or TV release TMDB knows of,
+  // anywhere (see isCinemaOnly). Details only, not persisted.
+  final String? homeReleaseRaw;
   // TV only: the year its latest episode aired (TMDB's last_air_date).
   // Details only, not persisted.
   final int? lastAirYear;
@@ -89,6 +92,24 @@ class Movie {
     return parsed.isAfter(DateTime.now());
   }
 
+  /// Whether this movie is most likely still only showing in cinemas: it's
+  /// out, but TMDB knows of no digital, disc or TV release yet, nor a
+  /// streaming service carrying it. Copies around then are usually camera
+  /// recordings, so only ones whose names show they came from a home
+  /// release are played (see StreamResolver.getAvailableStreams). TMDB
+  /// often lacks those dates for films made outside the US, so with none
+  /// known it's taken to be out after 120 days.
+  bool get isCinemaOnly {
+    if (type != 'movie') return false;
+    final now = DateTime.now();
+    final release = DateTime.tryParse(releaseDateRaw ?? '');
+    if (release == null || release.isAfter(now)) return false;
+    if (streamingProvider != null) return false;
+    final home = DateTime.tryParse(homeReleaseRaw ?? '');
+    if (home != null) return home.isAfter(now);
+    return now.difference(release).inDays < 120;
+  }
+
   Movie({
     required this.id,
     required this.title,
@@ -102,6 +123,7 @@ class Movie {
     required this.type,
     required this.inCinemas,
     this.releaseDateRaw,
+    this.homeReleaseRaw,
     this.lastAirYear,
     this.originalLanguage,
     this.director,
@@ -331,9 +353,10 @@ class Person {
   final String biography;
   final String? knownFor; // "Acting", "Directing", …
   final String? birthday; // "1976-01-30"
+  final String? deathday;
   final String? placeOfBirth;
 
-  /// Their movies and shows, best known first.
+  /// Their best known movies and shows, newest first.
   final List<Movie> credits;
 
   const Person({
@@ -343,6 +366,7 @@ class Person {
     this.biography = '',
     this.knownFor,
     this.birthday,
+    this.deathday,
     this.placeOfBirth,
     this.credits = const [],
   });

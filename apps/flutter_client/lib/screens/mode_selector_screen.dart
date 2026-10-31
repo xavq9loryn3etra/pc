@@ -135,15 +135,7 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
     // we're there, so there's nothing to gain from a slow transition on
     // top of that. Kept brief instead of instant (Duration.zero) purely so
     // it doesn't read as a rendering glitch.
-    Navigator.of(context).pushReplacement(
-      PageRouteBuilder(
-        pageBuilder: (_, __, ___) => const MainScreen(),
-        transitionsBuilder: (_, animation, __, child) {
-          return FadeTransition(opacity: animation, child: child);
-        },
-        transitionDuration: const Duration(milliseconds: 150),
-      ),
-    );
+    Navigator.of(context).pushReplacement(MainScreenRoute());
   }
 
   // Scrims: keep the status bar legible and darken behind the caption,

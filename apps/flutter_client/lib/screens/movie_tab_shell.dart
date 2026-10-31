@@ -17,6 +17,11 @@ const _kTabFadeDuration = Duration(milliseconds: 200);
 /// every tab's widget alive per mode so switching preserves scroll position,
 /// search text, etc. and never refetches data. Uses a Stack of per-tab
 /// AnimatedOpacity so switching cross-fades smoothly.
+///
+/// The bottom nav bar is one for all the tabs, over them, so it stays put
+/// while they cross-fade under it. With a bar per tab, two see-through bars
+/// faded over each other on every switch — the glass flickered lighter —
+/// and the bar's own slide between the Home and Search layouts never ran.
 class MovieTabShell extends StatelessWidget {
   const MovieTabShell({super.key});
 
@@ -42,9 +47,37 @@ class MovieTabShell extends StatelessWidget {
                       child: screens[i],
                     ),
                   ),
+                _navBar(mode, activeTab),
               ],
             );
           },
+        );
+      },
+    );
+  }
+
+  Widget _navBar(AppMode mode, BottomNavTab activeTab) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: MovieHomeScreen.revealed,
+      builder: (context, homeRevealed, _) {
+        final onHome = activeTab == BottomNavTab.home;
+        // Not built until the movie home has loaded: the bar plays a
+        // staggered pop-in the first time it's built, which should show
+        // as the home's skeleton fades rather than happen while it loads.
+        if (onHome && mode == AppMode.movies && !homeRevealed) {
+          return const SizedBox.shrink();
+        }
+        // Hidden, but kept, over the wide (desktop) home, which has no
+        // bottom nav.
+        final wide = MediaQuery.sizeOf(context).width > 800;
+        return Positioned.fill(
+          child: Visibility(
+            visible: !(onHome && wide),
+            maintainState: true,
+            child: Stack(
+              children: [FloatingBottomNavBar(activeTab: activeTab)],
+            ),
+          ),
         );
       },
     );

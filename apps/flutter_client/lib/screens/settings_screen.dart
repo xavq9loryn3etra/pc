@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import '../widgets/app_message.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../widgets/screen_scaffold.dart';
@@ -53,24 +54,48 @@ class SettingsScreen extends StatelessWidget {
                 AppModeService().currentMode.value == AppMode.movies &&
                     !FeatureFlagsService().hidePlayback.value;
 
+            // Grouped like Apple's settings: each section's rows on one
+            // card, a short note under it, ordered by how often they're
+            // likely to be used.
             return ListView(
               padding: padding.copyWith(top: 100),
               children: [
                 const _SectionLabel('SWITCH MODE', topPadding: 8),
                 const ModeSwitchRow(),
-                const _SectionLabel('DISPLAY'),
-                const _ReduceGlassRow(),
-                const _SectionLabel('BACKUP & RESTORE'),
-                _BackupRestoreRow(
-                  onExport: () => _exportBackup(context),
-                  onImport: () => _importBackup(context),
-                ),
                 if (showStorage) ...[
                   const _SectionLabel('PLAYBACK'),
-                  const _DownloadAheadRow(),
-                  const _SectionLabel('STORAGE'),
+                  const _SettingsGroup(
+                    footnote: 'Gets a head start of about 6 MB on what '
+                        "you'll likely play, so it starts sooner. On Wi-Fi "
+                        'it always does.',
+                    children: [_DownloadAheadRow()],
+                  ),
+                  const _SectionLabel('DOWNLOADS'),
                   const _StorageSection(),
                 ],
+                const _SectionLabel('APPEARANCE'),
+                const _SettingsGroup(
+                  footnote: 'A plain tint instead of the frosted blur behind '
+                      'bars and buttons. Smoother on slower phones.',
+                  children: [_ReduceGlassRow()],
+                ),
+                const _SectionLabel('BACKUP'),
+                _SettingsGroup(
+                  footnote: 'Your favorites and watch history, saved to a '
+                      'file you can bring back later.',
+                  children: [
+                    _SettingsRow(
+                      icon: Icons.file_upload_outlined,
+                      title: 'Export favorites & history',
+                      onTap: () => _exportBackup(context),
+                    ),
+                    _SettingsRow(
+                      icon: Icons.file_download_outlined,
+                      title: 'Import from a backup',
+                      onTap: () => _importBackup(context),
+                    ),
+                  ],
+                ),
               ],
             );
           },
@@ -107,13 +132,10 @@ Future<void> _exportBackup(BuildContext context) async {
     action: () => BackupService().exportData(),
   );
   if (success != null && context.mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(success
-            ? 'Backup exported successfully!'
-            : 'Failed to export backup.'),
-        backgroundColor: success ? Colors.green : Colors.red,
-      ),
+    showAppMessage(
+      context,
+      success ? 'Backup exported.' : "Couldn't export the backup.",
+      error: !success,
     );
   }
 }
@@ -126,12 +148,7 @@ Future<void> _importBackup(BuildContext context) async {
   );
   if (success == null || !context.mounted) return;
   if (success) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Backup imported! Reloading app...'),
-        backgroundColor: Colors.green,
-      ),
-    );
+    showAppMessage(context, 'Backup imported. Reloading the app…');
     // Restart app by navigating to main
     Future.delayed(const Duration(seconds: 1), () {
       if (context.mounted) {
@@ -143,12 +160,7 @@ Future<void> _importBackup(BuildContext context) async {
       }
     });
   } else {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Failed to import backup.'),
-        backgroundColor: Colors.red,
-      ),
-    );
+    showAppMessage(context, "Couldn't import the backup.", error: true);
   }
 }
 
@@ -224,7 +236,8 @@ class _SectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.fromLTRB(16, topPadding, 16, 8),
+      // In line with the rows' content, inside their card.
+      padding: EdgeInsets.fromLTRB(32, topPadding, 16, 8),
       child: Text(
         text,
         style: const TextStyle(
@@ -238,83 +251,107 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
-/// Inline Export/Import buttons — used to live behind a "Backup & Restore"
-/// tap target that opened an AlertDialog asking which action to run; now
-/// shown directly on the Settings screen instead. Buttons match the
-/// frosted glass pills of the Trailer/Like buttons on DetailsScreen.
-class _BackupRestoreRow extends StatelessWidget {
-  final VoidCallback onExport;
-  final VoidCallback onImport;
+/// One section's rows on a rounded card, divided by hairlines, with an
+/// optional short note under it.
+class _SettingsGroup extends StatelessWidget {
+  final List<Widget> children;
+  final String? footnote;
 
-  const _BackupRestoreRow({required this.onExport, required this.onImport});
+  const _SettingsGroup({required this.children, this.footnote});
+
+  // Apple's dark grouped-list grey: lifted just off the black screen.
+  static const _cardColor = Color(0xFF1C1C1E);
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Export your favorites and history to a file, or import them '
-            'from a previously saved backup.',
-            style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+          Material(
+            color: _cardColor,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                for (var i = 0; i < children.length; i++) ...[
+                  if (i > 0)
+                    // From the rows' text, not their icon, as on iOS.
+                    Divider(
+                      height: 0.5,
+                      thickness: 0.5,
+                      indent: _SettingsRow.textInset,
+                      color: Colors.white.withValues(alpha: 0.1),
+                    ),
+                  children[i],
+                ],
+              ],
+            ),
           ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: _BackupButton(
-                  icon: Icons.file_upload_rounded,
-                  label: 'Export',
-                  onTap: onExport,
+          if (footnote != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(
+                footnote!,
+                style: const TextStyle(
+                  color: Colors.white38,
+                  fontSize: 12.5,
+                  height: 1.35,
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _BackupButton(
-                  icon: Icons.file_download_rounded,
-                  label: 'Import',
-                  onTap: onImport,
-                ),
-              ),
-            ],
-          ),
+            ),
         ],
       ),
     );
   }
 }
 
-class _BackupButton extends StatelessWidget {
+/// A row on a [_SettingsGroup] card: an icon, a one-line title and,
+/// optionally, a control or value at its end.
+class _SettingsRow extends StatelessWidget {
   final IconData icon;
-  final String label;
-  final VoidCallback onTap;
+  final String title;
+  final Widget? trailing;
+  final VoidCallback? onTap;
 
-  const _BackupButton({
+  const _SettingsRow({
     required this.icon,
-    required this.label,
-    required this.onTap,
+    required this.title,
+    this.trailing,
+    this.onTap,
   });
+
+  /// Where the title starts: the divider between rows lines up with it.
+  static const double textInset = 16 + 22 + 14;
 
   @override
   Widget build(BuildContext context) {
-    return GlassActionButton(
+    return InkWell(
       onTap: onTap,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, color: Colors.white, size: 20),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-            ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 52),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 12, 8),
+          child: Row(
+            children: [
+              Icon(icon, color: Colors.white70, size: 22),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                ),
+              ),
+              if (trailing != null) ...[
+                const SizedBox(width: 8),
+                trailing!,
+              ],
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -376,26 +413,32 @@ class _StorageSectionState extends State<_StorageSection> {
     final entries = _entries;
     final registry = _registry;
     if (entries == null || registry == null) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 24),
-        child: Center(
-          child: SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
+      return const _SettingsGroup(
+        children: [
+          SizedBox(
+            height: 52,
+            child: Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
           ),
-        ),
+        ],
       );
     }
 
     if (entries.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Text(
-          'Nothing cached right now. Movies and episodes you watch stay '
-          'downloaded here so resuming them later is instant.',
-          style: TextStyle(color: Colors.white38, fontSize: 13),
-        ),
+      return const _SettingsGroup(
+        footnote: 'Movies and episodes you watch stay downloaded here, up '
+            'to 2 GB, so picking them up later is instant.',
+        children: [
+          _SettingsRow(
+            icon: Icons.download_done_rounded,
+            title: 'Nothing downloaded right now',
+          ),
+        ],
       );
     }
 
@@ -423,20 +466,13 @@ class _StorageSectionState extends State<_StorageSection> {
       });
     }
 
-    return Column(
+    final titles = standalone.length + showGroups.length;
+    return _SettingsGroup(
+      footnote: '$titles title${titles == 1 ? '' : 's'} · '
+          '${TorrentStorageService.formatBytes(totalBytes)} of '
+          '${TorrentStorageService.formatBytes(TorrentStorageService.limitBytes)}. '
+          'Past that, what you watched longest ago makes room.',
       children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('${entries.length} cached',
-                  style: const TextStyle(color: Colors.white54, fontSize: 13)),
-              Text(TorrentStorageService.formatBytes(totalBytes),
-                  style: const TextStyle(color: Colors.white54, fontSize: 13)),
-            ],
-          ),
-        ),
         for (final entry in standalone)
           _DownloadTile(
             entry: entry,
@@ -603,6 +639,9 @@ class _ShowGroupTile extends StatelessWidget {
     return Theme(
       data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
       child: ExpansionTile(
+        // No lines of its own when open: its card divides the rows.
+        shape: const Border(),
+        collapsedShape: const Border(),
         tilePadding: const EdgeInsets.symmetric(horizontal: 16),
         childrenPadding: EdgeInsets.zero,
         iconColor: Colors.white54,
@@ -650,9 +689,8 @@ class _ReduceGlassRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _SwitchRow(
+      icon: Icons.blur_on_rounded,
       title: 'Reduce glass effects',
-      description: 'Uses a plain tint instead of the frosted blur behind '
-          'bars and buttons. Smoother scrolling on slower phones.',
       value: VisualEffectsService().reduceGlass,
       onChanged: VisualEffectsService().setReduceGlass,
     );
@@ -668,25 +706,25 @@ class _DownloadAheadRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _SwitchRow(
+      icon: Icons.downloading_rounded,
       title: 'Download ahead on mobile data',
-      description: 'Starts downloading what you\'ll likely play — about '
-          '6 MB a title — so it starts sooner. On Wi-Fi it always does.',
       value: DownloadAheadSettings().onMobileData,
       onChanged: DownloadAheadSettings().setOnMobileData,
     );
   }
 }
 
-/// A setting's title and description, with its on/off switch.
+/// A setting's row with its on/off switch; tapping anywhere on the row
+/// flips it. What it does is said in its group's footnote.
 class _SwitchRow extends StatelessWidget {
+  final IconData icon;
   final String title;
-  final String description;
   final ValueListenable<bool> value;
   final ValueChanged<bool> onChanged;
 
   const _SwitchRow({
+    required this.icon,
     required this.title,
-    required this.description,
     required this.value,
     required this.onChanged,
   });
@@ -695,31 +733,11 @@ class _SwitchRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
       valueListenable: value,
-      builder: (context, on, _) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(color: Colors.white, fontSize: 15),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    description,
-                    style: const TextStyle(
-                        color: Colors.white70, fontSize: 13, height: 1.4),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 4),
-            GlassSwitch(value: on, onChanged: onChanged),
-          ],
-        ),
+      builder: (context, on, _) => _SettingsRow(
+        icon: icon,
+        title: title,
+        onTap: () => onChanged(!on),
+        trailing: GlassSwitch(value: on, onChanged: onChanged),
       ),
     );
   }

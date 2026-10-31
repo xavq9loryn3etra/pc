@@ -1,3 +1,6 @@
+import 'dart:math' as math;
+
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:shimmer/shimmer.dart';
 
@@ -6,13 +9,15 @@ import '../screens/details_screen.dart';
 import '../services/tmdb_service.dart';
 import 'details_overview.dart';
 import 'episode_card.dart';
+import 'glass_blur.dart';
 import 'movie_poster.dart';
 
 /// A person's page, as a bottom sheet in the quality popup's style (a
-/// frosted [EpisodeSheetFrame]): photo, name, what
-/// they're known for, when and where they were born, their biography, and
-/// the movies and shows they're best known for — tapping one opens it.
-/// Opened from a title's Cast & Crew row ([CastRow]).
+/// frosted [EpisodeSheetFrame]): their photo across the top with their
+/// name over it, a strip of quick facts (born, age, from), their
+/// biography, and a grid of the movies and shows they're best known for,
+/// to take in at a glance — tapping one opens it. Opened from a title's
+/// Cast & Crew row ([CastRow]).
 class PersonSheet extends StatefulWidget {
   final CastMember member;
 
@@ -40,15 +45,46 @@ class _PersonSheetState extends State<PersonSheet> {
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
   ];
 
-  /// "Born 30 Jan 1976 · Jersey, UK", from what's known.
-  static String? _bornLine(Person p) {
-    final date = DateTime.tryParse(p.birthday ?? '');
-    final parts = [
-      if (date != null)
-        'Born ${date.day} ${_months[date.month - 1]} ${date.year}',
-      if (p.placeOfBirth?.isNotEmpty ?? false) p.placeOfBirth!,
+  static const _side = 24.0;
+
+  static String _date(DateTime d) =>
+      '${d.day} ${_months[d.month - 1]} ${d.year}';
+
+  static int _yearsBetween(DateTime from, DateTime to) =>
+      to.year -
+      from.year -
+      (to.month < from.month || (to.month == from.month && to.day < from.day)
+          ? 1
+          : 0);
+
+  /// "Haverfordwest, Pembrokeshire, Wales, UK" → "Haverfordwest, UK".
+  static String _shortPlace(String place) {
+    final parts = place
+        .split(',')
+        .map((p) => p.trim())
+        .where((p) => p.isNotEmpty)
+        .toList();
+    if (parts.length <= 2) return parts.join(', ');
+    return '${parts.first}, ${parts.last}';
+  }
+
+  /// The facts strip under the photo, as (label, value) pairs, from what's
+  /// known.
+  static List<(String, String)> _facts(Person p) {
+    final born = DateTime.tryParse(p.birthday ?? '');
+    final died = DateTime.tryParse(p.deathday ?? '');
+    final place = p.placeOfBirth?.trim() ?? '';
+    return [
+      if (born != null) ('Born', _date(born)),
+      if (born != null && died == null)
+        ('Age', '${_yearsBetween(born, DateTime.now())}'),
+      if (died != null)
+        (
+          born != null ? 'Died, aged ${_yearsBetween(born, died)}' : 'Died',
+          _date(died),
+        ),
+      if (place.isNotEmpty) ('From', _shortPlace(place)),
     ];
-    return parts.isEmpty ? null : parts.join(' · ');
   }
 
   void _open(Movie movie) {
@@ -66,7 +102,7 @@ class _PersonSheetState extends State<PersonSheet> {
       image: widget.member.profileUrl,
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * 0.9,
+          maxHeight: MediaQuery.sizeOf(context).height * 0.92,
         ),
         child: FutureBuilder<Person?>(
           future: _person,
@@ -78,13 +114,13 @@ class _PersonSheetState extends State<PersonSheet> {
               // Pulling past the top drags the sheet (EpisodeSheetFrame).
               physics: const ClampingScrollPhysics(),
               slivers: [
-                SliverToBoxAdapter(child: _header(person)),
+                SliverToBoxAdapter(child: _hero(person)),
                 if (loading)
                   SliverToBoxAdapter(child: _loadingBody())
                 else if (person == null)
                   const SliverToBoxAdapter(
                     child: Padding(
-                      padding: EdgeInsets.fromLTRB(24, 24, 24, 40),
+                      padding: EdgeInsets.fromLTRB(_side, 20, _side, 40),
                       child: Text(
                         "Couldn't load their details. Try again in a bit.",
                         style: TextStyle(color: Colors.white54),
@@ -92,30 +128,15 @@ class _PersonSheetState extends State<PersonSheet> {
                     ),
                   )
                 else ...[
-                  if (person.biography.isNotEmpty)
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
-                      sliver: SliverToBoxAdapter(
-                        child: ExpandableSynopsis(text: person.biography),
-                      ),
-                    ),
+                  SliverToBoxAdapter(child: _intro(person)),
                   if (person.credits.isNotEmpty) ...[
-                    const SliverPadding(
-                      padding: EdgeInsets.fromLTRB(24, 28, 24, 14),
-                      sliver: SliverToBoxAdapter(
-                        child: Text(
-                          'Known For',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
+                    SliverToBoxAdapter(
+                      child: _sectionTitle('Known For',
+                          count: person.credits.length),
                     ),
                     SliverPadding(
-                      padding: EdgeInsets.fromLTRB(
-                          24, 0, 24, 24 + MediaQuery.paddingOf(context).bottom),
+                      padding: EdgeInsets.fromLTRB(_side, 0, _side,
+                          24 + MediaQuery.paddingOf(context).bottom),
                       sliver: SliverGrid(
                         gridDelegate:
                             const SliverGridDelegateWithFixedCrossAxisCount(
@@ -149,101 +170,295 @@ class _PersonSheetState extends State<PersonSheet> {
     );
   }
 
-  /// Photo, name, and what they're known for and when/where they were
-  /// born — the name and photo straight away, from the cast row, the rest
-  /// once loaded.
-  Widget _header(Person? person) {
+  /// Their photo across the sheet, fading into it at the bottom, with
+  /// what they do and their name over it — the photo and name straight
+  /// away, from the cast row, the rest once loaded. Without a photo,
+  /// their initials stand in.
+  Widget _hero(Person? person) {
     final member = widget.member;
-    final born = person == null ? null : _bornLine(person);
-    final role = person?.knownFor ?? member.character;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 36, 24, 0),
-      child: Row(
-        children: [
-          PersonPhoto(url: person?.profileUrl ?? member.profileUrl, size: 96),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  person?.name ?? member.name,
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                    height: 1.2,
+    final name = person?.name ?? member.name;
+    final photo = person?.profileUrl ?? member.profileUrl;
+    final department = person?.knownFor;
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final width = constraints.maxWidth;
+      final height = photo == null
+          ? 200.0
+          : math.min(width * 1.05, screenHeight * 0.5);
+      return SizedBox(
+        height: height,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ShaderMask(
+              // Fades the photo out into the sheet's glass.
+              blendMode: BlendMode.dstIn,
+              shaderCallback: (rect) => const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                stops: [0, 0.5, 1],
+                colors: [Colors.white, Colors.white, Colors.transparent],
+              ).createShader(rect),
+              child: photo == null
+                  ? _initials(name)
+                  : CachedNetworkImage(
+                      imageUrl: photo,
+                      fit: BoxFit.cover,
+                      // Faces sit in the top part of a portrait.
+                      alignment: const Alignment(0, -0.6),
+                      memCacheWidth: (width * dpr).round(),
+                      fadeInDuration: const Duration(milliseconds: 200),
+                      placeholder: (_, __) => const SizedBox.shrink(),
+                      errorWidget: (_, __, ___) => _initials(name),
+                    ),
+            ),
+            // Keeps the sheet's handle visible on a light photo.
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 64,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Color(0x59000000), Colors.transparent],
                   ),
                 ),
-                if (role != null) ...[
-                  const SizedBox(height: 4),
+              ),
+            ),
+            Positioned(
+              left: _side,
+              right: _side,
+              bottom: 4,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (department != null) ...[
+                    Text(
+                      department.toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.6,
+                        color: Colors.white.withValues(alpha: 0.6),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                  ],
                   Text(
-                    role,
+                    name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white70,
+                      fontSize: 32,
+                      fontWeight: FontWeight.w800,
+                      height: 1.1,
+                      letterSpacing: -0.5,
+                      color: Colors.white,
+                      shadows: [Shadow(color: Colors.black54, blurRadius: 16)],
                     ),
                   ),
                 ],
-                if (born != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    born,
-                    style: TextStyle(
-                      fontSize: 13,
-                      height: 1.3,
-                      color: Colors.white.withValues(alpha: 0.5),
-                    ),
+              ),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+
+  Widget _initials(String name) {
+    final initials = name
+        .split(' ')
+        .where((w) => w.isNotEmpty)
+        .take(2)
+        .map((w) => w[0].toUpperCase())
+        .join();
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white.withValues(alpha: 0.12),
+            Colors.white.withValues(alpha: 0.02),
+          ],
+        ),
+      ),
+      child: Align(
+        alignment: const Alignment(0.7, -0.2),
+        child: Text(
+          initials,
+          style: TextStyle(
+            fontSize: 96,
+            fontWeight: FontWeight.w800,
+            color: Colors.white.withValues(alpha: 0.12),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The facts strip and biography, above the grid.
+  Widget _intro(Person person) {
+    final facts = _facts(person);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (facts.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          _factsStrip(facts),
+        ],
+        if (person.biography.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(_side, 20, _side, 0),
+            child: ExpandableSynopsis(text: person.biography),
+          ),
+      ],
+    );
+  }
+
+  Widget _factsStrip(List<(String, String)> facts) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: _side),
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: kGlassEdge),
+      ),
+      child: IntrinsicHeight(
+        child: Row(
+          children: [
+            for (var i = 0; i < facts.length; i++) ...[
+              if (i > 0)
+                VerticalDivider(
+                  width: 1,
+                  thickness: 1,
+                  color: Colors.white.withValues(alpha: 0.1),
+                ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Column(
+                    children: [
+                      Text(
+                        facts[i].$1.toUpperCase(),
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 1,
+                          color: Colors.white.withValues(alpha: 0.45),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        facts[i].$2,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          height: 1.25,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String title, {int? count}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(_side, 28, _side, 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
             ),
           ),
+          if (count != null) ...[
+            const SizedBox(width: 8),
+            Text(
+              '$count',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: Colors.white.withValues(alpha: 0.35),
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
 
   Widget _loadingBody() {
-    Widget bar(double width) => Container(
+    Widget block(double width, double height, {double radius = 4}) =>
+        Container(
           width: width,
-          height: 14,
-          margin: const EdgeInsets.only(bottom: 10),
+          height: height,
           decoration: BoxDecoration(
             color: Colors.black,
-            borderRadius: BorderRadius.circular(4),
+            borderRadius: BorderRadius.circular(radius),
           ),
         );
     return Shimmer.fromColors(
       baseColor: Colors.grey[900]!,
       highlightColor: Colors.grey[800]!,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 24, 24, 40),
+        padding: const EdgeInsets.fromLTRB(_side, 20, 0, 40),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            bar(double.infinity),
-            bar(double.infinity),
-            bar(220),
-            const SizedBox(height: 24),
-            Row(
-              children: [
-                for (var i = 0; i < 3; i++) ...[
-                  if (i > 0) const SizedBox(width: 12),
-                  Expanded(
-                    child: AspectRatio(
-                      aspectRatio: 2 / 3,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
+            Padding(
+              padding: const EdgeInsets.only(right: _side),
+              child: block(double.infinity, 64, radius: 16),
+            ),
+            const SizedBox(height: 20),
+            for (final width in [double.infinity, double.infinity, 220.0])
+              Padding(
+                padding: const EdgeInsets.only(right: _side, bottom: 10),
+                child: block(width, 14),
+              ),
+            const SizedBox(height: 22),
+            block(120, 20),
+            const SizedBox(height: 14),
+            Padding(
+              padding: const EdgeInsets.only(right: _side),
+              child: Row(
+                children: [
+                  for (var i = 0; i < 3; i++) ...[
+                    if (i > 0) const SizedBox(width: 12),
+                    Expanded(
+                      child: AspectRatio(
+                        aspectRatio: 2 / 3,
+                        child: block(double.infinity, double.infinity,
+                            radius: 8),
                       ),
                     ),
-                  ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ],
         ),

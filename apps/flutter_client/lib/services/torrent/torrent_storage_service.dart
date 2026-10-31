@@ -77,6 +77,66 @@ class TorrentStorageService {
   static int totalCachedBytes(List<CachedTorrentEntry> entries) =>
       entries.fold<int>(0, (sum, e) => sum + e.sizeBytes);
 
+  /// The most the downloads may take up together; over it, [enforceLimit]
+  /// removes the ones played longest ago.
+  static const int limitBytes = 2 * 1024 * 1024 * 1024; // 2 GB
+
+  static Future<void>? _enforcing;
+
+  /// Removes downloads, played longest ago first, until together they take
+  /// up no more than [limitBytes]. Never one in use — playing, or getting a
+  /// head start — nor the one played last, even if that alone is over the
+  /// limit, so it can still be resumed. One with no record of being played
+  /// (a head start the app was closed during) goes first. Run when the
+  /// player closes and when the app starts.
+  static Future<void> enforceLimit() =>
+      _enforcing ??= _enforceLimit().whenComplete(() => _enforcing = null);
+
+  static Future<void> _enforceLimit() async {
+    try {
+      final entries = await listCached();
+      final registry = await TorrentDownloadRegistry.loadAll();
+      TorrentDownloadInfo? infoFor(CachedTorrentEntry e) =>
+          registry[e.infoHash.toLowerCase()];
+      int sizeOf(CachedTorrentEntry e) =>
+          e.diskBytes ?? infoFor(e)?.downloadedBytes ?? e.sizeBytes;
+
+      var total = entries.fold<int>(0, (sum, e) => sum + sizeOf(e));
+      if (total <= limitBytes) return;
+
+      final unplayed = DateTime.fromMillisecondsSinceEpoch(0);
+      // Saved before lastPlayed was recorded: its folder's date instead.
+      DateTime playedAt(CachedTorrentEntry e) {
+        final info = infoFor(e);
+        return info == null ? unplayed : info.lastPlayed ?? e.modified;
+      }
+
+      final oldestFirst = [...entries]
+        ..sort((a, b) => playedAt(a).compareTo(playedAt(b)));
+      oldestFirst.removeLast(); // The one played last stays.
+      for (final entry in oldestFirst) {
+        if (total <= limitBytes) break;
+        if (_inUse(entry.infoHash)) continue;
+        try {
+          await delete(entry);
+          total -= sizeOf(entry);
+        } catch (e) {
+          print('Error removing ${entry.infoHash} for the downloads limit: $e');
+        }
+      }
+    } catch (e) {
+      print('Error enforcing the downloads limit: $e');
+    }
+  }
+
+  static bool _inUse(String infoHash) {
+    try {
+      return TorrentEngineService.instance.isInUse(infoHash);
+    } catch (_) {
+      return false; // The engine never started: nothing's in use.
+    }
+  }
+
   /// Deletes a cached download. If its torrent is still registered in the
   /// current engine session, goes through the engine (also stops any stream
   /// and updates in-memory state); otherwise just deletes the directory
@@ -95,17 +155,21 @@ class TorrentStorageService {
   }
 
   static Future<void> _deleteByPath(String infoHash, String path) async {
-    final engine = TorrentEngineService.instance.engine;
     int? liveId;
-    for (final t in engine.torrents.entries) {
-      if (t.value.savePath == path) {
-        liveId = t.key;
-        break;
+    try {
+      for (final t in TorrentEngineService.instance.engine.torrents.entries) {
+        if (t.value.savePath == path) {
+          liveId = t.key;
+          break;
+        }
       }
+    } catch (_) {
+      // The engine never started: nothing of it is live.
     }
 
     if (liveId != null) {
-      engine.removeTorrent(liveId, deleteFiles: true);
+      TorrentEngineService.instance.engine
+          .removeTorrent(liveId, deleteFiles: true);
     } else {
       final dir = Directory(path);
       if (await dir.exists()) {

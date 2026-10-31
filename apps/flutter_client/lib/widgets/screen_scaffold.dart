@@ -16,6 +16,9 @@ class ScreenScaffold extends StatefulWidget {
   final Movie? selectedMovie;
   final VoidCallback? onCloseSidePanel;
   final bool extendBodyBehindAppBar;
+
+  /// The tab this screen is, when it's one of MovieTabShell's: room is kept
+  /// at the bottom for the shell's floating nav bar over it.
   final BottomNavTab? bottomNavTab;
 
   const ScreenScaffold({
@@ -129,8 +132,6 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
               ),
             ),
 
-            if (widget.bottomNavTab != null)
-              FloatingBottomNavBar(activeTab: widget.bottomNavTab!),
 
             // Side panel overlay for desktop
             if (isDesktop && widget.selectedMovie != null)

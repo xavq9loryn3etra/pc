@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/material.dart';
+import '../widgets/app_message.dart';
 import '../widgets/player_route.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
@@ -94,13 +96,16 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // load so the popup can list the qualities straight away (see
   // _openMovie). Null until then, or when playback is hidden.
   Future<List<TorrentStream>>? _movieStreams;
+  // Whether _movieStreams found anything to play. While a movie is only in
+  // cinemas (Movie.isCinemaOnly) its Play button is disabled unless it
+  // did — rarely, a proper online copy is out before TMDB says so.
+  bool _movieCopyFound = false;
   // The other services streaming this title that have a direct link to it
   // (see _loadAlsoOn) — the "Also on" logos under the buttons.
   List<StreamingProvider> _alsoOn = const [];
   bool _loading = true;
-  // Skeleton reveal stages after _loading turns false: fading out, then
-  // removed (see _revealOverSkeleton).
-  bool _skeletonFading = false;
+  // Whether the skeleton has been taken off the page, a moment after
+  // _loading turns false (see _revealOverSkeleton).
   bool _skeletonDone = false;
   // Streaming-service button: a tap in progress, and the snackbar message
   // currently showing (see _openProvider / _showProviderMessage).
@@ -263,22 +268,19 @@ class _DetailsScreenState extends State<DetailsScreen> {
     }
     if (!opened && mounted) {
       _showProviderMessage(
-          "Couldn't open ${provider.name}. Make sure the app is installed.");
+          "Couldn't open ${provider.name}. Make sure the app is installed.",
+          error: true);
     }
   }
 
-  void _showProviderMessage(String message) {
-    // Repeated taps leave the snackbar that's already up alone instead of
+  void _showProviderMessage(String message, {bool error = false}) {
+    // Repeated taps leave the message that's already up alone instead of
     // dismissing and re-showing it each time.
     if (_providerMessage == message) return;
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    if (messenger == null) return;
+    final shown = showAppMessage(context, message, error: error);
+    if (shown == null) return;
     _providerMessage = message;
-    messenger.hideCurrentSnackBar();
-    messenger
-        .showSnackBar(SnackBar(content: Text(message)))
-        .closed
-        .then((_) {
+    shown.closed.then((_) {
       if (_providerMessage == message) _providerMessage = null;
     });
   }
@@ -519,6 +521,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
           title: _details,
         );
         _warmUpMovie(_details!.imdbId ?? _details!.id, _movieStreams!);
+        // Only matters (and only rebuilds the page) while it's in cinemas.
+        _movieStreams!.then((streams) {
+          if (mounted && streams.isNotEmpty && _details!.isCinemaOnly) {
+            setState(() => _movieCopyFound = true);
+          }
+        }, onError: (_) {});
       }
 
       // Init Season 1 if TV
@@ -547,11 +555,35 @@ class _DetailsScreenState extends State<DetailsScreen> {
     }
 
     if (!mounted) return;
+    // Not while the page is still sliding in: the page's first build, its
+    // header image and the skeleton's removal all landed on the
+    // transition's frames (details are usually cached, so they're ready at once), and
+    // made it stutter.
+    await _slideInDone();
+    if (!mounted) return;
     // Build the page under the skeleton, give it a few frames to settle,
-    // then fade the skeleton off it (see _revealOverSkeleton).
+    // then take the skeleton off it (see _revealOverSkeleton).
     setState(() => _loading = false);
     await Future.delayed(const Duration(milliseconds: 120));
-    if (mounted) setState(() => _skeletonFading = true);
+    if (mounted) setState(() => _skeletonDone = true);
+  }
+
+  /// Completes once this page's route has finished coming in (at once if
+  /// it already has, or it's leaving).
+  Future<void> _slideInDone() {
+    final animation = ModalRoute.of(context)?.animation;
+    if (animation == null || animation.status != AnimationStatus.forward) {
+      return Future.value();
+    }
+    final done = Completer<void>();
+    void onStatus(AnimationStatus status) {
+      if (status == AnimationStatus.forward) return;
+      animation.removeStatusListener(onStatus);
+      done.complete();
+    }
+
+    animation.addStatusListener(onStatus);
+    return done.future;
   }
 
   /// Downloads and decodes the header backdrop and logo into Flutter's
@@ -574,6 +606,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
         ),
         context,
       ));
+      jobs.add(ArtworkGlow.precache(context, backdrop));
     }
     if (logo != null && !logo.toLowerCase().endsWith('.svg')) {
       jobs.add(precacheImage(
@@ -651,12 +684,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   void _showNotReleasedMessage() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        backgroundColor: Colors.black87,
-        content: Text("This hasn't been released yet."),
-      ),
-    );
+    showAppMessage(context, "This hasn't been released yet.");
   }
 
   String _formatReleaseDate(DateTime date) =>
@@ -983,58 +1011,39 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                       left: 0,
                                       right: 0,
                                       height: _headerHeight,
-                                      child: ShaderMask(
-                                        blendMode: BlendMode.dstIn,
-                                        shaderCallback: (rect) =>
-                                            const LinearGradient(
-                                          begin: Alignment.topCenter,
-                                          end: Alignment.bottomCenter,
-                                          colors: [
-                                            Colors.white,
-                                            Colors.white,
-                                            Colors.transparent,
-                                          ],
-                                          stops: [0, 0.55, 1],
-                                        ).createShader(rect),
-                                        child: Hero(
-                                      tag: 'movie_${m.id}',
-                                      // Full-width parallax header — like the
-                                      // home hero banners, this renders large
-                                      // enough that TMDB's standard w1280
-                                      // backdrop tier can look soft, so it
-                                      // uses the full-resolution source.
-                                      child: _headerImageFor(m)
-                                              .toLowerCase()
-                                              .endsWith('.svg')
-                                          ? SvgPicture.network(
-                                              _headerImageFor(m),
-                                              fit: BoxFit.cover,
-                                            )
-                                          : CachedNetworkImage(
-                                              // Preloaded behind the skeleton
-                                              // (_preloadHeader) — keep the URL
-                                              // and decode size in sync.
-                                              imageUrl: _headerImageFor(m),
-                                              fit: BoxFit.cover,
-                                              // A tall poster loses its bottom
-                                              // rather than its top: that's
-                                              // under the fade and the title.
-                                              alignment: _usesPosterHeader(m)
-                                                  ? const Alignment(0, -0.4)
-                                                  : Alignment.center,
-                                              // Only constrain one side, not both — specifying
-                                              // both distorts the image whenever the source's
-                                              // aspect ratio doesn't match this exact box
-                                              // (ResizeImagePolicy.exact stretches to fit both
-                                              // dimensions). One dimension lets the decoder
-                                              // scale the other proportionally, matching how
-                                              // BoxFit.cover actually crops at paint time.
-                                              memCacheWidth:
-                                                  _headerDecodeSize(m).width,
-                                              memCacheHeight:
-                                                  _headerDecodeSize(m).height,
-                                            ),
-                                        ),
+                                      child: Hero(
+                                        tag: 'movie_${m.id}',
+                                        // Full-width parallax header — like the home hero banners, this
+                                        // renders large enough that TMDB's standard w1280 backdrop tier
+                                        // can look soft, so it uses the full-resolution source.
+                                        child: _headerImageFor(m).toLowerCase().endsWith('.svg')
+                                            ? ShaderMask(
+                                                blendMode: BlendMode.dstIn,
+                                                shaderCallback: (rect) => const LinearGradient(
+                                                  begin: Alignment.topCenter,
+                                                  end: Alignment.bottomCenter,
+                                                  colors: [Colors.white, Colors.white, Colors.transparent],
+                                                  stops: [0, 0.55, 1],
+                                                ).createShader(rect),
+                                                child: SvgPicture.network(
+                                                  _headerImageFor(m),
+                                                  fit: BoxFit.cover,
+                                                ),
+                                              )
+                                            : FadingCoverImage(
+                                                // Preloaded behind the skeleton (_preloadHeader) — keep the
+                                                // URL and decode size in sync.
+                                                url: _headerImageFor(m),
+                                                // Only one side is given (see _headerDecodeSize), so the
+                                                // decoder keeps the picture's proportions.
+                                                cacheWidth: _headerDecodeSize(m).width,
+                                                cacheHeight: _headerDecodeSize(m).height,
+                                                // A tall poster loses its bottom rather than its top:
+                                                // that's under the fade and the title.
+                                                alignment: _usesPosterHeader(m)
+                                                    ? const Alignment(0, -0.4)
+                                                    : Alignment.center,
+                                              ),
                                       ),
                                     ),
                                     // Shading moves with the image: darker
@@ -1204,6 +1213,16 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                 // so the button can look disabled instead of
                                 // looking normal but silently rejecting taps.
                                 final movieUnreleased = !isTv && m.isUnreleased;
+                                // Likewise while it's only in cinemas, unless
+                                // a good copy turned up after all (see
+                                // _movieCopyFound): there'd be nothing to
+                                // pick in the qualities popup.
+                                final movieInCinemas = !isTv &&
+                                    !movieUnreleased &&
+                                    m.isCinemaOnly &&
+                                    !_movieCopyFound;
+                                final movieBlocked =
+                                    movieUnreleased || movieInCinemas;
                                 Episode? tvTargetEpisode;
                                 if (isTv) {
                                   final targetSeasonNum =
@@ -1268,12 +1287,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                               child: Container(
                                                 height: 50,
                                                 decoration: BoxDecoration(
-                                                  color: movieUnreleased
+                                                  color: movieBlocked
                                                       ? Colors.white10
                                                       : Colors.white,
                                                   borderRadius:
                                                       BorderRadius.circular(30),
-                                                  boxShadow: movieUnreleased
+                                                  boxShadow: movieBlocked
                                                       ? null
                                                       : [
                                                           BoxShadow(
@@ -1287,7 +1306,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                         ],
                                                 ),
                                                 child: _withProviderSegment(provider, InkWell(
-                                                  onTap: movieUnreleased
+                                                  onTap: movieBlocked
                                                       ? null
                                                       : _openMovie,
                                                   borderRadius:
@@ -1297,15 +1316,18 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                         MainAxisAlignment.center,
                                                     children: [
                                                       Icon(
-                                                        movieUnreleased
+                                                        movieInCinemas
                                                             ? Icons
-                                                                .event_available_rounded
-                                                            : Icons
-                                                                .play_arrow_rounded,
-                                                        color: movieUnreleased
+                                                                .theaters_rounded
+                                                            : movieUnreleased
+                                                                ? Icons
+                                                                    .event_available_rounded
+                                                                : Icons
+                                                                    .play_arrow_rounded,
+                                                        color: movieBlocked
                                                             ? Colors.white54
                                                             : Colors.black,
-                                                        size: movieUnreleased
+                                                        size: movieBlocked
                                                             ? 20
                                                             : 28,
                                                       ),
@@ -1315,6 +1337,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                           movieUnreleased
                                                               ? (movieReleaseText ??
                                                                   'Not yet released')
+                                                              : movieInCinemas
+                                                                  ? 'Still in cinemas'
                                                               : (historyMovie?.progress !=
                                                                           null &&
                                                                       historyMovie!
@@ -1326,13 +1350,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                               .ellipsis,
                                                           maxLines: 1,
                                                           style: TextStyle(
-                                                            color: movieUnreleased
+                                                            color: movieBlocked
                                                                 ? Colors.white54
                                                                 : Colors.black,
                                                             fontWeight:
                                                                 FontWeight.bold,
                                                             fontSize:
-                                                                movieUnreleased
+                                                                movieBlocked
                                                                     ? 11
                                                                     : 16,
                                                           ),
@@ -1744,11 +1768,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
     })();
   }
 
-  /// Skeleton → page reveal, same approach as the startup splash in
-  /// main.dart: once loaded, the page is built *underneath* the still-
-  /// opaque skeleton (so its expensive first frames — layout, uploading the
-  /// big header images — happen out of sight), then the skeleton fades off
-  /// it, instead of hard-cutting between the two in one heavy frame.
+  /// Skeleton → page reveal: once loaded, the page is built *underneath*
+  /// the still-opaque skeleton (so its expensive first frames — layout,
+  /// uploading the big header images — happen out of sight), then the
+  /// skeleton is taken off it in one cheap frame. Not faded off: a
+  /// full-screen fade is drawn to a layer of its own on every frame, over
+  /// the page's glass, and its 350ms stuttered on phones that otherwise
+  /// kept up.
   Widget _revealOverSkeleton(Widget page) {
     return Stack(
       fit: StackFit.expand,
@@ -1761,19 +1787,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
         if (!_skeletonDone)
           IgnorePointer(
             ignoring: !_loading,
-            child: AnimatedOpacity(
-              opacity: _skeletonFading ? 0 : 1,
-              duration: const Duration(milliseconds: 350),
-              curve: Curves.easeOut,
-              onEnd: () {
-                if (_skeletonFading && mounted) {
-                  setState(() => _skeletonDone = true);
-                }
-              },
-              child: const ColoredBox(
-                color: AppTheme.scaffoldColor,
-                child: SkeletonDetails(),
-              ),
+            child: const ColoredBox(
+              color: AppTheme.scaffoldColor,
+              child: SkeletonDetails(),
             ),
           ),
       ],
@@ -2216,11 +2232,16 @@ class _TorrentQualitySelectorSheetState
     } else if (_options == null || _options!.isEmpty) {
       state = message([
         SizedBox(height: isLandscape ? 10 : 20),
-        const Center(
+        Center(
           child: Text(
-            'Not available to stream right now.',
+            // Its camera recordings are left out (see
+            // StreamResolver.getAvailableStreams) — say why there's nothing.
+            widget.details.isCinemaOnly
+                ? "Still in cinemas — there's no good copy yet.\n"
+                    'Check back once it comes out online.'
+                : 'Not available to stream right now.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white54),
+            style: const TextStyle(color: Colors.white54),
           ),
         ),
         if (TorrentQualitySelectorSheet.showWebServers) ...[

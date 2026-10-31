@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../widgets/custom_app_bar.dart';
-import '../widgets/floating_bottom_nav_bar.dart';
 
 class MusicHomeScreen extends StatefulWidget {
   const MusicHomeScreen({super.key});
@@ -94,11 +93,8 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
       ),
     );
 
-    return Stack(
-      children: [
-        scaffold,
-        const FloatingBottomNavBar(activeTab: BottomNavTab.home),
-      ],
-    );
+    // The bottom nav bar is MovieTabShell's, over this.
+
+    return scaffold;
   }
 }

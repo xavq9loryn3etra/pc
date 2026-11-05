@@ -399,7 +399,8 @@ class _AskScreenState extends State<AskScreen> {
               ),
           ],
           // Under the latest answer, once it's in.
-          if (_turns.isNotEmpty && !_turns.last.waiting)
+          // Not under "couldn't reach the AI" and the like.
+          if (_turns.isNotEmpty && _turns.last.answer != null)
             SliverPadding(
               padding: EdgeInsets.fromLTRB(side, 0, side, 8),
               sliver: SliverToBoxAdapter(
@@ -634,17 +635,24 @@ class _AskScreenState extends State<AskScreen> {
             ),
           ),
         ),
-        IconButton(
-          onPressed: _locked ? null : _ask,
-          icon: const Icon(Icons.arrow_upward_rounded, size: 20),
-          style: IconButton.styleFrom(
-            fixedSize: const Size(36, 36),
-            minimumSize: const Size(36, 36),
-            padding: EdgeInsets.zero,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            backgroundColor: Colors.white,
-            foregroundColor: Colors.black,
-            disabledBackgroundColor: Colors.white24,
+        // Centred in a box one line tall: in the middle of the field at
+        // one line, by its last line as it grows.
+        SizedBox(
+          height: math.max(36, (_lineHeight ?? 0) - 10),
+          child: Center(
+            child: IconButton(
+              onPressed: _locked ? null : _ask,
+              icon: const Icon(Icons.arrow_upward_rounded, size: 20),
+              style: IconButton.styleFrom(
+                fixedSize: const Size(36, 36),
+                minimumSize: const Size(36, 36),
+                padding: EdgeInsets.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.black,
+                disabledBackgroundColor: Colors.white24,
+              ),
+            ),
           ),
         ),
       ],

@@ -132,6 +132,7 @@ class VisualEffectsService {
   static const _borderline = 0.20;
 
   int? _lastVsync;
+  int? _lastFinish;
   final List<bool> _run = [];
   bool _struckThisSession = false;
 
@@ -146,6 +147,7 @@ class VisualEffectsService {
     if (_powerSave) {
       _run.clear();
       _lastVsync = null;
+      _lastFinish = null;
       return;
     }
     final refreshUs = frameMicros();
@@ -154,14 +156,20 @@ class VisualEffectsService {
       // at the video's pace; they're no sign of the app keeping up or not.
       if (t.buildDuration.inMicroseconds < 50) continue;
       final vsync = t.timestampInMicroseconds(FramePhase.vsyncStart);
-      final last = _lastVsync;
+      final last = _lastVsync, finished = _lastFinish;
       _lastVsync = vsync;
-      if (last == null) continue;
+      _lastFinish = t.timestampInMicroseconds(FramePhase.rasterFinish);
+      if (last == null || finished == null) continue;
       final gap = vsync - last;
       if (gap > refreshUs * _runBreakRefreshes) {
         _run.clear();
         continue;
       }
+      // Not asked for until well after the last frame was done: something
+      // updating at its own pace, not a frame the phone was late with —
+      // Ask's orb, 30 times a second (see AskClock), was taken for 3 in 4
+      // frames missed at 120 Hz, and switched the S25 Ultra to plain.
+      if (vsync - finished > refreshUs) continue;
       _run.add(gap > refreshUs * _stutterRefreshes);
       if (_run.length == _window) {
         _judge(_run);

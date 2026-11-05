@@ -114,7 +114,8 @@ Reply with JSON only, no markdown:
     void Function(int model)? onModel,
   }) async {
     if (!available) {
-      throw const AiUnavailable("Ask isn't set up in this version of the app.");
+      throw const AiUnavailable(
+          "Popcorn Ask isn't set up in this version of the app.");
     }
     await _countQuestion();
 

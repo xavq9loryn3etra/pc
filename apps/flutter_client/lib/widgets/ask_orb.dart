@@ -133,7 +133,8 @@ class _OrbPainter extends CustomPainter {
   // [color] as a dim grey of about the same brightness: on the other tabs
   // it's a quiet button among the rest, not lit up like the open one.
   static Color _grey(Color color) {
-    final v = 0.18 + color.computeLuminance() * 0.32;
+    // Spread apart enough that the blobs' drift still shows.
+    final v = 0.16 + color.computeLuminance() * 0.5;
     return Color.from(alpha: 1, red: v, green: v, blue: v);
   }
 
@@ -184,7 +185,7 @@ class _OrbPainter extends CustomPainter {
         .clipPath(Path()..addOval(Rect.fromCircle(center: centre, radius: r)));
     canvas.drawCircle(centre, r, Paint()..color = const Color(0xFF17140F));
     for (final (color, (at, radius)) in blobs) {
-      _blob(canvas, color.withValues(alpha: 0.45 + 0.5 * colour), at, radius);
+      _blob(canvas, color.withValues(alpha: 0.6 + 0.35 * colour), at, radius);
     }
     canvas.restore();
   }

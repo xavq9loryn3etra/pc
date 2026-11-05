@@ -23,7 +23,7 @@ jobs:
         with:
           channel: 'stable'
       - run: flutter pub get
-      - run: flutter build apk --release
+      - run: flutter build apk --release --dart-define=GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
 
   build-windows:
     name: Build Windows
@@ -38,7 +38,7 @@ jobs:
           channel: 'stable'
       - run: flutter config --enable-windows-desktop
       - run: flutter pub get
-      - run: flutter build windows --release
+      - run: flutter build windows --release --dart-define=GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
 
   build-macos:
     name: Build macOS
@@ -53,7 +53,7 @@ jobs:
           channel: 'stable'
       - run: flutter config --enable-macos-desktop
       - run: flutter pub get
-      - run: flutter build macos --release --no-codesign
+      - run: flutter build macos --release --no-codesign --dart-define=GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
 
   build-ios:
     name: Build iOS (No Codesign)
@@ -67,4 +67,4 @@ jobs:
         with:
           channel: 'stable'
       - run: flutter pub get
-      - run: flutter build ios --release --no-codesign
+      - run: flutter build ios --release --no-codesign --dart-define=GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}

@@ -91,6 +91,84 @@ class TMDBService {
     }
   }
 
+  /// The [type] ('movie' or 'tv') titled [title], from [year] where given —
+  /// how AiService turns a suggested title into one the app can open. Its
+  /// best match, or, with no match for that year, the best of any year.
+  /// Null when nothing's really called that: TMDB's top result for a
+  /// short title can be something else entirely — "Home" (2021) brought
+  /// up Spider-Man: No Way Home, and four other films called Home, before
+  /// the Malayalam film #Home. [language] (its original language, as
+  /// ISO 639-1: "ml") picks between titles the same.
+  Future<Movie?> findTitle(String title,
+      {int? year, String? type, String? language}) async {
+    final isTv = type == 'tv';
+    String plain(Object? s) => '${s ?? ''}'
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '');
+    final wanted = plain(title);
+    // How well a result's title (or original title) matches: 2 the same,
+    // 1 close (one holds the other, at a similar length), 0 not.
+    int match(Map r) {
+      var best = 0;
+      for (final name in [
+        r['title'],
+        r['name'],
+        r['original_title'],
+        r['original_name']
+      ]) {
+        final got = plain(name);
+        if (got.isEmpty) continue;
+        if (got == wanted) return 2;
+        final shorter = got.length < wanted.length ? got : wanted;
+        final longer = got.length < wanted.length ? wanted : got;
+        if (longer.contains(shorter) && shorter.length >= longer.length * 0.6) {
+          best = 1;
+        }
+      }
+      return best;
+    }
+
+    Future<Movie?> lookUp(int? inYear) async {
+      try {
+        final response = await _dio.get(
+          '$_baseUrl/search/${isTv ? 'tv' : 'movie'}',
+          queryParameters: {
+            'api_key': _apiKey,
+            'query': title,
+            'include_adult': false,
+            if (inYear != null)
+              isTv ? 'first_air_date_year' : 'primary_release_year': inYear,
+          },
+        );
+        // The closest match — by title, then language — TMDB's order
+        // breaking ties.
+        Movie? best;
+        var bestMatch = 0;
+        for (final r in response.data['results'] as List) {
+          final titleMatch = match(r as Map);
+          if (titleMatch == 0) continue;
+          final score = titleMatch * 2 +
+              (language != null && r['original_language'] == language ? 1 : 0);
+          if (score <= bestMatch) continue;
+          final movie = _formatMovie({
+            ...r as Map<String, dynamic>,
+            'media_type': isTv ? 'tv' : 'movie'
+          });
+          if (movie == null) continue;
+          best = movie;
+          bestMatch = score;
+          if (score == 5) break;
+        }
+        return best;
+      } catch (e) {
+        print('TMDB title lookup error: $e');
+      }
+      return null;
+    }
+
+    return await lookUp(year) ?? (year == null ? null : await lookUp(null));
+  }
+
   Future<List<Movie>> searchMulti(String query) async {
     if (query.isEmpty) return [];
     // Short TTL — search results go stale quickly, but this still avoids
@@ -768,6 +846,23 @@ class TMDBService {
     final netflix = providers.indexWhere((p) => _netflixIds.contains(p.id));
     if (netflix > 0) providers.insert(0, providers.removeAt(netflix));
     return providers;
+  }
+
+  /// The streaming services [movie] is on where the user is: the ones its
+  /// details page has a button for (see _pickStreamingProviders). For
+  /// AiService, keeping to the service a request names. Empty if the
+  /// lookup fails.
+  Future<List<StreamingProvider>> streamingProvidersFor(Movie movie) async {
+    try {
+      final response = await _dio.get(
+        '$_baseUrl/${movie.type == 'tv' ? 'tv' : 'movie'}/${movie.id}/watch/providers',
+        queryParameters: {'api_key': _apiKey},
+      );
+      return _pickStreamingProviders(response.data, await _watchCountry());
+    } catch (e) {
+      print('TMDB watch providers error: $e');
+      return const [];
+    }
   }
 
   // Countries TMDB has watch-provider data for (JustWatch's coverage),

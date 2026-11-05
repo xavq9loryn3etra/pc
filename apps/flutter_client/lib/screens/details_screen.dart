@@ -195,6 +195,20 @@ class _DetailsScreenState extends State<DetailsScreen> {
     _loadDetails();
   }
 
+  // Whether this page has finished sliding in (see SkeletonDetails).
+  bool _slidIn = false;
+  bool _watchingSlide = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_watchingSlide) return;
+    _watchingSlide = true;
+    _slideInDone().then((_) {
+      if (mounted) setState(() => _slidIn = true);
+    });
+  }
+
   void _onFlagsChanged() {
     if (mounted) setState(() {});
   }
@@ -1787,9 +1801,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
         if (!_skeletonDone)
           IgnorePointer(
             ignoring: !_loading,
-            child: const ColoredBox(
+            child: ColoredBox(
               color: AppTheme.scaffoldColor,
-              child: SkeletonDetails(),
+              // Still while the page slides in (see SkeletonDetails).
+              child: SkeletonDetails(animate: _slidIn),
             ),
           ),
       ],

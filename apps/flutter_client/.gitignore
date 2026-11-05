@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# The Gemini API key (see AiService): passed to builds with
+# --dart-define-from-file=secrets.json. Never committed: the repo is public.
+secrets.json

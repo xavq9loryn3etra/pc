@@ -47,6 +47,7 @@ dependencies:
   cached_network_image: ^3.4.1
   shared_preferences: ^2.5.4
   flutter_svg: ^2.2.3
+  vector_graphics: ^1.1.19
   url_launcher: ^6.3.2
   webview_flutter_wkwebview: ^3.23.6
   window_manager: ^0.5.1

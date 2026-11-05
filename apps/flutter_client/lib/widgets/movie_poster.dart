@@ -6,6 +6,7 @@ import '../models/movie.dart';
 import '../theme/app_theme.dart';
 import '../services/saved_movies_service.dart';
 import '../services/feature_flags_service.dart';
+import 'artwork_glow.dart';
 import 'episode_card.dart';
 import '../screens/details_screen.dart';
 
@@ -88,6 +89,13 @@ class _MoviePosterState extends State<MoviePoster> {
             final posterUrl = widget.movie.posterUrl;
             final hasPoster = posterUrl != null && posterUrl.isNotEmpty;
             final isSvg = hasPoster && posterUrl.toLowerCase().endsWith('.svg');
+            // Multiply by 1.5 to ensure sharpness (supersample slightly)
+            final decodeHeight = ((widget.height == double.infinity
+                        ? 400
+                        : widget.height) *
+                    MediaQuery.of(context).devicePixelRatio *
+                    1.5)
+                .toInt();
             final Widget image = !hasPoster
                 ? Container(
                     color: Colors.grey[900],
@@ -110,13 +118,7 @@ class _MoviePosterState extends State<MoviePoster> {
                         imageUrl: posterUrl,
                         fit: BoxFit.cover,
                         alignment: Alignment.topCenter,
-                        // Multiply by 1.5 to ensure sharpness (supersample slightly)
-                        memCacheHeight: ((widget.height == double.infinity
-                                    ? 400
-                                    : widget.height) *
-                                MediaQuery.of(context).devicePixelRatio *
-                                1.5)
-                            .toInt(),
+                        memCacheHeight: decodeHeight,
                         placeholder: (context, url) => Shimmer.fromColors(
                           baseColor: Colors.grey[900]!,
                           highlightColor: Colors.grey[800]!,
@@ -142,16 +144,30 @@ class _MoviePosterState extends State<MoviePoster> {
               fit: StackFit.expand,
               children: [
                 EpisodeBackdrop(image: hasPoster && !isSvg ? posterUrl : null),
-                ShaderMask(
-                  blendMode: BlendMode.dstIn,
-                  shaderCallback: (rect) => const LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.white, Colors.white, Colors.transparent],
-                    stops: [0, 0.68, 0.88],
-                  ).createShader(rect),
-                  child: image,
-                ),
+                if (hasPoster && !isSvg)
+                  // Faded as it's drawn, not with a ShaderMask: that drew
+                  // each card to a layer of its own on every frame — some
+                  // four at once in Continue Watching, still drawn under a
+                  // details page as it slides in, where they cost a Galaxy
+                  // S25 Ultra frames.
+                  FadingCoverImage(
+                    url: posterUrl,
+                    cacheHeight: decodeHeight,
+                    alignment: Alignment.topCenter,
+                    fadeFrom: 0.68,
+                    fadeTo: 0.88,
+                  )
+                else
+                  ShaderMask(
+                    blendMode: BlendMode.dstIn,
+                    shaderCallback: (rect) => const LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.white, Colors.white, Colors.transparent],
+                      stops: [0, 0.68, 0.88],
+                    ).createShader(rect),
+                    child: image,
+                  ),
                 Positioned(
                   left: 8,
                   right: 8,

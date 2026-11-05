@@ -1,21 +1,17 @@
 import 'package:flutter/material.dart';
+import 'ask_orb.dart';
 import 'glass_blur.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import '../services/movie_tab_service.dart';
 
-enum BottomNavTab { home, search, favorites, settings }
+/// The tabs, in MovieTabShell's order. [ai] only in the movies mode (see
+/// FloatingBottomNavBar.tabsFor).
+enum BottomNavTab { home, search, favorites, settings, ai }
 
 const _kTransitionDuration = Duration(milliseconds: 220);
 const _kCircleSize = 52.0;
 const _kGap = 12.0;
-
-// The Search pill collapsing to a circle and all 4 items sliding into their
-// packed group reads better with a bit of spring to it than a flat ease —
-// longer duration than _kTransitionDuration so the overshoot has room to
-// actually be visible instead of looking like a stutter.
-const _kBounceDuration = Duration(milliseconds: 350);
-const _kBounceCurve = Curves.easeOutBack;
 
 // One-time pop-in played when a bar is first built (see MovieHomeScreen,
 // which only constructs its bar once the loading shimmer is done, so this
@@ -23,7 +19,7 @@ const _kBounceCurve = Curves.easeOutBack;
 // Each item's own window starts _kEntranceStagger later than the previous
 // one's, so they cascade in left-to-right instead of all popping at once.
 const _kEntranceDuration = Duration(milliseconds: 650);
-const _kEntranceStagger = 0.15;
+const _kEntranceStagger = 0.11;
 const _kEntranceWindow = 0.55;
 const _kEntranceTravel = 24.0; // px the item slides up from
 
@@ -35,6 +31,16 @@ class FloatingBottomNavBar extends StatefulWidget {
 
   const FloatingBottomNavBar({super.key, required this.activeTab});
 
+  /// The tabs [mode] has, left to right. Ask (the AI) only suggests movies
+  /// and shows, so it's only in the movies mode.
+  static List<BottomNavTab> tabsFor(AppMode mode) => [
+        BottomNavTab.home,
+        BottomNavTab.search,
+        BottomNavTab.favorites,
+        BottomNavTab.settings,
+        if (mode == AppMode.movies) BottomNavTab.ai,
+      ];
+
   @override
   State<FloatingBottomNavBar> createState() => _FloatingBottomNavBarState();
 }
@@ -43,74 +49,31 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
     with TickerProviderStateMixin {
   late final AnimationController _entranceController;
 
-  // Packed (Search active) ⇄ normal layout transition. Driven here rather
-  // than by AnimatedPositioned so the shared glass clip (see build) knows
-  // every item's in-between rect on each frame.
-  late final AnimationController _layoutController;
-  late bool _fromSearchActive;
-
-  bool get _isSearchActive => widget.activeTab == BottomNavTab.search;
-
   @override
   void initState() {
     super.initState();
     _entranceController =
         AnimationController(vsync: this, duration: _kEntranceDuration)
           ..forward();
-    _layoutController = AnimationController(
-      vsync: this,
-      duration: _kBounceDuration,
-      value: 1,
-    );
-    _fromSearchActive = _isSearchActive;
-  }
-
-  @override
-  void didUpdateWidget(FloatingBottomNavBar oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final wasSearchActive = oldWidget.activeTab == BottomNavTab.search;
-    if (wasSearchActive != _isSearchActive) {
-      _fromSearchActive = wasSearchActive;
-      _layoutController.forward(from: 0);
-    }
   }
 
   @override
   void dispose() {
     _entranceController.dispose();
-    _layoutController.dispose();
     super.dispose();
   }
 
-  /// Each item's rect (within the bar's row) for one layout state.
-  List<Rect> _slots(List<BottomNavTab> tabs, double totalWidth, bool packed) {
-    final itemCount = tabs.length;
-    if (packed) {
-      // Search-active layout: every item becomes an equal circle, packed
-      // tightly together and centered as one group.
-      final step = _kCircleSize + _kGap;
-      final groupWidth = _kCircleSize * itemCount + _kGap * (itemCount - 1);
-      final groupStart =
-          ((totalWidth - groupWidth) / 2).clamp(0.0, totalWidth);
-      return [
-        for (var i = 0; i < itemCount; i++)
-          Rect.fromLTWH(groupStart + i * step, 0, _kCircleSize, _kCircleSize),
-      ];
-    }
-    // Normal layout: Search fills whatever's left after every other
-    // (fixed-size) item, in whatever order/count `tabs` is.
-    final wideSearchWidth = (totalWidth -
-            _kCircleSize * (itemCount - 1) -
-            _kGap * (itemCount - 1))
-        .clamp(_kCircleSize, double.infinity);
-    final slots = <Rect>[];
-    double x = 0;
-    for (final tab in tabs) {
-      final w = tab == BottomNavTab.search ? wideSearchWidth : _kCircleSize;
-      slots.add(Rect.fromLTWH(x, 0, w, _kCircleSize));
-      x += w + _kGap;
-    }
-    return slots;
+  /// Each item's rect within the bar's row: equal circles, packed together
+  /// and centred as one group. (Search was a wide pill, until Ask needed
+  /// the room.)
+  List<Rect> _slots(int itemCount, double totalWidth) {
+    final step = _kCircleSize + _kGap;
+    final groupWidth = _kCircleSize * itemCount + _kGap * (itemCount - 1);
+    final groupStart = ((totalWidth - groupWidth) / 2).clamp(0.0, totalWidth);
+    return [
+      for (var i = 0; i < itemCount; i++)
+        Rect.fromLTWH(groupStart + i * step, 0, _kCircleSize, _kCircleSize),
+    ];
   }
 
   /// This item's 0..1 entrance progress at the controller's current value —
@@ -123,15 +86,6 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
     final end = (start + _kEntranceWindow).clamp(0.0, 1.0);
     return Interval(start, end, curve: Curves.easeOutBack)
         .transform(_entranceController.value);
-  }
-
-  /// Interpolates an item's slot. The bouncy curve overshoots, which would
-  /// briefly squeeze the collapsing Search pill narrower than a circle —
-  /// so position overshoots (the spring) but width never drops below one.
-  Rect _lerpSlot(Rect from, Rect to, double p) {
-    final r = Rect.lerp(from, to, p)!;
-    if (r.width >= _kCircleSize) return r;
-    return Rect.fromLTWH(r.left, r.top, _kCircleSize, r.height);
   }
 
   /// An item's glass shape during its entrance: slides up with the item and
@@ -173,7 +127,9 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
           onTap: () => _navigate(context, BottomNavTab.home),
         );
       case BottomNavTab.search:
-        return _SearchPill(
+        return _NavCircle(
+          icon: Icons.search_rounded,
+          activeIcon: Icons.search_rounded,
           isActive: widget.activeTab == BottomNavTab.search,
           activeColor: activeColor,
           onTap: () => _navigate(context, BottomNavTab.search),
@@ -194,26 +150,24 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
           activeColor: activeColor,
           onTap: () => _navigate(context, BottomNavTab.settings),
         );
+      case BottomNavTab.ai:
+        return _AiCircle(
+          isActive: widget.activeTab == BottomNavTab.ai,
+          onTap: () => _navigate(context, BottomNavTab.ai),
+        );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final bottomPadding = MediaQuery.of(context).padding.bottom;
-
-    final tabs = [
-      BottomNavTab.home,
-      BottomNavTab.search,
-      BottomNavTab.favorites,
-      BottomNavTab.settings,
-    ];
-
     final barHeight = 40 + _kCircleSize + bottomPadding + 16;
 
     return ValueListenableBuilder<AppMode>(
       valueListenable: AppModeService().currentMode,
       builder: (context, currentMode, _) {
         final activeColor = currentMode.accentColor;
+        final tabs = FloatingBottomNavBar.tabsFor(currentMode);
 
         return Positioned(
           left: 0,
@@ -247,25 +201,17 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
                       width: totalWidth,
                       height: _kCircleSize,
                       child: AnimatedBuilder(
-                        animation: Listenable.merge(
-                            [_entranceController, _layoutController]),
+                        animation: _entranceController,
                         builder: (context, _) {
-                          final from =
-                              _slots(tabs, totalWidth, _fromSearchActive);
-                          final to =
-                              _slots(tabs, totalWidth, _isSearchActive);
-                          final p =
-                              _kBounceCurve.transform(_layoutController.value);
-                          final rects = [
-                            for (var i = 0; i < itemCount; i++)
-                              _lerpSlot(from[i], to[i], p),
-                          ];
+                          final rects = _slots(itemCount, totalWidth);
                           final entrance = [
                             for (var i = 0; i < itemCount; i++)
                               _entranceProgress(i),
                           ];
 
                           return Stack(
+                            // Ask's colours spill a little past its circle.
+                            clipBehavior: Clip.none,
                             children: [
                               // One live blur for the whole bar, cut to every
                               // item's shape — instead of a BackdropFilter per
@@ -321,87 +267,6 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
   }
 }
 
-class _SearchPill extends StatelessWidget {
-  final bool isActive;
-  final Color activeColor;
-  final VoidCallback onTap;
-
-  const _SearchPill({
-    required this.isActive,
-    required this.activeColor,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // Blur comes from the bar's shared glass layer behind it; this paints
-    // just the tint, border and ink (clipped to the pill).
-    return Material(
-      color: kGlassTint,
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(26),
-        side: BorderSide(
-          color: isActive
-              ? activeColor.withValues(alpha: 0.45)
-              : kGlassEdge,
-          width: isActive ? 1.5 : 1,
-        ),
-      ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(26),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 15),
-          // Mid-collapse the pill reaches circle size a moment before its
-          // "Search" label has finished shrinking away; OverflowBox lets the
-          // row run over into the (clipped) edge instead of flagging a
-          // RenderFlex overflow for those few frames.
-          child: OverflowBox(
-            minWidth: 0,
-            maxWidth: double.infinity,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                AnimatedSwitcher(
-                  duration: _kTransitionDuration,
-                  child: Icon(
-                    isActive ? Icons.search_rounded : Icons.search_rounded,
-                    key: ValueKey(isActive),
-                    color: isActive ? activeColor : Colors.white,
-                    size: 22,
-                  ),
-                ),
-                AnimatedSize(
-                  duration: _kBounceDuration,
-                  curve: _kBounceCurve,
-                  child: isActive
-                      ? const SizedBox(height: 22)
-                      : Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: const [
-                            SizedBox(width: 10),
-                            Text(
-                              'Search',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w500,
-                                fontSize: 15,
-                              ),
-                            ),
-                          ],
-                        ),
-                ),
-              ],
-          ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _NavCircle extends StatelessWidget {
   final IconData icon;
   final IconData activeIcon;
@@ -426,9 +291,7 @@ class _NavCircle extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       shape: CircleBorder(
         side: BorderSide(
-          color: isActive
-              ? activeColor.withValues(alpha: 0.45)
-              : kGlassEdge,
+          color: isActive ? activeColor.withValues(alpha: 0.45) : kGlassEdge,
           width: isActive ? 1.5 : 1,
         ),
       ),
@@ -447,6 +310,44 @@ class _NavCircle extends StatelessWidget {
                 color: isActive ? activeColor : Colors.white,
                 size: 24,
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Ask's button: its orb (see AskOrb) with the sparkle on it — in colour
+/// on its own tab, dim greys on the others. No ring: its colour, spilling
+/// a little past its edge, marks it out.
+class _AiCircle extends StatelessWidget {
+  final bool isActive;
+  final VoidCallback onTap;
+
+  const _AiCircle({required this.isActive, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(end: isActive ? 1 : 0),
+      duration: const Duration(milliseconds: 450),
+      curve: Curves.easeOut,
+      builder: (context, colour, child) =>
+          AskOrb(size: _kCircleSize, colour: colour, child: child),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: Center(
+            child: Icon(
+              isActive
+                  ? Icons.auto_awesome_rounded
+                  : Icons.auto_awesome_outlined,
+              color: Colors.white,
+              size: 24,
+              semanticLabel: 'Popcorn Ask',
             ),
           ),
         ),

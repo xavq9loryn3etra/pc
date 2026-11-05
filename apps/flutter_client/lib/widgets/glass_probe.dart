@@ -19,7 +19,7 @@ class GlassProbe extends StatefulWidget {
 
   /// Changes whenever how this measures or judges does, so phones that
   /// were judged by an older probe are measured again.
-  static const version = 2;
+  static const version = 5;
 
   @override
   State<GlassProbe> createState() => _GlassProbeState();

@@ -47,10 +47,11 @@ class ArtworkGlow extends StatelessWidget {
 }
 
 /// [url]'s picture covering its box (as BoxFit.cover at [alignment]) and
-/// fading out from [fadeFrom] of the way down to nothing at the bottom —
-/// how the hero headers melt their picture into an [ArtworkGlow] under
-/// it. Decoded at [cacheWidth] / [cacheHeight], keyed as a CachedNetworkImage
-/// of that size (see precacheNetworkImage).
+/// fading out from [fadeFrom] of the way down to nothing at [fadeTo] (the
+/// bottom, by default) — how the hero headers melt their picture into an
+/// [ArtworkGlow] under it, and watch-history posters into their blurred
+/// strip. Decoded at [cacheWidth] / [cacheHeight], keyed as a
+/// CachedNetworkImage of that size (see precacheNetworkImage).
 ///
 /// Drawn in one pass, the fade carried by the corners of the shape the
 /// picture is drawn on. A ShaderMask did the same by drawing the picture
@@ -63,6 +64,7 @@ class FadingCoverImage extends StatefulWidget {
   final int? cacheHeight;
   final Alignment alignment;
   final double fadeFrom;
+  final double fadeTo;
 
   const FadingCoverImage({
     super.key,
@@ -71,6 +73,7 @@ class FadingCoverImage extends StatefulWidget {
     this.cacheHeight,
     this.alignment = Alignment.center,
     this.fadeFrom = 0.55,
+    this.fadeTo = 1,
   });
 
   @override
@@ -135,7 +138,8 @@ class _FadingCoverImageState extends State<FadingCoverImage> {
     if (image == null) return const SizedBox.expand();
     return CustomPaint(
       size: Size.infinite,
-      painter: _FadingCoverPainter(image, widget.alignment, widget.fadeFrom),
+      painter: _FadingCoverPainter(
+          image, widget.alignment, widget.fadeFrom, widget.fadeTo),
     );
   }
 }
@@ -144,11 +148,13 @@ class _FadingCoverPainter extends CustomPainter {
   final ui.Image image;
   final Alignment alignment;
   final double fadeFrom;
+  final double fadeTo;
 
-  _FadingCoverPainter(this.image, this.alignment, this.fadeFrom);
+  _FadingCoverPainter(this.image, this.alignment, this.fadeFrom, this.fadeTo);
 
   // The fade, top to bottom: (fraction of the height, opacity).
-  List<(double, double)> get _stops => [(0, 1), (fadeFrom, 1), (1, 0)];
+  List<(double, double)> get _stops =>
+      [(0, 1), (fadeFrom, 1), (fadeTo, 0), if (fadeTo < 1) (1, 0)];
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -206,5 +212,6 @@ class _FadingCoverPainter extends CustomPainter {
   bool shouldRepaint(_FadingCoverPainter old) =>
       old.image != image ||
       old.alignment != alignment ||
-      old.fadeFrom != fadeFrom;
+      old.fadeFrom != fadeFrom ||
+      old.fadeTo != fadeTo;
 }

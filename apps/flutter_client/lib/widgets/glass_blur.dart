@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
@@ -18,11 +19,11 @@ import '../theme/app_theme.dart';
 ///  * can share one backdrop capture with the app's other [grouped] glass
 ///    (the BackdropGroup at the app root), instead of each surface taking
 ///    its own copy of the screen every frame;
-///  * shows [reducedTint] instead of blurring while its own page slides
-///    in or out. Its blur starting up as the page appeared cost a frame or
-///    two at the start of the slide — a stutter at 120 Hz. Glass on the
-///    page being slid over keeps blurring: switching that off and on again
-///    made the bottom nav bar flicker.
+///  * shows [reducedTint] instead of blurring while its page slides in or
+///    out, or another slides over it or back off it, and for a moment
+///    after. With two pages sliding past each other, every blur — taking
+///    its own copy of the screen — dropped some five frames per slide on a
+///    Galaxy S25 Ultra at 120 Hz, against one or two without.
 class GlassBlur extends StatefulWidget {
   final double sigma;
 
@@ -86,29 +87,60 @@ class GlassBlur extends StatefulWidget {
 }
 
 class _GlassBlurState extends State<GlassBlur> {
-  // The animation of the page this glass is on, which runs while the page
-  // slides in or out.
-  Animation<double>? _pageSlide;
+  // The page this glass is on: its animation runs while it slides in or
+  // out, its secondaryAnimation while another page slides over it or
+  // back off it.
+  ModalRoute<dynamic>? _route;
   bool _pageMoving = false;
+
+  bool get _routeMoving =>
+      (_route?.animation?.isAnimating ?? false) ||
+      (_route?.secondaryAnimation?.isAnimating ?? false);
+
+  void _listen(ModalRoute<dynamic>? route, bool on) {
+    for (final animation in [route?.animation, route?.secondaryAnimation]) {
+      on
+          ? animation?.addStatusListener(_onRouteStatus)
+          : animation?.removeStatusListener(_onRouteStatus);
+    }
+  }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final slide = ModalRoute.of(context)?.animation;
-    if (slide == _pageSlide) return;
-    _pageSlide?.removeStatusListener(_onSlideStatus);
-    _pageSlide = slide?..addStatusListener(_onSlideStatus);
-    _pageMoving = slide?.isAnimating ?? false;
+    final route = ModalRoute.of(context);
+    if (route == _route) return;
+    _listen(_route, false);
+    _route = route;
+    _listen(route, true);
+    _pageMoving = _routeMoving;
   }
 
-  void _onSlideStatus(AnimationStatus _) {
-    final moving = _pageSlide?.isAnimating ?? false;
-    if (moving != _pageMoving) setState(() => _pageMoving = moving);
+  // Waits a moment before the blur starts up again (see _onRouteStatus).
+  Timer? _settle;
+
+  // Starting the blur up takes a frame longer than usual: right as the
+  // slide ends, that was a hitch at its last frame — on top of a details
+  // page's content appearing then. A moment later the screen's still, and
+  // the late frame can't be seen.
+  static const _settleDelay = Duration(milliseconds: 350);
+
+  void _onRouteStatus(AnimationStatus _) {
+    final moving = _routeMoving;
+    _settle?.cancel();
+    if (moving) {
+      if (!_pageMoving) setState(() => _pageMoving = true);
+    } else if (_pageMoving) {
+      _settle = Timer(_settleDelay, () {
+        if (mounted && !_routeMoving) setState(() => _pageMoving = false);
+      });
+    }
   }
 
   @override
   void dispose() {
-    _pageSlide?.removeStatusListener(_onSlideStatus);
+    _settle?.cancel();
+    _listen(_route, false);
     super.dispose();
   }
 

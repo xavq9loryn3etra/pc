@@ -60,8 +60,10 @@ class VisualEffectsService {
       _tooSlow = decision['plain'] == true;
     } else {
       // New install, a new version or a new probe: measure again — a phone
-      // once too slow gets another chance as the app gets lighter.
+      // once too slow gets another chance as the app gets lighter. And
+      // start its count of borderline sessions over.
       _needsProbe = true;
+      unawaited(prefs.remove(_strikesKey));
     }
     _update();
     _followPowerSave();
@@ -106,18 +108,31 @@ class VisualEffectsService {
 
   // ── Watching the frames the app draws ──
 
-  // Frames drawn one after another (an animation, a scroll) — a frame
-  // more than this many frame-lengths after the last starts a new run.
-  static const _gapFrames = 2.5;
-  // How many frames in a row make up one judgement.
+  // What's judged is whether frames come one screen refresh after another
+  // while something moves — a stutter is a refresh with nothing new on
+  // it, a gap between frames. How long frames take to draw doesn't tell:
+  // a Galaxy S25 Ultra at 120 Hz drew frames in 10–15 ms (8.3 ms between
+  // refreshes) without missing one, its spare buffers absorbing it, and
+  // was twice taken for too slow by rules built on that.
+  //
+  // Frames one after another make up a run (an animation, a scroll); a gap
+  // of more than this many refreshes ends it — the screen was still, or
+  // only updated now and then.
+  static const _runBreakRefreshes = 4.0;
+  // A gap of more than this many refreshes within a run is a stutter.
+  static const _stutterRefreshes = 1.5;
+  // How many gaps make up one judgement.
   static const _window = 60;
-  // Late frames in a window: at least this share is clearly too slow,
-  // and switches at once…
-  static const _clearlySlow = 0.25;
-  // …and at least this share is borderline: a strike for this session.
-  static const _borderline = 0.10;
+  // Stutters in a window: at least this share is clearly too slow, and
+  // switches at once…
+  static const _clearlySlow = 0.40;
+  // …and at least this share is borderline: a strike for this session. A
+  // Galaxy S25 Ultra, smooth with the glass, still had a window at 12%
+  // while opening and closing pages over and over — 10% struck it twice.
+  static const _borderline = 0.20;
 
-  final List<FrameTiming> _run = [];
+  int? _lastVsync;
+  final List<bool> _run = [];
   bool _struckThisSession = false;
 
   void _watch() => SchedulerBinding.instance.addTimingsCallback(_onTimings);
@@ -130,31 +145,33 @@ class VisualEffectsService {
     }
     if (_powerSave) {
       _run.clear();
+      _lastVsync = null;
       return;
     }
-    final frameUs = frameMicros();
+    final refreshUs = frameMicros();
     for (final t in timings) {
-      if (_run.isNotEmpty &&
-          t.timestampInMicroseconds(FramePhase.vsyncStart) -
-                  _run.last.timestampInMicroseconds(FramePhase.vsyncStart) >
-              frameUs * _gapFrames) {
+      // Frames with nothing built, only a video's new picture shown, go
+      // at the video's pace; they're no sign of the app keeping up or not.
+      if (t.buildDuration.inMicroseconds < 50) continue;
+      final vsync = t.timestampInMicroseconds(FramePhase.vsyncStart);
+      final last = _lastVsync;
+      _lastVsync = vsync;
+      if (last == null) continue;
+      final gap = vsync - last;
+      if (gap > refreshUs * _runBreakRefreshes) {
         _run.clear();
+        continue;
       }
-      _run.add(t);
+      _run.add(gap > refreshUs * _stutterRefreshes);
       if (_run.length == _window) {
-        _judge(_run, frameUs);
+        _judge(_run);
         _run.clear();
       }
     }
   }
 
-  void _judge(List<FrameTiming> window, double frameUs) {
-    final late = window
-        .where((t) =>
-            t.buildDuration.inMicroseconds > frameUs ||
-            t.rasterDuration.inMicroseconds > frameUs)
-        .length;
-    final share = late / window.length;
+  void _judge(List<bool> stutters) {
+    final share = stutters.where((s) => s).length / stutters.length;
     if (share >= _clearlySlow) {
       _decide(tooSlow: true);
     } else if (share >= _borderline && !_struckThisSession) {

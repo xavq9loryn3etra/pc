@@ -4,6 +4,7 @@ import '../models/movie.dart';
 import 'desktop_details_panel.dart';
 import '../widgets/custom_app_bar.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
+import 'glass_blur.dart';
 
 typedef BodyBuilder = Widget Function(
     BuildContext context, bool isDesktop, EdgeInsets padding);
@@ -38,59 +39,22 @@ class ScreenScaffold extends StatefulWidget {
 }
 
 class _ScreenScaffoldState extends State<ScreenScaffold> {
-  // How far the top-edge fade has faded in (see _withTopFade), from the
-  // body's scrolling. A notifier so only the fade repaints while scrolling,
-  // not the body.
-  final ValueNotifier<double> _fade = ValueNotifier(0.0);
+  // Whether the body's scrolled from the top, which brings in the
+  // title's island (see _TitleIsland). A notifier so only the title
+  // rebuilds as it changes, not the body.
+  final ValueNotifier<bool> _scrolled = ValueNotifier(false);
 
   @override
   void dispose() {
-    _fade.dispose();
+    _scrolled.dispose();
     super.dispose();
   }
 
   bool _onScroll(ScrollNotification n) {
     if (n.depth == 0 && n.metrics.axis == Axis.vertical) {
-      _fade.value = (n.metrics.pixels / 200).clamp(0.0, 1.0);
+      _scrolled.value = n.metrics.pixels > 4;
     }
     return false;
-  }
-
-  /// The home screen's top edge (see MovieHomeScreen._withTopFade): no
-  /// glass behind the bar — it stays transparent, and a black-to-clear fade
-  /// comes in over the content as it scrolls up under the title.
-  Widget _withTopFade(BuildContext context, Widget body) {
-    return Stack(
-      children: [
-        NotificationListener<ScrollNotification>(
-          onNotification: _onScroll,
-          child: body,
-        ),
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: IgnorePointer(
-            child: ValueListenableBuilder<double>(
-              valueListenable: _fade,
-              builder: (context, fade, child) =>
-                  Opacity(opacity: fade, child: child),
-              child: Container(
-                height: MediaQuery.paddingOf(context).top + kToolbarHeight + 40,
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.black, Colors.transparent],
-                    stops: [0.4, 1.0],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
   }
 
   @override
@@ -105,7 +69,15 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
             Scaffold(
               extendBodyBehindAppBar: widget.extendBodyBehindAppBar,
               appBar: CustomAppBar(
-                title: widget.title,
+                // On its island once the page is scrolled, as the details
+                // page's title is (see GlassBubbleBar) — instead of a black
+                // fade over the content behind it.
+                title: ValueListenableBuilder<bool>(
+                  valueListenable: _scrolled,
+                  builder: (context, scrolled, title) =>
+                      _TitleIsland(shown: scrolled, child: title!),
+                  child: widget.title,
+                ),
                 leading: widget.leading,
                 actions: widget.actions,
                 forceOpacity: 0,
@@ -115,9 +87,9 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
                 // Settings instead of a header icon.
                 showModeSwitch: false,
               ),
-              body: _withTopFade(
-                context,
-                widget.body(
+              body: NotificationListener<ScrollNotification>(
+                onNotification: _onScroll,
+                child:                 widget.body(
                   context,
                   isDesktop,
                   // Reserve room for the floating nav bar (~110px including
@@ -170,6 +142,66 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
           ],
         );
       },
+    );
+  }
+}
+
+/// A page's title, on an island of the app's frosted glass while [shown]
+/// (the page is scrolled), as the details page's title is: the pill grows
+/// in around it, the title easing in a little to sit inside. The glass is
+/// only there while showing, so it costs nothing at the top of the page.
+class _TitleIsland extends StatelessWidget {
+  final bool shown;
+  final Widget child;
+
+  const _TitleIsland({required this.shown, required this.child});
+
+  static const double _height = 40; // As GlassBubbleBar's
+  static const double _padding = 14;
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(end: shown ? 1 : 0),
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+      child: child,
+      builder: (context, t, child) => SizedBox(
+        height: _height,
+        child: Stack(
+          alignment: Alignment.centerLeft,
+          children: [
+            if (t > 0)
+              Positioned.fill(
+                child: Opacity(
+                  opacity: t,
+                  child: ClipRRect(
+                    borderRadius:
+                        const BorderRadius.all(Radius.circular(_height / 2)),
+                    // Grouped with the nav bar's glass, which it never
+                    // overlaps.
+                    child: GlassBlur(
+                      grouped: true,
+                      reducedTint: Colors.black.withValues(alpha: 0.55),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: kGlassTint,
+                          borderRadius: const BorderRadius.all(
+                              Radius.circular(_height / 2)),
+                          border: Border.all(color: kGlassEdge),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: _padding * t),
+              child: child,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

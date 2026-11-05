@@ -10,6 +10,7 @@ import 'settings_screen.dart';
 import 'books_home_screen.dart';
 import 'book_search_screen.dart';
 import 'music_home_screen.dart';
+import 'ask_screen.dart';
 
 const _kTabFadeDuration = Duration(milliseconds: 200);
 
@@ -34,7 +35,12 @@ class MovieTabShell extends StatelessWidget {
 
         return ValueListenableBuilder<BottomNavTab>(
           valueListenable: MovieTabService().currentTab,
-          builder: (context, activeTab, _) {
+          builder: (context, selectedTab, _) {
+            // A mode without the tab that was open (Ask, only in movies)
+            // shows its home instead.
+            final activeTab = selectedTab.index < screens.length
+                ? selectedTab
+                : BottomNavTab.home;
             return Stack(
               children: [
                 for (var i = 0; i < screens.length; i++)
@@ -85,12 +91,14 @@ class MovieTabShell extends StatelessWidget {
 
   List<Widget> _getScreensForMode(AppMode mode) {
     switch (mode) {
+      // In BottomNavTab's order (see FloatingBottomNavBar.tabsFor).
       case AppMode.movies:
         return const [
           MovieHomeScreen(),
           SearchScreen(),
           FavoritesScreen(),
           SettingsScreen(),
+          AskScreen(),
         ];
       case AppMode.books:
         return const [

@@ -1,7 +1,8 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'glass_blur.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:vector_graphics/vector_graphics_compat.dart'
+    show RenderingStrategy;
 import '../theme/app_theme.dart';
 import '../screens/search_screen.dart';
 import '../screens/favorites_screen.dart';
@@ -44,18 +45,24 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
 
-  /// Renders the brand wordmark with a soft drop shadow shaped like the
-  /// actual letterforms, not a rectangular box — a plain BoxShadow only
-  /// shadows a widget's rectangular bounds, which would paint a visible box
-  /// behind the mostly-transparent svg and does nothing useful against a
-  /// light hero image behind it (this sits directly over the Home hero
-  /// backdrop before the scroll-fade kicks in). Instead the same asset is
-  /// rendered twice — once tinted solid black and blurred, offset slightly
-  /// behind the real, brand-colored one — so the shadow traces the letters.
+  /// Renders the brand wordmark with a drop shadow shaped like the actual
+  /// letterforms, not a rectangular box — a plain BoxShadow only shadows a
+  /// widget's rectangular bounds, which would paint a visible box behind
+  /// the mostly-transparent svg and does nothing useful against a light
+  /// hero image behind it (this sits directly over the Home hero backdrop
+  /// before the scroll-fade kicks in). Instead the same asset is rendered
+  /// twice — once in translucent black, offset slightly behind the real,
+  /// brand-colored one — so the shadow traces the letters.
+  ///
+  /// Both drawn as pictures made once (RenderingStrategy.raster), tinted
+  /// as they're drawn, and the shadow unblurred: tinting a vector drawing,
+  /// fading it and blurring it each took a layer of its own on every
+  /// frame — four of them, still drawn under a details page sliding in.
   Widget _buildDefaultLogo() {
     Widget logo({Color? shadowTint}) => SvgPicture.asset(
           'assets/logo.svg',
           height: 32,
+          renderingStrategy: RenderingStrategy.raster,
           colorFilter: ColorFilter.mode(
             shadowTint ?? AppTheme.primaryColor,
             BlendMode.srcIn,
@@ -64,23 +71,14 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
 
     return Stack(
       // Stack's own bounds are set by the plain logo (the only non-Positioned
-      // child), sized tight with no room for the blurred shadow layer's
-      // bleed — Stack's default Clip.hardEdge then crops that overflow,
-      // most visibly at the bottom-left where the shadow's `top: 1` offset
-      // pushes it past the Stack's bottom edge too. The blur is meant to
-      // extend a little past the logo's exact box, so let it.
+      // child), sized tight — Stack's default Clip.hardEdge would crop the
+      // shadow where its offset pushes it past them. Let it show.
       clipBehavior: Clip.none,
       children: [
         Positioned(
-          top: 1,
-          left: 0,
-          child: Opacity(
-            opacity: 0.3,
-            child: ImageFiltered(
-              imageFilter: ImageFilter.blur(sigmaX: 2, sigmaY: 2),
-              child: logo(shadowTint: Colors.black),
-            ),
-          ),
+          top: 1.5,
+          left: 0.5,
+          child: logo(shadowTint: Colors.black.withValues(alpha: 0.35)),
         ),
         logo(),
       ],

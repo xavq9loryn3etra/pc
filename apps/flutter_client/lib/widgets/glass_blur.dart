@@ -36,6 +36,11 @@ class GlassBlur extends StatefulWidget {
   /// Painted behind [child] when the blur is off, to make up for it.
   final Color reducedTint;
 
+  /// Off for now, as while its page slides: the glass itself is moving —
+  /// a sheet being pulled down — and re-blurring all of it every frame
+  /// stuttered. Frosts back over when it's let go of.
+  final bool paused;
+
   final Widget child;
 
   const GlassBlur({
@@ -45,6 +50,7 @@ class GlassBlur extends StatefulWidget {
     this.sigma = 12,
     this.grouped = false,
     this.reducedTint = const Color(0x4D000000), // black, 30%
+    this.paused = false,
     required this.child,
   });
 
@@ -122,8 +128,13 @@ class _GlassBlurState extends State<GlassBlur> {
   // Starting the blur up takes a frame longer than usual: right as the
   // slide ends, that was a hitch at its last frame — on top of a details
   // page's content appearing then. A moment later the screen's still, and
-  // the late frame can't be seen.
-  static const _settleDelay = Duration(milliseconds: 350);
+  // the late frame can't be seen. Not much later: the glass coming back
+  // after 350 ms was noticed.
+  static const _settleDelay = Duration(milliseconds: 150);
+
+  // How long the frost takes to come back over the glass (see build):
+  // switched straight back on, it snapped from tint to blur.
+  static const _frostIn = Duration(milliseconds: 320);
 
   void _onRouteStatus(AnimationStatus _) {
     final moving = _routeMoving;
@@ -149,20 +160,36 @@ class _GlassBlurState extends State<GlassBlur> {
     return ValueListenableBuilder<bool>(
       valueListenable: VisualEffectsService().reduceGlass,
       builder: (context, reduce, child) {
-        final blur = !reduce && !_pageMoving && widget.sigma > 0;
-        // The same widgets whether blurring or not, only switched: a
-        // different structure would rebuild everything on the glass.
-        final tinted = DecoratedBox(
-          decoration: BoxDecoration(
-            color: blur ? Colors.transparent : widget.reducedTint,
-          ),
+        final on =
+            !reduce && !_pageMoving && !widget.paused && widget.sigma > 0;
+        // Coming back on, the blur grows from nothing as the tint fades
+        // out: the glass frosts over. Going off, at once — the page is
+        // starting to slide, and the change goes unseen in the motion.
+        return TweenAnimationBuilder<double>(
+          tween: Tween(end: on ? 1 : 0),
+          duration: on ? _frostIn : Duration.zero,
+          curve: Curves.easeOut,
           child: child,
+          builder: (context, t, child) {
+            final blur = t > 0;
+            // The same widgets whether blurring or not, only switched: a
+            // different structure would rebuild everything on the glass.
+            final tinted = DecoratedBox(
+              decoration: BoxDecoration(
+                color: Color.lerp(widget.reducedTint,
+                    widget.reducedTint.withValues(alpha: 0), t),
+              ),
+              child: child,
+            );
+            final filter =
+                GlassBlur.filterFor(math.max(widget.sigma * t, 0.1));
+            return widget.grouped
+                ? BackdropFilter.grouped(
+                    filter: filter, enabled: blur, child: tinted)
+                : BackdropFilter(
+                    filter: filter, enabled: blur, child: tinted);
+          },
         );
-        final filter = GlassBlur.filterFor(math.max(widget.sigma, 0.1));
-        return widget.grouped
-            ? BackdropFilter.grouped(
-                filter: filter, enabled: blur, child: tinted)
-            : BackdropFilter(filter: filter, enabled: blur, child: tinted);
       },
       child: widget.child,
     );

@@ -50,7 +50,12 @@ class MovieTabShell extends StatelessWidget {
                       opacity: BottomNavTab.values[i] == activeTab ? 1.0 : 0.0,
                       duration: _kTabFadeDuration,
                       curve: Curves.easeOut,
-                      child: screens[i],
+                      // The hidden tabs' animations paused — Ask's glow,
+                      // a loading shimmer — rather than running unseen.
+                      child: TickerMode(
+                        enabled: BottomNavTab.values[i] == activeTab,
+                        child: screens[i],
+                      ),
                     ),
                   ),
                 _navBar(mode, activeTab),

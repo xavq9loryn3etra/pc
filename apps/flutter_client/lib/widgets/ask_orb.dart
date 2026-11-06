@@ -139,13 +139,15 @@ class _OrbPainter extends CustomPainter {
   }
 
   // The app's own colours, at full strength: the modes' accents, Popcorn's
-  // cream, Library's tan and Groovy's pink — the pastels and silver of
-  // AppIridescence mixed into a beige here. Each blob its own pace (turns
+  // cream, Library's tan and Groovy's pink, and the icon's silver. Each
+  // blob its own pace (turns
   // a second) and path, so they never fall into step.
   static const _blobs = [
     (AppTheme.primaryColor, 0.075, 0.0),
     (Color(0xFFD4A574), 0.055, 2.1), // AppMode.books.accentColor
     (Color(0xFFE91E63), 0.095, 4.2), // AppMode.music.accentColor
+    // And the icon's silver (see AppIridescence) drifting among them.
+    (Color(0xFFE3E5EA), 0.065, 1.05),
   ];
 
   @override

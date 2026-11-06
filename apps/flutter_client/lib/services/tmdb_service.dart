@@ -91,6 +91,10 @@ class TMDBService {
     }
   }
 
+  // For findTitle's comparisons: made once, not for every result of every
+  // search of an answer's titles.
+  static final _notLetterOrDigit = RegExp(r'[^\p{L}\p{N}]', unicode: true);
+
   /// The [type] ('movie' or 'tv') titled [title], from [year] where given —
   /// how AiService turns a suggested title into one the app can open. Its
   /// best match, or, with no match for that year, the best of any year.
@@ -102,9 +106,8 @@ class TMDBService {
   Future<Movie?> findTitle(String title,
       {int? year, String? type, String? language}) async {
     final isTv = type == 'tv';
-    String plain(Object? s) => '${s ?? ''}'
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '');
+    String plain(Object? s) =>
+        '${s ?? ''}'.toLowerCase().replaceAll(_notLetterOrDigit, '');
     final wanted = plain(title);
     // How well a result's title (or original title) matches: 2 the same,
     // 1 close (one holds the other, at a similar length), 0 not.
@@ -457,17 +460,34 @@ class TMDBService {
       ]..sort((a, b) =>
           ((b['vote_count'] as num?) ?? 0).compareTo((a['vote_count'] as num?) ?? 0));
       final bio = p['biography'];
+      // Who they played ("as Tony Stark"), or their job ("Director").
+      String? role(Map<String, dynamic> c) {
+        final character = c['character']?.toString().trim() ?? '';
+        if (character.isNotEmpty) return 'as $character';
+        final job = c['job']?.toString().trim() ?? '';
+        return job.isEmpty ? null : job;
+      }
+
+      final path = p['profile_path'];
       final person = Person(
         id: id,
         name: p['name']?.toString() ?? '',
-        profileUrl: _profileUrl(p['profile_path']),
+        profileUrl: _profileUrl(path),
+        photoUrl:
+            path is String ? 'https://image.tmdb.org/t/p/original$path' : null,
+        movieCount: entries.where((c) => c['media_type'] == 'movie').length,
+        showCount: entries.where((c) => c['media_type'] == 'tv').length,
+        roles: {
+          for (final c in entries)
+            if (role(c) case final r?) '${c['media_type']}_${c['id']}': r,
+        },
         biography: bio is String ? bio.trim() : '',
         knownFor: p['known_for_department'] as String?,
         birthday: p['birthday'] as String?,
         deathday: p['deathday'] as String?,
         placeOfBirth: p['place_of_birth'] as String?,
         credits: entries
-            .take(40)
+            .take(60)
             .map(_formatMovie)
             .whereType<Movie>()
             .toList()

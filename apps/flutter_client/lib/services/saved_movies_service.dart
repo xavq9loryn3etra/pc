@@ -70,6 +70,7 @@ class SavedMoviesService with ChangeNotifier {
     }
 
     _historyCache = null;
+    _historyById.clear();
     notifyListeners();
   }
 
@@ -101,15 +102,19 @@ class SavedMoviesService with ChangeNotifier {
     return _favorites.any((m) => m.id == id);
   }
 
+  // Decoded once each till history changes: every poster asks, in every
+  // build, and decoding the stored JSON each time added up.
+  final Map<String, Movie?> _historyById = {};
+
   Movie? getMovieFromHistory(String id) {
-    if (_history.containsKey(id)) {
+    if (!_history.containsKey(id)) return null;
+    return _historyById.putIfAbsent(id, () {
       try {
         return Movie.fromStorageJson(_history[id]['movie']);
       } catch (e) {
         return null;
       }
-    }
-    return null;
+    });
   }
 
   double? getEpisodeProgress(String movieId, int season, int episode) {
@@ -229,6 +234,7 @@ class SavedMoviesService with ChangeNotifier {
       'last_watched': DateTime.now().millisecondsSinceEpoch,
     };
     _historyCache = null;
+    _historyById.clear();
 
     // Save specific episode progress
     if (season != null && episode != null && progress != null) {
@@ -245,6 +251,7 @@ class SavedMoviesService with ChangeNotifier {
       final imdbId = getMovieFromHistory(movieId)?.imdbId;
       _history.remove(movieId);
       _historyCache = null;
+      _historyById.clear();
       await _saveHistory();
 
       // And which copy it last played: nothing to resume any more, so its

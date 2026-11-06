@@ -199,6 +199,11 @@ class _ScrollingRowState extends State<_ScrollingRow>
           child: Image.asset(
             assetPath,
             fit: BoxFit.cover,
+            // Decoded at the size it's shown, not its own: two dozen at
+            // full size at once pushed the app's posters out of memory.
+            cacheHeight:
+                (widget.itemHeight * MediaQuery.devicePixelRatioOf(context))
+                    .round(),
             filterQuality: FilterQuality.medium,
             errorBuilder: (_, __, ___) => Container(
               color: Colors.grey[850],

@@ -359,6 +359,19 @@ class Person {
   /// Their best known movies and shows, newest first.
   final List<Movie> credits;
 
+  /// Who they played in each of [credits] ("Tony Stark"), or their job on
+  /// it ("Director"), by type and id (see [roleIn]).
+  final Map<String, String> roles;
+
+  /// How many movies and shows they've been in, all told — more than
+  /// [credits] holds.
+  final int movieCount;
+  final int showCount;
+
+  /// [profileUrl] at TMDB's original size, for seeing the photo full
+  /// screen.
+  final String? photoUrl;
+
   const Person({
     required this.id,
     required this.name,
@@ -369,5 +382,11 @@ class Person {
     this.deathday,
     this.placeOfBirth,
     this.credits = const [],
+    this.roles = const {},
+    this.movieCount = 0,
+    this.showCount = 0,
+    this.photoUrl,
   });
+
+  String? roleIn(Movie movie) => roles['${movie.type}_${movie.id}'];
 }

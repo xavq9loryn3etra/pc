@@ -147,9 +147,12 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
 }
 
 /// A page's title, on an island of the app's frosted glass while [shown]
-/// (the page is scrolled), as the details page's title is: the pill grows
-/// in around it, the title easing in a little to sit inside. The glass is
-/// only there while showing, so it costs nothing at the top of the page.
+/// (the page is scrolled), as the details page's title is. The island
+/// opens out from its middle and folds back into it, its tint fading
+/// with it: the blur itself can't be faded (it popped off at the end),
+/// only cut smaller. The title stays put, always room enough round it.
+/// The glass is only there while showing, so it costs nothing at the top
+/// of the page.
 class _TitleIsland extends StatelessWidget {
   final bool shown;
   final Widget child;
@@ -163,8 +166,8 @@ class _TitleIsland extends StatelessWidget {
   Widget build(BuildContext context) {
     return TweenAnimationBuilder<double>(
       tween: Tween(end: shown ? 1 : 0),
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
+      duration: const Duration(milliseconds: 380),
+      curve: Curves.easeInOutCubic,
       child: child,
       builder: (context, t, child) => SizedBox(
         height: _height,
@@ -173,22 +176,28 @@ class _TitleIsland extends StatelessWidget {
           children: [
             if (t > 0)
               Positioned.fill(
-                child: Opacity(
-                  opacity: t,
-                  child: ClipRRect(
-                    borderRadius:
-                        const BorderRadius.all(Radius.circular(_height / 2)),
-                    // Grouped with the nav bar's glass, which it never
-                    // overlaps.
-                    child: GlassBlur(
-                      grouped: true,
-                      reducedTint: Colors.black.withValues(alpha: 0.55),
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: kGlassTint,
-                          borderRadius: const BorderRadius.all(
-                              Radius.circular(_height / 2)),
-                          border: Border.all(color: kGlassEdge),
+                child: Center(
+                  child: FractionallySizedBox(
+                    widthFactor: 0.7 + 0.3 * t,
+                    heightFactor: t,
+                    child: ClipRRect(
+                      borderRadius:
+                          const BorderRadius.all(Radius.circular(_height / 2)),
+                      // Grouped with the nav bar's glass, which it never
+                      // overlaps.
+                      child: GlassBlur(
+                        grouped: true,
+                        reducedTint: Colors.black.withValues(alpha: 0.55),
+                        child: Opacity(
+                          opacity: t,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: kGlassTint,
+                              borderRadius: const BorderRadius.all(
+                                  Radius.circular(_height / 2)),
+                              border: Border.all(color: kGlassEdge),
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -196,7 +205,7 @@ class _TitleIsland extends StatelessWidget {
                 ),
               ),
             Padding(
-              padding: EdgeInsets.symmetric(horizontal: _padding * t),
+              padding: const EdgeInsets.symmetric(horizontal: _padding),
               child: child,
             ),
           ],

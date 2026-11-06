@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -694,9 +695,22 @@ class _EpisodeSheetFrameState extends State<EpisodeSheetFrame> {
   static const _closeFraction = 0.25;
   static const _closeVelocity = 700.0;
 
+  // The frosted glass is paused (see GlassBlur.paused) while the sheet's
+  // pulled, and while it springs back, till [_settle] fires.
+  bool _moving = false;
+  Timer? _settle;
+
+  @override
+  void dispose() {
+    _settle?.cancel();
+    super.dispose();
+  }
+
   void _dragBy(double dy) {
+    _settle?.cancel();
     setState(() {
       _dragging = true;
+      _moving = true;
       _drag = math.max(0, _drag + dy);
     });
   }
@@ -716,8 +730,13 @@ class _EpisodeSheetFrameState extends State<EpisodeSheetFrame> {
         _dragging = false;
         _drag = 0;
       });
+      _settle = Timer(_springBack, () {
+        if (mounted) setState(() => _moving = false);
+      });
     }
   }
+
+  static const _springBack = Duration(milliseconds: 220);
 
   bool _onScroll(ScrollNotification n) {
     if (n is OverscrollNotification && n.dragDetails != null) {
@@ -737,69 +756,74 @@ class _EpisodeSheetFrameState extends State<EpisodeSheetFrame> {
   @override
   Widget build(BuildContext context) {
     return AnimatedContainer(
-      duration: _dragging ? Duration.zero : const Duration(milliseconds: 220),
+      duration: _dragging ? Duration.zero : _springBack,
       curve: Curves.easeOutCubic,
       transform: Matrix4.translationValues(0, _drag, 0),
       child: NotificationListener<ScrollNotification>(
         onNotification: _onScroll,
-        child: ClipRRect(
-          borderRadius: EpisodeSheetFrame._radius,
-          child: Stack(
-            children: [
-              // A bit darker than the cards': the sheet is much bigger, so
-              // the colours read stronger.
-              Positioned.fill(
-                child: widget.frosted
-                    ? const GlassBlur(
-                        // Strong: a big surface, the page's detail would
-                        // show through a lighter blur.
-                        sigma: 30,
-                        reducedTint: Color(0xF2161616),
-                        child: ColoredBox(color: kGlassSheetTint),
-                      )
-                    : EpisodeBackdrop(image: widget.image, dim: 0.6),
-              ),
-              widget.child,
-              // The handle, with a generous strip around it to grab.
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                height: 28,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onVerticalDragUpdate: (d) => _dragBy(d.delta.dy),
-                  onVerticalDragEnd: (d) => _dragEnd(d.primaryVelocity ?? 0),
-                  child: Align(
-                    alignment: const Alignment(0, -0.15),
-                    child: Container(
-                      width: 36,
-                      height: 4,
+        // Its own layer, moved as a whole as it's pulled: not repainted
+        // every frame — the photo, text and posters all drawn again.
+        child: RepaintBoundary(
+          child: ClipRRect(
+            borderRadius: EpisodeSheetFrame._radius,
+            child: Stack(
+              children: [
+                // A bit darker than the cards': the sheet is much bigger, so
+                // the colours read stronger.
+                Positioned.fill(
+                  child: widget.frosted
+                      ? GlassBlur(
+                          // Strong: a big surface, the page's detail would
+                          // show through a lighter blur.
+                          sigma: 30,
+                          reducedTint: const Color(0xF2161616),
+                          paused: _moving,
+                          child: const ColoredBox(color: kGlassSheetTint),
+                        )
+                      : EpisodeBackdrop(image: widget.image, dim: 0.6),
+                ),
+                widget.child,
+                // The handle, with a generous strip around it to grab.
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: 28,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onVerticalDragUpdate: (d) => _dragBy(d.delta.dy),
+                    onVerticalDragEnd: (d) => _dragEnd(d.primaryVelocity ?? 0),
+                    child: Align(
+                      alignment: const Alignment(0, -0.15),
+                      child: Container(
+                        width: 36,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.white54,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      // No bottom edge: the sheet runs off the bottom of the
+                      // screen.
                       decoration: BoxDecoration(
-                        color: Colors.white54,
-                        borderRadius: BorderRadius.circular(2),
+                        borderRadius: EpisodeSheetFrame._radius,
+                        border: Border(
+                          top: EpisodeSheetFrame._edge,
+                          left: EpisodeSheetFrame._edge,
+                          right: EpisodeSheetFrame._edge,
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    // No bottom edge: the sheet runs off the bottom of the
-                    // screen.
-                    decoration: BoxDecoration(
-                      borderRadius: EpisodeSheetFrame._radius,
-                      border: Border(
-                        top: EpisodeSheetFrame._edge,
-                        left: EpisodeSheetFrame._edge,
-                        right: EpisodeSheetFrame._edge,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

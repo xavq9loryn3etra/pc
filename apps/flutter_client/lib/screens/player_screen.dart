@@ -797,6 +797,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
+      // Where they'd got to, in case the app's closed while away — not
+      // mid-switch, when the position may be another video's.
+      if (!_switchingQuality) _saveProgress(force: true);
       if (_isPlaying) {
         _pausedForBackground = true;
         player.pause();
@@ -1040,10 +1043,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (_switchingQuality && !force) return;
     if (_duration.inSeconds > 0) {
       final now = DateTime.now();
-      // Throttle progress updates to SharedPreferences (every 5 seconds) to avoid CPU/disk churn, unless forced
+      // Throttled, unless forced: each save writes out the whole watch
+      // history and rebuilds every poster on the pages under the player.
+      // Every 15 seconds, not 5 — leaving the app forces one (see
+      // didChangeAppLifecycleState), so little's lost if it's closed.
       if (!force &&
           _lastSaveTime != null &&
-          now.difference(_lastSaveTime!) < const Duration(seconds: 5)) {
+          now.difference(_lastSaveTime!) < const Duration(seconds: 15)) {
         return;
       }
       _lastSaveTime = now;

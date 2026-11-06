@@ -31,14 +31,15 @@ class FloatingBottomNavBar extends StatefulWidget {
 
   const FloatingBottomNavBar({super.key, required this.activeTab});
 
-  /// The tabs [mode] has, left to right. Ask (the AI) only suggests movies
-  /// and shows, so it's only in the movies mode.
+  /// The tabs [mode] has, left to right — Ask before Settings, though it's
+  /// last in BottomNavTab (MovieTabShell's order). Ask (the AI) only
+  /// suggests movies and shows, so it's only in the movies mode.
   static List<BottomNavTab> tabsFor(AppMode mode) => [
         BottomNavTab.home,
         BottomNavTab.search,
         BottomNavTab.favorites,
-        BottomNavTab.settings,
         if (mode == AppMode.movies) BottomNavTab.ai,
+        BottomNavTab.settings,
       ];
 
   @override

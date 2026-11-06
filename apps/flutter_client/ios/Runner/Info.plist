@@ -65,6 +65,10 @@
 	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>We need access to your photo library to allow you to select subtitle files.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Popcorn doesn't use the camera. This is only needed by the file picker used to import and export backups.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Popcorn doesn't use the microphone. This is only needed by the file picker used to import and export backups.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

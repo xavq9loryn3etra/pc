@@ -7,6 +7,7 @@ workflows:
       flutter: 3.44.6
       groups:
         - google_play # Ensure these credentials are in Codemagic UI
+        - gemini # GEMINI_API_KEY (Ask), a secret variable in Codemagic
     scripts:
       - name: Get dependencies
         script: |
@@ -15,7 +16,7 @@ workflows:
       - name: Build Android Release
         script: |
           cd apps/flutter_client
-          flutter build apk --release
+          flutter build apk --release --dart-define=GEMINI_API_KEY=$GEMINI_API_KEY
     artifacts:
       - apps/flutter_client/build/app/outputs/flutter-apk/*.apk
       - apps/flutter_client/build/app/outputs/bundle/release/*.aab
@@ -26,6 +27,8 @@ workflows:
     instance_type: windows_x2
     environment:
       flutter: 3.44.6
+      groups:
+        - gemini
     scripts:
       - name: Get dependencies
         script: |
@@ -34,7 +37,7 @@ workflows:
       - name: Build Windows Release
         script: |
           cd apps/flutter_client
-          flutter build windows --release
+          flutter build windows --release --dart-define=GEMINI_API_KEY=$GEMINI_API_KEY
     artifacts:
       - apps/flutter_client/build/windows/runner/Release/*.exe
 
@@ -50,6 +53,7 @@ workflows:
       cocoapods: default
       groups:
         - ios_signing
+        - gemini
       vars:
         BUNDLE_ID: "com.popcorn.flutterClient"
     scripts:
@@ -74,7 +78,7 @@ workflows:
         script: |
           cd apps/flutter_client
           # This command now has the certificates it needs in the keychain
-          flutter build ipa --release --export-options-plist=$HOME/export_options.plist
+          flutter build ipa --release --export-options-plist=$HOME/export_options.plist --dart-define=GEMINI_API_KEY=$GEMINI_API_KEY
     artifacts:
       - apps/flutter_client/build/ios/ipa/*.ipa
     publishing:
@@ -89,6 +93,8 @@ workflows:
     environment:
       flutter: 3.44.6
       cocoapods: default
+      groups:
+        - gemini
     scripts:
       - name: Get dependencies
         script: |
@@ -101,6 +107,6 @@ workflows:
       - name: Build macOS Release
         script: |
           cd apps/flutter_client
-          flutter build macos --release
+          flutter build macos --release --dart-define=GEMINI_API_KEY=$GEMINI_API_KEY
     artifacts:
       - apps/flutter_client/build/macos/Build/Products/Release/*.app

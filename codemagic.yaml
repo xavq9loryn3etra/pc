@@ -4,7 +4,7 @@ workflows:
     max_build_duration: 120
     instance_type: mac_mini_m1
     environment:
-      flutter: 3.38.9
+      flutter: 3.44.6
       groups:
         - google_play # Ensure these credentials are in Codemagic UI
     scripts:
@@ -25,7 +25,7 @@ workflows:
     max_build_duration: 120
     instance_type: windows_x2
     environment:
-      flutter: 3.38.9
+      flutter: 3.44.6
     scripts:
       - name: Get dependencies
         script: |
@@ -45,7 +45,7 @@ workflows:
     integrations:
       app_store_connect: "popcorn"
     environment:
-      flutter: 3.38.9
+      flutter: 3.44.6
       xcode: latest
       cocoapods: default
       groups:
@@ -87,7 +87,7 @@ workflows:
     max_build_duration: 120
     instance_type: mac_mini_m1
     environment:
-      flutter: 3.38.9
+      flutter: 3.44.6
       cocoapods: default
     scripts:
       - name: Get dependencies

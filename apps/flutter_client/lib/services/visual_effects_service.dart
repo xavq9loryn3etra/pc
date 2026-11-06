@@ -22,8 +22,9 @@ import '../widgets/glass_probe.dart';
 ///    selector — so a slow phone has plain glass before its first page
 ///    with glass on it ([needsProbe], [probeResult]);
 ///  * all along, from the frames the app really draws ([_watch]): a phone
-///    clearly struggling switches at once; one only slightly behind, in
-///    two separate sessions — a phone can just be busy or hot for a while.
+///    clearly struggling switches; one only slightly behind, in two
+///    separate sessions — a phone can just be busy or hot for a while —
+///    unless the probe found it had room to spare ([_roomy]).
 class VisualEffectsService {
   static final VisualEffectsService _instance =
       VisualEffectsService._internal();
@@ -58,6 +59,8 @@ class VisualEffectsService {
         decision['version'] == _version &&
         decision['probe'] == GlassProbe.version) {
       _tooSlow = decision['plain'] == true;
+      final share = decision['share'];
+      _probeShare = share is num ? share.toDouble() : null;
     } else {
       // New install, a new version or a new probe: measure again — a phone
       // once too slow gets another chance as the app gets lighter. And
@@ -72,11 +75,23 @@ class VisualEffectsService {
     Timer(const Duration(seconds: 5), _watch);
   }
 
-  /// GlassProbe's verdict: whether the blur was too slow on this phone.
-  Future<void> probeResult({required bool tooSlow}) async {
+  /// GlassProbe's verdict: whether the blur was too slow on this phone,
+  /// and its typical frame's share of the frame's time ([share]).
+  Future<void> probeResult({required bool tooSlow, double? share}) async {
     _needsProbe = false;
+    _probeShare = share;
     await _decide(tooSlow: tooSlow);
   }
+
+  // The probe's measure of this phone (see probeResult): under
+  // [_roomyShare], it has room to spare for the glass, and the watcher
+  // only steps in for sustained, clear slowness — not a heavy moment or
+  // two, which twice switched a Galaxy S25 Ultra (drawing the probe in
+  // 1.5–3 ms of its 8.3) to plain glass: once on opening a person's sheet
+  // and pulling it closed, in each of two sessions.
+  double? _probeShare;
+  static const _roomyShare = 0.5;
+  bool get _roomy => (_probeShare ?? 1) < _roomyShare;
 
   Future<void> _decide({required bool tooSlow}) async {
     _tooSlow = tooSlow;
@@ -88,6 +103,7 @@ class VisualEffectsService {
           'version': _version,
           'probe': GlassProbe.version,
           'plain': tooSlow,
+          if (_probeShare != null) 'share': _probeShare,
         }));
     if (tooSlow) await prefs.remove(_strikesKey);
   }
@@ -123,10 +139,11 @@ class VisualEffectsService {
   static const _stutterRefreshes = 1.5;
   // How many gaps make up one judgement.
   static const _window = 60;
-  // Stutters in a window: at least this share is clearly too slow, and
-  // switches at once…
+  // Stutters in a window: at least this share, twice in a session, is
+  // clearly too slow, and switches at once…
   static const _clearlySlow = 0.40;
-  // …and at least this share is borderline: a strike for this session. A
+  // …and at least this share is borderline: a strike for this session —
+  // each only from a second such window in a session (see _judge). A
   // Galaxy S25 Ultra, smooth with the glass, still had a window at 12%
   // while opening and closing pages over and over — 10% struck it twice.
   static const _borderline = 0.20;
@@ -178,11 +195,21 @@ class VisualEffectsService {
     }
   }
 
+  // Windows this session past each mark. One alone is a heavy moment —
+  // a person's sheet opening on a Galaxy S25 Ultra had 28% while it laid
+  // out its whole page at once — not a phone that can't keep up: that
+  // counts only when it happens again.
+  int _slowWindows = 0;
+  int _borderlineWindows = 0;
+
   void _judge(List<bool> stutters) {
     final share = stutters.where((s) => s).length / stutters.length;
-    if (share >= _clearlySlow) {
+    if (share >= _clearlySlow && ++_slowWindows >= 2) {
       _decide(tooSlow: true);
-    } else if (share >= _borderline && !_struckThisSession) {
+    } else if (!_roomy &&
+        share >= _borderline &&
+        ++_borderlineWindows >= 2 &&
+        !_struckThisSession) {
       _struckThisSession = true;
       _strike();
     }

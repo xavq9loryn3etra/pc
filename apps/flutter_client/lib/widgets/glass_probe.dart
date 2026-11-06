@@ -19,7 +19,7 @@ class GlassProbe extends StatefulWidget {
 
   /// Changes whenever how this measures or judges does, so phones that
   /// were judged by an older probe are measured again.
-  static const version = 6;
+  static const version = 8;
 
   @override
   State<GlassProbe> createState() => _GlassProbeState();
@@ -77,7 +77,8 @@ class _GlassProbeState extends State<GlassProbe>
         '${(typical / 1000).toStringAsFixed(1)} ms of '
         '${(frame / 1000).toStringAsFixed(1)} ms → '
         '${tooSlow ? 'plain glass' : 'frosted glass'}');
-    VisualEffectsService().probeResult(tooSlow: tooSlow);
+    VisualEffectsService()
+        .probeResult(tooSlow: tooSlow, share: typical / frame);
     if (mounted) setState(() {});
   }
 

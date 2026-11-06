@@ -148,10 +148,12 @@ class _PersonSheetState extends State<PersonSheet> {
     return EpisodeSheetFrame(
       frosted: true,
       image: widget.member.profileUrl,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * 0.92,
-        ),
+      // Tall from the start, not sized to its page: working out the page's
+      // height meant building every poster as it loaded — some sixty at
+      // once, the sheet still sliding up — where now only those in view
+      // are, as they scroll in.
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.92,
         child: FutureBuilder<Person?>(
           future: _person,
           builder: (context, snapshot) {
@@ -169,7 +171,6 @@ class _PersonSheetState extends State<PersonSheet> {
             final both = movies.isNotEmpty && shows.isNotEmpty;
             final grid = both ? (_shows ? shows : movies) : credits;
             return CustomScrollView(
-              shrinkWrap: true,
               // Pulling past the top drags the sheet (EpisodeSheetFrame).
               physics: const ClampingScrollPhysics(),
               slivers: [

@@ -69,6 +69,8 @@
 	<string>Popcorn doesn't use the camera. This is only needed by the file picker used to import and export backups.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Popcorn doesn't use the microphone. This is only needed by the file picker used to import and export backups.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Popcorn doesn't use your location. This is only needed by the file picker used to import and export backups.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

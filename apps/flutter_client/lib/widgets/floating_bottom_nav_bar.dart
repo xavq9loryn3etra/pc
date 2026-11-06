@@ -4,6 +4,7 @@ import 'glass_blur.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import '../services/movie_tab_service.dart';
+import 'app_icon.dart';
 
 /// The tabs, in MovieTabShell's order. [ai] only in the movies mode (see
 /// FloatingBottomNavBar.tabsFor).
@@ -319,7 +320,7 @@ class _NavCircle extends StatelessWidget {
   }
 }
 
-/// Ask's button: its orb (see AskOrb) with the sparkle on it — in colour
+/// Ask's button: its orb (see AskOrb) with the app's icon on it — in colour
 /// on its own tab, dim greys on the others. No ring: its colour, spilling
 /// a little past its edge, marks it out.
 class _AiCircle extends StatelessWidget {
@@ -341,13 +342,14 @@ class _AiCircle extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           customBorder: const CircleBorder(),
+          // The app's own icon, as before "Ask" in its title — not the
+          // sparkles every AI feature has.
           child: Center(
-            child: Icon(
-              isActive
-                  ? Icons.auto_awesome_rounded
-                  : Icons.auto_awesome_outlined,
+            // As big as the other buttons' icons look: theirs are 24 with
+            // room round the glyph, this fills its box.
+            child: const AppIcon(
+              size: 21,
               color: Colors.white,
-              size: 24,
               semanticLabel: 'Popcorn Ask',
             ),
           ),

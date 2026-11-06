@@ -84,7 +84,7 @@ class AskClockSubscription with WidgetsBindingObserver {
 
 /// Ask's orb, its logo: soft blobs of the app's colours drifting about
 /// inside a circle [size] across, after Gemini's, with [child] (the
-/// sparkle) over them. [colour] from 0, dim greys, to 1, full colour — and
+/// app's icon) over them. [colour] from 0, dim greys, to 1, full colour — and
 /// then a little glow spilling past its edge. Drawn as plain radial
 /// gradients: no blur, blend modes or layers.
 class AskOrb extends StatefulWidget {

@@ -18,6 +18,7 @@ import '../widgets/glass_blur.dart';
 import '../widgets/movie_poster.dart';
 import '../widgets/screen_scaffold.dart';
 import 'details_screen.dart';
+import '../widgets/app_icon.dart';
 
 /// One question asked on [AskScreen], and its answer once it's in.
 class _Turn {
@@ -427,11 +428,7 @@ class _AskScreenState extends State<AskScreen>
         mainAxisSize: MainAxisSize.min,
         children: [
           Iridescent(
-            child: Image.asset(
-              'assets/icon-transparent.png',
-              width: 28,
-              height: 28,
-            ),
+            child: const AppIcon(size: 28),
           ),
           const SizedBox(width: 10),
           const Text('Ask', semanticsLabel: 'Popcorn Ask'),
@@ -645,12 +642,7 @@ class _AskScreenState extends State<AskScreen>
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Image.asset(
-                  'assets/icon-transparent.png',
-                  width: 13,
-                  height: 13,
-                  color: silver,
-                ),
+                const AppIcon(size: 13, color: silver),
                 const SizedBox(width: 4),
                 const Text(
                   'Ask',
@@ -1113,10 +1105,17 @@ class _TracePainter extends CustomPainter {
     final metrics = _metrics, total = _total;
     if (total <= 0) return;
 
-    // Once round, gently easing in and out; fading over the last quarter.
+    // Once round, gently easing in and out. The tail grows out behind the
+    // head, and at the end catches it up — the line drawing itself into
+    // its tip as it fades, rather than stopping and fading where it was.
     final head = start() + Curves.easeInOutSine.transform(t);
-    final fade = t < 0.75 ? 1.0 : (1 - t) / 0.25;
-    final length = _length * math.min(1.0, t / 0.25);
+    final grow = Curves.easeOut.transform(math.min(1.0, t / 0.25));
+    final shrink = t < 0.6
+        ? 1.0
+        : 1 - Curves.easeInOutCubic.transform((t - 0.6) / 0.4);
+    final fade = t < 0.7 ? 1.0 : 1 - Curves.easeIn.transform((t - 0.7) / 0.3);
+    final length = _length * grow * shrink;
+    if (length <= 0) return;
 
     // Square ends, the pieces meeting edge to edge: round ends overlapped,
     // and the overlaps showed as brighter dots along the line.

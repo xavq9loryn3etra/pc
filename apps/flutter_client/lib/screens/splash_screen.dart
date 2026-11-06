@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/iridescent.dart';
+import '../widgets/app_icon.dart';
 
 /// Startup intro shown while main.dart's config/first-launch checks run,
 /// straight out of the (plain black) native launch screen: the popcorn icon
@@ -99,11 +100,7 @@ class _SplashScreenState extends State<SplashScreen>
           // The app's iridescent finish over the (cream) icon artwork —
           // only its shape is used.
           child: Iridescent(
-            child: Image.asset(
-              'assets/icon-transparent.png',
-              width: _iconSize,
-              height: _iconSize,
-            ),
+            child: const AppIcon(size: _iconSize),
           ),
         ),
       ),

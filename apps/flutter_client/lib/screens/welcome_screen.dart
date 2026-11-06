@@ -4,6 +4,7 @@ import '../theme/iridescent.dart';
 import '../services/feature_flags_service.dart';
 import '../widgets/poster_wall.dart';
 import '../widgets/status_screen.dart';
+import '../widgets/app_icon.dart';
 
 class WelcomeScreen extends StatefulWidget {
   final VoidCallback onGetStarted;
@@ -87,11 +88,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                     // Popcorn mode's logo: this screen introduces all three
                     // modes.
                     Iridescent(
-                      child: Image.asset(
-                        'assets/icon-transparent.png',
-                        width: 72,
-                        height: 72,
-                      ),
+                      child: const AppIcon(size: 72),
                     ),
                     const SizedBox(height: 24),
                     const Text(

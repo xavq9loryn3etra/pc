@@ -100,7 +100,6 @@ flutter:
     - assets/book-app-logo.svg
     - assets/reader.html
     - assets/loader.json
-    - assets/icon-transparent.png
     - assets/welcome/movies/
     - assets/welcome/music/
     - assets/welcome/books/
@@ -143,15 +142,10 @@ flutter:
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
 
-flutter_icons:
+flutter_launcher_icons:
   android: true
   ios: true
   image_path: "assets/icon.png"
   min_sdk_android: 21
-  windows:
-    generate: true
-    image_path: "assets/icon-transparent.png"
-    icon_size: 48
-  macos:
-    generate: true
-    image_path: "assets/icon-transparent.png"
+  # The App Store refuses icons with an alpha channel.
+  remove_alpha_ios: true

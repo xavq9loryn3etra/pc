@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shimmer/shimmer.dart';
+import 'app_icon.dart';
 
 /// App-icon loading indicator with a shimmer sweep, for full-screen/near-
 /// full-screen loading states — the same treatment already used for the
@@ -16,11 +17,7 @@ class ShimmerLoader extends StatelessWidget {
     return Shimmer.fromColors(
       baseColor: Colors.grey[900]!,
       highlightColor: Colors.grey[800]!,
-      child: Image.asset(
-        'assets/icon-transparent.png',
-        width: size,
-        height: size,
-      ),
+      child: AppIcon(size: size),
     );
   }
 }

@@ -1,9 +1,10 @@
 name: Build libtorrent native libs
 
 # Builds the torrent engine (libtorrent + the libtorrent_flutter bridge) from
-# source for Android and iOS, and publishes the zips to the GitHub Release
-# named in PREBUILT_RELEASE_URL. The app's Gradle/CocoaPods builds download
-# from there. Run it manually after bumping that URL or changing the bridge.
+# source for Android, iOS and Windows, and publishes the zips to the GitHub
+# Release named in PREBUILT_RELEASE_URL. The app's Gradle/CocoaPods/CMake
+# builds download from there. Run it manually after bumping that URL or
+# changing the bridge.
 on:
   workflow_dispatch:
 
@@ -62,8 +63,27 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+  windows:
+    name: Windows (x64)
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      WORK_DIR: ${{ github.workspace }}/_native
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash "$NATIVE_DIR/fetch_sources.sh"
+      - run: bash "$NATIVE_DIR/build_windows.sh" dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/*.zip
+          if-no-files-found: error
+
   release:
-    needs: [android, ios]
+    needs: [android, ios, windows]
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}

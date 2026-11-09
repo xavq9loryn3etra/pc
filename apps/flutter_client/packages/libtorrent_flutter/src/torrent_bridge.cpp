@@ -34,6 +34,8 @@
 #include <libtorrent/version.hpp>
 #include <libtorrent/file_storage.hpp>
 #include <libtorrent/download_priority.hpp>
+#include <libtorrent/read_resume_data.hpp>
+#include <libtorrent/write_resume_data.hpp>
 
 // ── cross-platform sockets ──────────────────────────────────────────────────────
 #ifdef _WIN32
@@ -81,6 +83,7 @@
 #include <functional>
 #include <cstdio>
 #include <fstream>
+#include <filesystem>
 #include <iterator>
 
 namespace lt  = libtorrent;
@@ -151,12 +154,111 @@ static std::string get_mime(const std::string& name) {
     return "application/octet-stream";
 }
 
+// ── resume data: what's downloaded, kept between sessions ──────────────────
+// A torrent added again (the app's next launch) used to know nothing of what
+// was already on disk: added from its magnet with no resume data, and with
+// no_recheck_incomplete_resume set — under which libtorrent 2.0 doesn't even
+// look for existing files (mmap_disk_io::do_check_fastresume returns before
+// its has_any_file check) — every piece was fetched again, a resumed
+// episode waiting on parts already downloaded. Now each torrent's resume
+// data (pieces had, and its metadata) is written next to its files,
+// ".popcorn-resume-<info hash>", and read back when it's added.
+
+static std::string hash_hex(const lt::info_hash_t& ih) {
+    const lt::sha1_hash h = ih.get_best();
+    static const char* digits = "0123456789abcdef";
+    std::string out;
+    out.reserve(40);
+    for (auto b : h) {
+        auto const v = static_cast<unsigned char>(b);
+        out.push_back(digits[v >> 4]);
+        out.push_back(digits[v & 15]);
+    }
+    return out;
+}
+
+static std::filesystem::path resume_file(const std::string& save_path,
+                                         const lt::info_hash_t& ih) {
+    return std::filesystem::u8path(save_path)
+        / std::filesystem::u8path(".popcorn-resume-" + hash_hex(ih));
+}
+
+static lt::info_hash_t hashes_of(const lt::add_torrent_params& p) {
+    return p.ti ? p.ti->info_hashes() : p.info_hashes;
+}
+
+// Writes [p] (a save_resume_data_alert's) beside the torrent's files —
+// through a temporary file, so a crash mid-write leaves the last one whole.
+static void write_resume(const lt::add_torrent_params& p) {
+    try {
+        if (p.save_path.empty()) return;
+        const std::vector<char> buf = lt::write_resume_data_buf(p);
+        const auto path = resume_file(p.save_path, hashes_of(p));
+        auto tmp = path;
+        tmp += ".tmp";
+        {
+            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+            out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+            if (!out) return;
+        }
+        std::error_code ec;
+        std::filesystem::rename(tmp, path, ec);
+    } catch (...) {}
+}
+
+// [atp] with the resume data kept for its torrent in [save_path], when
+// there is some for it: the pieces had and the metadata (no wait for
+// peers to send it), plus [atp]'s trackers. False, and [atp] as it was,
+// otherwise.
+static bool load_resume(lt::add_torrent_params& atp,
+                        const std::string& save_path) {
+    try {
+        const auto want = hashes_of(atp);
+        std::ifstream in(resume_file(save_path, want), std::ios::binary);
+        if (!in) return false;
+        std::vector<char> buf((std::istreambuf_iterator<char>(in)),
+                              std::istreambuf_iterator<char>());
+        if (buf.empty()) return false;
+        lt::error_code ec;
+        lt::add_torrent_params rd = lt::read_resume_data(buf, ec);
+        if (ec || !(hashes_of(rd) == want)) return false;
+        for (const auto& t : atp.trackers)
+            if (std::find(rd.trackers.begin(), rd.trackers.end(), t)
+                    == rd.trackers.end())
+                rd.trackers.push_back(t);
+        if (!rd.ti && atp.ti) rd.ti = atp.ti;
+        rd.save_path = save_path;
+        atp = std::move(rd);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 // ── fill torrent status struct ──────────────────────────────────────────────────
 static void fill_status(lt_torrent_status& out, int64_t id,
                         const lt::torrent_status& st)
 {
     out.id    = id;
-    out.state = static_cast<int32_t>(st.state);
+    // libtorrent 2.0 numbers its states from 1 (checking_files) with 0
+    // unused; the Dart side's from 0 (LT_STATE_*). Casting put every state
+    // one off — "finished" for downloading, "seeding" for finished.
+    switch (st.state) {
+        case lt::torrent_status::checking_files:
+            out.state = LT_STATE_CHECKING_FILES; break;
+        case lt::torrent_status::downloading_metadata:
+            out.state = LT_STATE_DOWNLOADING_META; break;
+        case lt::torrent_status::downloading:
+            out.state = LT_STATE_DOWNLOADING; break;
+        case lt::torrent_status::finished:
+            out.state = LT_STATE_FINISHED; break;
+        case lt::torrent_status::seeding:
+            out.state = LT_STATE_SEEDING; break;
+        case lt::torrent_status::checking_resume_data:
+            out.state = LT_STATE_CHECKING_RESUME; break;
+        default:
+            out.state = LT_STATE_UNKNOWN; break;
+    }
 
     if ((st.state == lt::torrent_status::finished ||
          st.state == lt::torrent_status::seeding) && st.progress < 0.999f)
@@ -968,6 +1070,35 @@ struct SessionWrapper {
     explicit SessionWrapper(lt::session_params params)
         : session(std::move(params)) {}
 
+    // Resume data asked for and not yet written (see request_resume_saves),
+    // and when it was last asked for of the torrents that changed.
+    std::atomic<int> resume_outstanding{0};
+    chr::steady_clock::time_point last_resume_save = chr::steady_clock::now();
+
+    // Asks each torrent with metadata for its resume data — those changed
+    // since it was last written, or all ([all], with what's in the disk
+    // cache written first): see the save_resume_data_alert in
+    // process_alerts. Stream-only torrents aren't kept.
+    void request_resume_saves(bool all) {
+        std::vector<lt::torrent_handle> hs;
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            for (auto& kv : handles)
+                if (!ephemeral_torrents.count(kv.first)) hs.push_back(kv.second);
+        }
+        for (auto& h : hs) {
+            try {
+                if (!h.is_valid() || !h.torrent_file()) continue;
+                if (!all && !h.need_save_resume_data()) continue;
+                resume_outstanding.fetch_add(1);
+                h.save_resume_data(all
+                    ? (lt::torrent_handle::save_info_dict
+                       | lt::torrent_handle::flush_disk_cache)
+                    : lt::torrent_handle::save_info_dict);
+            } catch (...) {}
+        }
+    }
+
     // ── TorrServer config — port of settings.BTSets (session-level defaults) ──
     lt_bt_config bt_config;
 
@@ -1006,6 +1137,13 @@ struct SessionWrapper {
     void process_alerts() {
         while (alert_running.load()) {
             try {
+                // Every 30 s, the resume data of torrents that changed: the
+                // app is often closed without the session being destroyed.
+                const auto now = chr::steady_clock::now();
+                if (now - last_resume_save > chr::seconds(30)) {
+                    last_resume_save = now;
+                    request_resume_saves(false);
+                }
                 if (!session.wait_for_alert(lt::milliseconds(100)))
                     continue;
                 std::vector<lt::alert*> alerts;
@@ -1054,6 +1192,17 @@ struct SessionWrapper {
                                     s->on_hash_failed(p);
                                 break;
                             }
+                        }
+
+                        // resume data → written beside the torrent's files
+                        else if (auto* sra = lt::alert_cast<lt::save_resume_data_alert>(a)) {
+                            write_resume(sra->params);
+                            if (resume_outstanding.load() > 0)
+                                resume_outstanding.fetch_sub(1);
+                        }
+                        else if (lt::alert_cast<lt::save_resume_data_failed_alert>(a)) {
+                            if (resume_outstanding.load() > 0)
+                                resume_outstanding.fetch_sub(1);
                         }
 
                         // metadata_received → pause and zero-out file priorities (stream-only)
@@ -1930,7 +2079,10 @@ TORRENT_API lt_session_t lt_create_session_with_state(const char* iface,
         sp.set_bool(lt::settings_pack::close_redundant_connections, true);
         sp.set_int (lt::settings_pack::peer_turnover,             5);
         sp.set_int (lt::settings_pack::peer_turnover_interval,    30);
-        sp.set_bool(lt::settings_pack::no_recheck_incomplete_resume, true);
+        // Off: with it on, a torrent added with no resume data (the first
+        // launch after resume data began to be kept, or a lost one) never
+        // looks at the files already on disk — they were downloaded again.
+        sp.set_bool(lt::settings_pack::no_recheck_incomplete_resume, false);
         sp.set_bool(lt::settings_pack::allow_multiple_connections_per_ip, true);
         sp.set_bool(lt::settings_pack::rate_limit_ip_overhead,    false);
         // whole_pieces_threshold=0: parallelize block requests across peers
@@ -1997,6 +2149,8 @@ TORRENT_API int lt_save_session_state(lt_session_t session,
     if (!session || !path || !*path) return 0;
     try {
         auto* sw = to_sw(session);
+        // (Called on the app being left or closed, and now and then.)
+        sw->request_resume_saves(false);
         const auto flags = lt::session_handle::save_dht_state;
         const std::vector<char> buf =
             lt::write_session_params_buf(sw->session.session_state(flags), flags);
@@ -2017,6 +2171,14 @@ TORRENT_API int lt_save_session_state(lt_session_t session,
 TORRENT_API void lt_destroy_session(lt_session_t session) {
     if (!session) return;
     auto* sw = to_sw(session);
+
+    // Every torrent's resume data, written (by the alert thread, still
+    // running) before anything stops — up to 3 s.
+    try {
+        sw->request_resume_saves(true);
+        for (int i = 0; i < 150 && sw->resume_outstanding.load() > 0; ++i)
+            std::this_thread::sleep_for(chr::milliseconds(20));
+    } catch (...) {}
 
     try {
         // stop all streams — move them out so we don't hold streams_mu while
@@ -2098,6 +2260,7 @@ TORRENT_API lt_torrent_id lt_add_magnet(lt_session_t session,
         lt::error_code ec;
         lt::add_torrent_params atp = lt::parse_magnet_uri(uri, ec);
         if (ec) { set_err(ec.message()); return -1; }
+        load_resume(atp, path);
         atp.save_path = path;
         atp.flags &= ~lt::torrent_flags::paused;
         atp.flags &= ~lt::torrent_flags::auto_managed;
@@ -2151,6 +2314,7 @@ TORRENT_API lt_torrent_id lt_add_torrent_file(lt_session_t session,
         if (ec) { set_err(ec.message()); return -1; }
         lt::add_torrent_params atp;
         atp.ti = ti; atp.save_path = path;
+        load_resume(atp, path);
         atp.flags &= ~lt::torrent_flags::paused;
         atp.flags &= ~lt::torrent_flags::auto_managed;
 
@@ -2180,6 +2344,14 @@ TORRENT_API void lt_remove_torrent(lt_session_t session,
     std::lock_guard<std::mutex> lk(sw->mu);
     auto it = sw->handles.find(id);
     if (it == sw->handles.end()) return;
+    if (del) {
+        try {
+            const auto st = it->second.status(lt::torrent_handle::query_save_path);
+            std::error_code fec;
+            std::filesystem::remove(
+                resume_file(st.save_path, it->second.info_hashes()), fec);
+        } catch (...) {}
+    }
     sw->session.remove_torrent(it->second,
         del ? lt::session::delete_files : lt::remove_flags_t{});
     sw->handles.erase(it);
@@ -2191,8 +2363,19 @@ TORRENT_API void lt_pause_torrent(lt_session_t session, lt_torrent_id id) {
     auto* sw = to_sw(session);
     std::lock_guard<std::mutex> lk(sw->mu);
     auto it = sw->handles.find(id);
-    if (it != sw->handles.end() && it->second.is_valid())
+    if (it != sw->handles.end() && it->second.is_valid()) {
         try { it->second.pause(); } catch (...) {}
+        // What it got, kept now: a paused torrent is one left (a player
+        // closed, a head start not taken).
+        if (!sw->ephemeral_torrents.count(id)) {
+            try {
+                if (it->second.torrent_file()) {
+                    sw->resume_outstanding.fetch_add(1);
+                    it->second.save_resume_data(lt::torrent_handle::save_info_dict);
+                }
+            } catch (...) {}
+        }
+    }
 }
 
 TORRENT_API void lt_resume_torrent(lt_session_t session, lt_torrent_id id) {

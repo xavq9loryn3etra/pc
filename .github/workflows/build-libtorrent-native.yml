@@ -70,10 +70,11 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      WORK_DIR: ${{ github.workspace }}/_native
     steps:
       - uses: actions/checkout@v4
+      # D:/a/... — with backslashes (github.workspace's D:\...) tar
+      # takes the drive letter's colon for a remote host and fails.
+      - run: echo "WORK_DIR=$(cygpath -m "$GITHUB_WORKSPACE")/_native" >> "$GITHUB_ENV"
       - run: bash "$NATIVE_DIR/fetch_sources.sh"
       - run: bash "$NATIVE_DIR/build_windows.sh" dist
       - uses: actions/upload-artifact@v4

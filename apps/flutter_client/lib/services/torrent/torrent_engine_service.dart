@@ -228,6 +228,7 @@ class TorrentEngineService {
   /// download budget.
   StreamResult startStream(int id, {int? fileIndex}) {
     _streaming.add(id);
+    _held.remove(id); // Resumed below.
 
     // Torrents stay registered after their player closes (see pause()), so
     // a resumed watch doesn't need to refetch already-cached bytes. Pause
@@ -626,6 +627,7 @@ class TorrentEngineService {
   void cleanup(int torrentId) {
     _idsByHash.removeWhere((_, id) => id == torrentId);
     _streaming.remove(torrentId);
+    _held.remove(torrentId);
     _warmStreams.remove(torrentId); // Its streams go with it.
     _cancelReadAhead(torrentId);
     try {
@@ -646,6 +648,7 @@ class TorrentEngineService {
   /// [streamMagnet]).
   void pause(int torrentId) {
     _streaming.remove(torrentId);
+    _held.remove(torrentId);
     _warmStreams.remove(torrentId); // Stopped below.
     _cancelReadAhead(torrentId);
     try {
@@ -671,6 +674,48 @@ class TorrentEngineService {
       print('Error resuming torrent $torrentId: $e');
     }
   }
+
+  // Streaming torrents whose download is on hold, and why (see _hold). Only
+  // these are let go again, so one paused for another reason — the old
+  // copy during a switch — isn't restarted along with them.
+  final Map<int, Set<_Hold>> _held = {};
+
+  /// Pauses the download of every streaming torrent, leaving its stream
+  /// open, until [_release] with the same [why].
+  void _hold(_Hold why) {
+    if (!_initialized) return;
+    for (final id in _streaming) {
+      final reasons = _held[id];
+      if (reasons != null) {
+        reasons.add(why);
+        continue;
+      }
+      // Already paused by something else: left to whoever did that.
+      if (engine.torrents[id]?.isPaused ?? true) continue;
+      _held[id] = {why};
+      try {
+        engine.pauseTorrent(id);
+      } catch (e) {
+        print('Error pausing torrent $id: $e');
+      }
+    }
+  }
+
+  void _release(_Hold why) {
+    for (final id in [..._held.keys]) {
+      final reasons = _held[id]!..remove(why);
+      if (reasons.isNotEmpty) continue;
+      _held.remove(id);
+      resume(id); // Nothing, if it has stopped streaming meanwhile.
+    }
+  }
+
+  /// Stops what's streaming from downloading while the app has been in the
+  /// background too long (see BackgroundDownloadService), keeping its
+  /// stream open; [resumeFromBackground] lets it carry on.
+  void pauseForBackground() => _hold(_Hold.background);
+
+  void resumeFromBackground() => _release(_Hold.background);
 
   /// Shrinks or restores how far ahead of the current read position a live
   /// stream is allowed to buffer, without stopping/restarting it. Used to
@@ -713,6 +758,10 @@ typedef WarmTarget = ({
 /// What a head start may spend: Wi-Fi or a cable, metered mobile data, or
 /// neither (offline, or unknown).
 enum _Network { unmetered, mobile, none }
+
+/// Why a streaming torrent's download is on hold: the app has been in the
+/// background too long.
+enum _Hold { background }
 
 class StreamResult {
   final int torrentId;

@@ -49,10 +49,13 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
-        <!-- flutter_foreground_task's service. Do not change the name. -->
+        <!-- flutter_foreground_task's service. Do not change the name.
+             stopWithTask: swiping the app away ends it, rather than the
+             plugin restarting it with nothing left to download for. -->
         <service
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
             android:foregroundServiceType="dataSync"
+            android:stopWithTask="true"
             android:exported="false" />
     </application>
     <!-- Required to query activities that can process text, see:

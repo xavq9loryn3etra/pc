@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'torrent/torrent_engine_service.dart';
 
 /// Keeps torrent buffering/seeding alive while the app is backgrounded during
 /// playback (video/audio itself is paused, but the download shouldn't be
@@ -48,18 +50,59 @@ class BackgroundDownloadService {
   // start()/stop() run one after another, never interleaved.
   Future<void> _queue = Future.value();
 
+  /// How long a torrent keeps downloading once the app is in the
+  /// background: long enough to buffer ahead of a short break, not all
+  /// night for a player left open (Android also allows this kind of
+  /// service only 6 hours a day).
+  static const Duration backgroundLimit = Duration(minutes: 10);
+  Timer? _limitTimer;
+  // Whether the limit was reached: what's streaming was paused, and is
+  // resumed when the app comes back.
+  bool _limitReached = false;
+
   /// Doesn't ask for the notification permission: the player already did
   /// when it started (see PlayerScreen._initMediaSession) — asking here, as
   /// the app goes to the background, put the prompt over the home screen.
   Future<void> start() {
     if (!Platform.isAndroid) return Future.value();
+    _limitTimer?.cancel();
+    _limitTimer = Timer(backgroundLimit, _onLimit);
     _wanted = true;
     return _queue = _queue.then((_) => _sync());
   }
 
-  /// Safe to call when nothing is running (e.g. at app start).
+  /// Safe to call when nothing is running (e.g. at app start). Lets what's
+  /// streaming download again if [backgroundLimit] paused it.
   Future<void> stop() {
     if (!Platform.isAndroid) return Future.value();
+    _limitTimer?.cancel();
+    _limitTimer = null;
+    if (_limitReached) {
+      _limitReached = false;
+      try {
+        TorrentEngineService.instance.resumeFromBackground();
+      } catch (e) {
+        print('Error resuming torrents after the background limit: $e');
+      }
+    }
+    return _stopService();
+  }
+
+  /// [backgroundLimit] reached with the app still away: the download
+  /// pauses (its stream stays open, so playback carries on when the app
+  /// is back) and the service goes, with its wake and Wi-Fi locks.
+  void _onLimit() {
+    _limitTimer = null;
+    _limitReached = true;
+    try {
+      TorrentEngineService.instance.pauseForBackground();
+    } catch (e) {
+      print('Error pausing torrents for the background limit: $e');
+    }
+    _stopService();
+  }
+
+  Future<void> _stopService() {
     _wanted = false;
     return _queue = _queue.then((_) => _sync());
   }

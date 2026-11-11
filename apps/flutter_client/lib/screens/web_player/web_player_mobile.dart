@@ -190,6 +190,8 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
   // What season the drawer is currently browsing (may differ from playing)
   int? _browsingSeason;
   late List<Episode> _episodes;
+  // When progress from the page was last saved (ms since epoch).
+  int _lastProgressSave = 0;
 
   // YouTube-style continuous gyro rotation
   StreamSubscription? _accelSubscription;
@@ -337,22 +339,28 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
               return;
             }
 
-            // JSON progress updates
+            // JSON progress updates. Any frame on the page (ads included)
+            // can post here, so only the position is taken from it — the
+            // title and episode are the ones this player has open — and
+            // only a sane one, at most once every 4 s.
             final dynamic data = jsonDecode(message.message);
             if (data is Map) {
               if (data['type'] == 'pause' || data['type'] == 'timeupdate') {
                 final double currentTime =
                     (data['currentTime'] as num).toDouble();
                 final double duration = (data['duration'] as num).toDouble();
-                final int? s = data.containsKey('season') ? data['season'] as int : _currentSeason;
-                final int? e = data.containsKey('episode') ? data['episode'] as int : _currentEpisode;
+                final p = currentTime / duration;
+                if (!p.isFinite || p < 0 || p > 1) return;
+                final now = DateTime.now().millisecondsSinceEpoch;
+                if (now - _lastProgressSave < 4000) return;
 
                 if (duration > 60 && mounted) {
+                  _lastProgressSave = now;
                   SavedMoviesService().addToHistory(
                     widget.movie,
-                    season: s,
-                    episode: e,
-                    progress: currentTime / duration,
+                    season: _currentSeason,
+                    episode: _currentEpisode,
+                    progress: p,
                   );
                 }
               }

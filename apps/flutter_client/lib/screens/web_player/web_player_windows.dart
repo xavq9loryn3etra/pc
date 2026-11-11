@@ -232,6 +232,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
               "DEBUG: Pause event - currentTime=$currentTime, duration=$total");
           if (total > 60) {
             final double progress = currentTime / total;
+            if (!_isSaneProgress(progress)) return;
             print("DEBUG: Attempting pause save with progress=$progress");
             _saveProgress(progress);
           } else {
@@ -244,6 +245,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
 
           if (total > 60) {
             final double progress = currentTime / total;
+            if (!_isSaneProgress(progress)) return;
             final now = DateTime.now().millisecondsSinceEpoch;
             if (now - _lastUpdate > 4000) {
               print("DEBUG: Periodic save with progress=$progress");
@@ -257,6 +259,10 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
       print("DEBUG: Message handler error: $e");
     }
   }
+
+  // Any frame on the page can post messages; a position outside the
+  // video (or NaN) isn't one to save.
+  static bool _isSaneProgress(double p) => p.isFinite && p >= 0 && p <= 1;
 
   void _saveProgress(double progress) {
     print(

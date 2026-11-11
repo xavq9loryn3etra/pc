@@ -621,6 +621,12 @@ class _PlayerScreenState extends State<PlayerScreen>
       // before it — up to ~10s of video in x265 releases, and slow to decode
       // — which kept a seek spinning long after its data had arrived.
       'hr-seek': 'no',
+      // The torrent server can go quiet for well over media_kit's 5 s while
+      // a piece arrives; at 5 s the read was dropped and mpv took it for the
+      // end of the file — playback just stopped. Wait longer, and reconnect
+      // (at the same spot) if the connection does drop.
+      'network-timeout': '60',
+      'stream-lavf-o': 'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5',
     }.entries) {
       if (!mounted) return;
       await mpv.setProperty(p.key, p.value);

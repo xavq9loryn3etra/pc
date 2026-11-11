@@ -309,12 +309,17 @@ class TorrentIndexService {
   factory TorrentIndexService() => _instance;
   TorrentIndexService._internal();
 
-  final Dio _dio = Dio();
+  // A connect timeout of its own: without one, a finder whose address
+  // doesn't answer at all held the search for minutes.
+  final Dio _dio = Dio(BaseOptions(connectTimeout: const Duration(seconds: 8)));
 
   /// Once this long has passed and some finder has answered, the rest are
   /// no longer waited for — a slow one (Torrentio on a cache miss can take
   /// 20s) shouldn't hold up what the others already found.
   static const _patience = Duration(seconds: 8);
+
+  /// The longest a search waits, whatever the finders are doing.
+  static const _cap = Duration(seconds: 30);
 
   // YTS keeps moving its address; the old ones forward to the new.
   static const _ytsApis = [
@@ -345,7 +350,8 @@ class TorrentIndexService {
   /// gives null when it failed, as opposed to an empty list for "none".
   ///
   /// Returns once every lookup has answered, or [patience] has passed and
-  /// one has found something. The result is [Gathered.complete] only when
+  /// one has found something, or [cap] has passed in any case (with what
+  /// there is, possibly nothing). The result is [Gathered.complete] only when
   /// every lookup answered without failing; otherwise [Gathered.rest], if
   /// some were still going, gives the whole list once they have all
   /// answered — or null if any failed.
@@ -353,6 +359,7 @@ class TorrentIndexService {
   static Future<Gathered> gather(
     List<Future<List<TorrentStream>?>> lookups, {
     Duration patience = _patience,
+    Duration cap = _cap,
   }) async {
     final found = List<List<TorrentStream>?>.filled(lookups.length, null);
     final done = Completer<void>();
@@ -381,9 +388,13 @@ class TorrentIndexService {
       patienceUp = true;
       check();
     });
+    final capTimer = Timer(cap, () {
+      if (!done.isCompleted) done.complete();
+    });
     if (lookups.isEmpty) done.complete();
     await done.future;
     patienceTimer.cancel();
+    capTimer.cancel();
 
     final complete = pending == 0 && !failed;
     return (

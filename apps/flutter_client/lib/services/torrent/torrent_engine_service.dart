@@ -659,7 +659,12 @@ class TorrentEngineService {
   /// Undo the pause [streamMagnet] puts every other torrent in — for going
   /// back to what was playing when starting something else failed. Its
   /// stream was never stopped, so the player can just carry on.
+  ///
+  /// Does nothing once the torrent is no longer streaming: [pause] (the
+  /// player closing) takes it off, and a late resume from a switch that
+  /// finished after the player closed mustn't restart its download.
   void resume(int torrentId) {
+    if (!_streaming.contains(torrentId)) return;
     try {
       engine.resumeTorrent(torrentId);
     } catch (e) {

@@ -25,6 +25,7 @@ import 'theme/app_theme.dart';
 import 'widgets/glass_blur.dart';
 
 import 'services/app_mode_service.dart';
+import 'services/background_download_service.dart';
 import 'services/saved_movies_service.dart';
 import 'services/deep_link_service.dart';
 import 'services/feature_flags_service.dart';
@@ -113,6 +114,11 @@ void main() async {
   await _initStep('FeatureFlagsService', FeatureFlagsService().init);
   await _initStep('VisualEffectsService', VisualEffectsService().init);
   await _initStep('DownloadAheadSettings', DownloadAheadSettings().init);
+  // A background-buffering service left running by a previous run (the
+  // app swiped away mid-playback) has nothing to keep alive now. Not
+  // awaited: nothing at startup depends on it.
+  unawaited(_initStep(
+      'BackgroundDownloadService', BackgroundDownloadService.instance.stop));
   // Not awaited: this spins up the native libtorrent engine (DHT bootstrap,
   // tracker connections), which isn't needed until the user actually starts
   // streaming something. Awaiting it here delayed the first frame on every

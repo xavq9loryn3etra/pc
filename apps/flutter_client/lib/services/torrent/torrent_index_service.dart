@@ -1,6 +1,17 @@
 import 'dart:async';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
+/// What the finders listed for a title (see TorrentIndexService.gather):
+/// [streams]; whether that's [complete] — every finder answered, none
+/// failed — and, if some were still going, [rest]: everything, once they
+/// have all answered, or null if any failed.
+typedef Gathered = ({
+  List<TorrentStream> streams,
+  bool complete,
+  Future<List<TorrentStream>?>? rest,
+});
 
 class TorrentStream {
   final String infoHash;
@@ -316,27 +327,37 @@ class TorrentIndexService {
   static const _pirateBayMovieCategories = {'201', '202', '207', '209', '211'};
   static const _pirateBayTvCategories = {'205', '208', '212'};
 
-  Future<List<TorrentStream>> getMovieStreams(String imdbId) => _gather([
+  Future<Gathered> getMovieStreams(String imdbId) => gather([
         _torrentio('movie/$imdbId'),
         _yts(imdbId),
         _pirateBay(imdbId),
       ]);
 
-  Future<List<TorrentStream>> getSeriesStreams(
-          String imdbId, int season, int episode) =>
-      _gather([
+  Future<Gathered> getSeriesStreams(String imdbId, int season, int episode) =>
+      gather([
         _torrentio('series/$imdbId:$season:$episode'),
         _pirateBay(imdbId, season: season, episode: episode),
       ]);
 
   /// Runs [lookups] together and combines their torrents, keeping the
   /// first lookup's copy of a torrent several of them find (Torrentio's
-  /// carries the most: file index, season-pack info, languages).
-  Future<List<TorrentStream>> _gather(
-      List<Future<List<TorrentStream>>> lookups) async {
+  /// carries the most: file index, season-pack info, languages). A lookup
+  /// gives null when it failed, as opposed to an empty list for "none".
+  ///
+  /// Returns once every lookup has answered, or [patience] has passed and
+  /// one has found something. The result is [Gathered.complete] only when
+  /// every lookup answered without failing; otherwise [Gathered.rest], if
+  /// some were still going, gives the whole list once they have all
+  /// answered — or null if any failed.
+  @visibleForTesting
+  static Future<Gathered> gather(
+    List<Future<List<TorrentStream>?>> lookups, {
+    Duration patience = _patience,
+  }) async {
     final found = List<List<TorrentStream>?>.filled(lookups.length, null);
     final done = Completer<void>();
     var pending = lookups.length;
+    var failed = false;
     var patienceUp = false;
     void check() {
       if (done.isCompleted) return;
@@ -344,20 +365,37 @@ class TorrentIndexService {
       if (pending == 0 || (patienceUp && anyFound)) done.complete();
     }
 
-    for (var i = 0; i < lookups.length; i++) {
-      lookups[i].then((streams) {
-        found[i] = streams;
-        pending--;
-        check();
-      });
-    }
-    final patience = Timer(_patience, () {
+    final answered = [
+      for (var i = 0; i < lookups.length; i++)
+        lookups[i].then((streams) {
+          if (streams == null) failed = true;
+          found[i] = streams;
+        }, onError: (Object _) {
+          failed = true;
+        }).whenComplete(() {
+          pending--;
+          check();
+        }),
+    ];
+    final patienceTimer = Timer(patience, () {
       patienceUp = true;
       check();
     });
+    if (lookups.isEmpty) done.complete();
     await done.future;
-    patience.cancel();
+    patienceTimer.cancel();
 
+    final complete = pending == 0 && !failed;
+    return (
+      streams: _merge(found),
+      complete: complete,
+      rest: pending == 0
+          ? null
+          : Future.wait(answered).then((_) => failed ? null : _merge(found)),
+    );
+  }
+
+  static List<TorrentStream> _merge(List<List<TorrentStream>?> found) {
     final byHash = <String, TorrentStream>{};
     for (final streams in found) {
       for (final s in streams ?? const <TorrentStream>[]) {
@@ -369,7 +407,7 @@ class TorrentIndexService {
     return byHash.values.toList();
   }
 
-  Future<List<TorrentStream>> _torrentio(String path) async {
+  Future<List<TorrentStream>?> _torrentio(String path) async {
     final url = 'https://torrentio.strem.fun/stream/$path.json';
     try {
       final response = await _dio.get(
@@ -396,7 +434,7 @@ class TorrentIndexService {
     } catch (e) {
       print('Error fetching torrents from Torrentio ($url): $e');
     }
-    return [];
+    return null; // Failed, rather than found nothing.
   }
 
   Options get _quickOptions => Options(
@@ -405,7 +443,7 @@ class TorrentIndexService {
         receiveTimeout: const Duration(seconds: 8),
       );
 
-  Future<List<TorrentStream>> _yts(String imdbId) async {
+  Future<List<TorrentStream>?> _yts(String imdbId) async {
     for (final api in _ytsApis) {
       try {
         final response = await _dio.get(
@@ -437,14 +475,14 @@ class TorrentIndexService {
         print('Error fetching torrents from YTS ($api): $e');
       }
     }
-    return [];
+    return null; // Every address failed.
   }
 
   /// The Pirate Bay's torrents tagged with [imdbId]. For an episode
   /// ([season] and [episode] given), only torrents of that one episode:
   /// which of a season pack's files is the episode can't be told before
   /// its metadata arrives.
-  Future<List<TorrentStream>> _pirateBay(
+  Future<List<TorrentStream>?> _pirateBay(
     String imdbId, {
     int? season,
     int? episode,
@@ -486,6 +524,6 @@ class TorrentIndexService {
     } catch (e) {
       print('Error fetching torrents from The Pirate Bay ($imdbId): $e');
     }
-    return [];
+    return null;
   }
 }

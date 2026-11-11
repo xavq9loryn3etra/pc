@@ -155,11 +155,23 @@ class StreamResolver {
         ? await _indexService.getMovieStreams(imdbId)
         : await _indexService.getSeriesStreams(
             imdbId, season ?? 1, episode ?? 1);
-    // Nothing found may be a failed lookup: asked again next time.
-    if (found.isNotEmpty) {
-      _found[key] = (at: DateTime.now(), streams: List.unmodifiable(found));
+    void keep(List<TorrentStream> streams) {
+      if (streams.isEmpty) return;
+      _found[key] = (at: DateTime.now(), streams: List.unmodifiable(streams));
     }
-    return found;
+
+    // Only a full answer is kept: a finder that failed, or wasn't waited
+    // for (Torrentio can take 20s), may have had the season packs and most
+    // of the copies — asked again next time. One still going is kept when
+    // it has answered, if they all did.
+    if (found.complete) {
+      keep(found.streams);
+    } else {
+      found.rest?.then((all) {
+        if (all != null) keep(all);
+      });
+    }
+    return found.streams;
   }
 
   // Words that mark a release as filmed in a cinema: camera (CAM, HDCAM),

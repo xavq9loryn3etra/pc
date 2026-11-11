@@ -31,6 +31,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
   bool _showControls = false;
   Timer? _hideTimer;
   StreamSubscription? _webMessageSub;
+  StreamSubscription<String>? _urlSub;
 
   @override
   void initState() {
@@ -48,6 +49,13 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
 
       _webMessageSub = _controller.webMessage.listen((msg) {
         _handleMessage(msg);
+      });
+      // The page leaving the embed sites (an ad's redirect): back to the
+      // player.
+      _urlSub = _controller.url.listen((url) {
+        if (!mounted || isAllowedWebPlayerUrl(url, widget.initialUrl)) return;
+        debugPrint('Blocking redirect to: $url');
+        _controller.loadUrl(widget.initialUrl);
       });
 
       /*
@@ -287,6 +295,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
   void dispose() {
     _hideTimer?.cancel();
     _webMessageSub?.cancel();
+    _urlSub?.cancel();
     _controller.dispose();
     super.dispose();
   }

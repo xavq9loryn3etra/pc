@@ -373,28 +373,11 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
               return NavigationDecision.navigate;
             }
 
-            final uri = Uri.parse(request.url);
-            final host = uri.host;
-            final initialHost = Uri.parse(widget.initialUrl).host;
-
-            // Same-origin — always allow
-            if (host.contains(initialHost) || initialHost.contains(host)) {
-              return NavigationDecision.navigate;
-            }
-
-            // Allow media/streaming URLs.
-            // iOS WKWebView can report HLS manifest or direct video
-            // fetches as navigation events (Android does not).
-            final path = uri.path.toLowerCase();
-            if (path.endsWith('.m3u8') || path.endsWith('.mp4') ||
-                path.endsWith('.ts') || path.endsWith('.webm') ||
-                path.endsWith('.mpd')) {
-              return NavigationDecision.navigate;
-            }
-
-            // Allow common CDN/streaming sub-domains
-            if (host.contains('cdn') || host.contains('stream') ||
-                host.contains('cache') || host.contains('cloud')) {
+            // The page itself: only the embed site it opened on (exact
+            // host or a subdomain) or another known embed site, over
+            // https. Matching by substring let "vidlink.pro.evil.com"
+            // through.
+            if (isAllowedWebPlayerUrl(request.url, widget.initialUrl)) {
               return NavigationDecision.navigate;
             }
 

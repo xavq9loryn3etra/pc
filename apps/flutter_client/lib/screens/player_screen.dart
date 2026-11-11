@@ -977,6 +977,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     player.pause();
 
+    StreamResult? started;
     try {
       final StreamResolveResult resolved;
       if (otherCopies.isNotEmpty) {
@@ -986,22 +987,30 @@ class _PlayerScreenState extends State<PlayerScreen>
         resolved = await _resolver.resolveWithFallback(
           otherCopies.first,
           otherCopies,
+          isCancelled: () => !mounted,
         );
+        started = resolved.result;
+        if (_closedDuringSwitch(started)) return;
         await _rememberPlayedTorrent(resolved.stream);
       } else {
         // Wipe the stuck torrent's cached data (also removes the live
         // handle if it's still registered) so the retry doesn't just reuse
         // whatever was stuck on disk.
         await TorrentStorageService.deleteByInfoHash(staleInfoHash);
+        if (!mounted) return;
         resolved = await _resolver.resolveWithFallback(
           _currentStream,
           _availableStreams,
+          isCancelled: () => !mounted,
         );
+        started = resolved.result;
       }
+      if (_closedDuringSwitch(started)) return;
       final resolvedStream = resolved.stream;
       final result = resolved.result;
 
       await _openMediaWithResume(result.streamUrl, precisePosition: resumeAt);
+      if (_closedDuringSwitch(result)) return;
       player.play();
       if (otherCopies.isNotEmpty && stuckTorrentId != result.torrentId) {
         _resolver.cleanup(stuckTorrentId);
@@ -1020,7 +1029,11 @@ class _PlayerScreenState extends State<PlayerScreen>
         // Another copy: downloaded subtitles matched to its name and size.
         if (otherCopies.isNotEmpty) _loadSubtitles();
       }
+    } on ResolveCancelledException {
+      // The player closed meanwhile: nothing more to do.
+      return;
     } catch (e) {
+      if (_closedDuringSwitch(started)) return;
       if (otherCopies.isNotEmpty) {
         // No other copy started either: carry on waiting for the first
         // one (the watchdog checks it again).
@@ -1806,6 +1819,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _forgetFileSubtitles();
     });
 
+    StreamResult? started;
     try {
       // 1. The old torrent stays until the new one is up (just paused by
       // starting it — see TorrentEngineService.startStream), so a failed
@@ -1818,16 +1832,20 @@ class _PlayerScreenState extends State<PlayerScreen>
       final resolved = await _resolver.resolveWithFallback(
         newStream,
         fallbacks ?? StreamResolver.sameQuality(newStream, _availableStreams),
+        isCancelled: () => !mounted,
       );
       final resolvedStream = resolved.stream;
-      final result = resolved.result;
+      final result = started = resolved.result;
+      if (_closedDuringSwitch(result)) return;
 
       // 3. Save last played torrent infohash — the one that actually
       // resolved, not necessarily the one originally tapped.
       await _rememberPlayedTorrent(resolvedStream);
+      if (_closedDuringSwitch(result)) return;
 
       // 4. Open new media at exactly saved position natively
       await _openMediaWithResume(result.streamUrl, precisePosition: savedPos);
+      if (_closedDuringSwitch(result)) return;
       player.play();
 
       // 5. Now the new one plays, discard the old torrent and its data.
@@ -1846,7 +1864,11 @@ class _PlayerScreenState extends State<PlayerScreen>
         // Downloaded subtitles matched to this file's name and size.
         _loadSubtitles();
       }
+    } on ResolveCancelledException {
+      // The player closed meanwhile: nothing more to do.
+      return;
     } catch (e) {
+      if (_closedDuringSwitch(started)) return;
       _returnAfterFailedSwitch(resumePlayback: wasPlaying);
       if (mounted) {
         setState(() {
@@ -1873,8 +1895,19 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// playing. Its torrent was only paused by the attempt (see
   /// TorrentEngineService.startStream) and its media is still loaded.
   void _returnAfterFailedSwitch({required bool resumePlayback}) {
+    // Closed meanwhile: dispose() paused that torrent, and the player's gone.
+    if (!mounted) return;
     _resolver.resume(_torrentId);
     if (resumePlayback) player.play();
+  }
+
+  /// Whether the player was closed while a switch awaited something. If so
+  /// the torrent the switch [started] is paused — dispose() only paused the
+  /// one playing then — and the switch should stop there.
+  bool _closedDuringSwitch(StreamResult? started) {
+    if (mounted) return false;
+    if (started != null) _resolver.pause(started.torrentId);
+    return true;
   }
 
   /// Whether a change of audio language is being carried out (finding a
@@ -2306,6 +2339,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     // 1. The old episode's torrent stays until the new one is up, so a
     // failed switch can fall back to it (see _returnAfterFailedSwitch).
     final oldTorrentId = _torrentId;
+    StreamResult? started;
     try {
       // 2. Fetch streams for the episode — sorted by the same size/quality-
       // aware logic as the quality selector sheet (not seed count).
@@ -2317,6 +2351,7 @@ class _PlayerScreenState extends State<PlayerScreen>
               readied.episode == targetEp.episodeNumber
           ? await readied.streams
           : const <TorrentStream>[];
+      if (!mounted) return;
       final streams = prefetched.isNotEmpty
           ? prefetched
           : await _resolver.getAvailableStreams(
@@ -2326,6 +2361,7 @@ class _PlayerScreenState extends State<PlayerScreen>
               episode: targetEp.episodeNumber,
               title: widget.details,
             );
+      if (!mounted) return;
 
       if (streams.isEmpty) {
         throw Exception('No streams found for this episode.');
@@ -2340,6 +2376,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           prefs,
           'last_played_torrent_${imdbId}_${seasonNumber}_${targetEp.episodeNumber}',
           widget.details);
+      if (!mounted) return;
       final pick = StreamResolver.likelyPick(
             streams,
             lastPlayedHash: lastPlayed,
@@ -2347,15 +2384,23 @@ class _PlayerScreenState extends State<PlayerScreen>
           ) ??
           streams.first;
       final sameTier = StreamResolver.sameQuality(pick, streams);
-      final resolved = await _resolver.resolveWithFallback(pick, [
-        ...sameTier,
-        ...streams.where((s) => !sameTier.contains(s)),
-      ]);
+      final resolved = await _resolver.resolveWithFallback(
+        pick,
+        [
+          ...sameTier,
+          ...streams.where((s) => !sameTier.contains(s)),
+        ],
+        isCancelled: () => !mounted,
+      );
+      started = resolved.result;
+      // Closed meanwhile: before the new episode goes in the history.
+      if (_closedDuringSwitch(started)) return;
       print('[timing] S${seasonNumber}E${targetEp.episodeNumber}: '
           '${prefetched.isNotEmpty ? 'readied near the end of the last one' : 'not readied'}'
           ', a copy ready ${pressed.elapsedMilliseconds} ms after it was '
           'asked for');
       await saved;
+      if (_closedDuringSwitch(started)) return;
       await _applyResolvedEpisode(
         targetEp,
         seasonNumber,
@@ -2363,10 +2408,15 @@ class _PlayerScreenState extends State<PlayerScreen>
         resolved.result,
         streams,
       );
+      if (_closedDuringSwitch(started)) return;
       if (oldTorrentId != resolved.result.torrentId) {
         _resolver.cleanup(oldTorrentId);
       }
+    } on ResolveCancelledException {
+      // The player closed meanwhile: nothing more to do.
+      return;
     } catch (e) {
+      if (_closedDuringSwitch(started)) return;
       _showFailedEpisodeSwitch(targetEp, seasonNumber, e);
     }
   }
@@ -2374,8 +2424,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// A switch to [targetEp] failed before it took over: stay on the
   /// episode that was playing (left paused) and say so.
   void _showFailedEpisodeSwitch(Episode targetEp, int seasonNumber, Object e) {
-    _returnAfterFailedSwitch(resumePlayback: false);
     if (!mounted) return;
+    _returnAfterFailedSwitch(resumePlayback: false);
     setState(() {
       _switchingQuality = false;
       _controlsVisible = true;
@@ -2419,13 +2469,18 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     // See the matching comments in _playEpisode — same reasoning.
     await _saveProgress(force: true);
+    if (!mounted) return;
 
     final oldTorrentId = _torrentId;
+    StreamResult? started;
     try {
       final resolved = await _resolver.resolveWithFallback(
         stream,
         StreamResolver.sameQuality(stream, allStreams),
+        isCancelled: () => !mounted,
       );
+      started = resolved.result;
+      if (_closedDuringSwitch(started)) return;
       await _applyResolvedEpisode(
         targetEp,
         seasonNumber,
@@ -2433,10 +2488,15 @@ class _PlayerScreenState extends State<PlayerScreen>
         resolved.result,
         allStreams,
       );
+      if (_closedDuringSwitch(started)) return;
       if (oldTorrentId != resolved.result.torrentId) {
         _resolver.cleanup(oldTorrentId);
       }
+    } on ResolveCancelledException {
+      // The player closed meanwhile: nothing more to do.
+      return;
     } catch (e) {
+      if (_closedDuringSwitch(started)) return;
       _showFailedEpisodeSwitch(targetEp, seasonNumber, e);
     }
   }
@@ -2533,6 +2593,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       overrideSeason: seasonNumber,
       overrideEpisode: targetEp.episodeNumber,
     );
+    if (_closedDuringSwitch(result)) return;
 
     if (mounted) {
       setState(() {

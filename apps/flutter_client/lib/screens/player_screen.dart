@@ -949,7 +949,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     print('Stream recovery triggered: $reason');
     _autoRecoverAttempts++;
     _recoveringStream = true;
-    final resumeAt = _currentPosition;
+    final resumeAt = _resumePointForSwitch();
     final staleInfoHash = _currentStream.infoHash;
     final stuckTorrentId = _torrentId;
 
@@ -1057,6 +1057,15 @@ class _PlayerScreenState extends State<PlayerScreen>
       _recoveringStream = false;
     }
   }
+
+  /// Where another copy of this video should start: the spot being watched,
+  /// or null — the saved progress (see _openMediaWithResume) — while it's
+  /// still opening or near the start, when the position is still 0 and not
+  /// where the viewer had got to.
+  Duration? _resumePointForSwitch() =>
+      (_isMediaOpening || _currentPosition < const Duration(seconds: 5))
+          ? null
+          : _currentPosition;
 
   /// Remembers [stream] as the torrent this title/episode plays from — for
   /// resuming with it later, and for Settings > Storage.
@@ -1802,7 +1811,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (newStream.infoHash.toLowerCase() ==
         _currentStream.infoHash.toLowerCase()) return;
 
-    final savedPos = _currentPosition;
+    final savedPos = _resumePointForSwitch();
     final wasPlaying = _isPlaying;
     final oldTorrentId = _torrentId;
     player.pause();

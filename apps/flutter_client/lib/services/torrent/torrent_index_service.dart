@@ -446,11 +446,21 @@ class TorrentIndexService {
       if (response.statusCode == 200 && response.data != null) {
         final List<dynamic> streamsJson = response.data['streams'] ?? [];
         print('Torrentio $url -> ${streamsJson.length} stream(s)');
-        return streamsJson
-            .where((json) =>
-                json['infoHash'] is String && isValidInfoHash(json['infoHash']))
-            .map((json) => TorrentStream.fromJson(json))
-            .toList();
+        final streams = <TorrentStream>[];
+        for (final json in streamsJson) {
+          if (json is! Map<String, dynamic> ||
+              json['infoHash'] is! String ||
+              !isValidInfoHash(json['infoHash'])) {
+            continue;
+          }
+          // One malformed entry is skipped, not the whole answer.
+          try {
+            streams.add(TorrentStream.fromJson(json));
+          } catch (e) {
+            print('Skipping a Torrentio entry it could not read: $e');
+          }
+        }
+        return streams;
       }
       print('Torrentio $url -> unexpected status ${response.statusCode}');
     } catch (e) {

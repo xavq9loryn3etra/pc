@@ -154,6 +154,9 @@ class TorrentEngineService {
       throw StateError(
           'The torrent engine failed to start on this device ($_initError)');
     }
+    if (!isValidInfoHash(infoHash)) {
+      throw ArgumentError.value(infoHash, 'infoHash', 'Not an info hash');
+    }
     final key = infoHash.toLowerCase();
     // Possibly paused (a finished head start, a closed player): resumed
     // even when a connection is already in progress, which a page left

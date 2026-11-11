@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
+import 'torrent_paths.dart' show isValidInfoHash;
+
 /// What the finders listed for a title (see TorrentIndexService.gather):
 /// [streams]; whether that's [complete] — every finder answered, none
 /// failed — and, if some were still going, [rest]: everything, once they
@@ -100,6 +102,9 @@ class TorrentStream {
     required String source,
     String? quality,
   }) {
+    if (!isValidInfoHash(infoHash)) {
+      throw ArgumentError.value(infoHash, 'infoHash', 'Not an info hash');
+    }
     final size = formatSize(sizeBytes);
     return TorrentStream(
       infoHash: infoHash.toLowerCase(),
@@ -171,7 +176,12 @@ class TorrentStream {
   factory TorrentStream.fromJson(Map<String, dynamic> json) {
     final String rawTitle = json['title'] ?? '';
     final String rawName = json['name'] ?? '';
-    final String infoHash = json['infoHash'] ?? '';
+    final Object? rawHash = json['infoHash'];
+    // Goes into a magnet link and a folder name: nothing but a real hash.
+    if (rawHash is! String || !isValidInfoHash(rawHash)) {
+      throw FormatException('Not an info hash', rawHash);
+    }
+    final infoHash = rawHash.toLowerCase();
     final int? fileIdx = json['fileIdx'] is int ? json['fileIdx'] : (json['fileIndex'] is int ? json['fileIndex'] : null);
 
     // Torrentio format:
@@ -437,7 +447,8 @@ class TorrentIndexService {
         final List<dynamic> streamsJson = response.data['streams'] ?? [];
         print('Torrentio $url -> ${streamsJson.length} stream(s)');
         return streamsJson
-            .where((json) => json['infoHash'] != null)
+            .where((json) =>
+                json['infoHash'] is String && isValidInfoHash(json['infoHash']))
             .map((json) => TorrentStream.fromJson(json))
             .toList();
       }
@@ -469,7 +480,7 @@ class TorrentIndexService {
         final title = '${movie['title_long'] ?? movie['title']}';
         final streams = [
           for (final t in torrents)
-            if (t['hash'] is String)
+            if (t['hash'] is String && isValidInfoHash(t['hash']))
               TorrentStream.fromRelease(
                 infoHash: t['hash'],
                 name: '$title ${t['quality']} ${t['type']} '
@@ -519,6 +530,7 @@ class TorrentIndexService {
               r['imdb'] == imdbId &&
               categories.contains(r['category']) &&
               r['info_hash'] is String &&
+              isValidInfoHash(r['info_hash']) &&
               (!isEpisode || episodePattern.hasMatch('${r['name']}')))
             TorrentStream.fromRelease(
               infoHash: r['info_hash'],

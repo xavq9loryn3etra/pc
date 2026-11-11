@@ -685,6 +685,11 @@ if (window.flutterTrackingActive) {
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false, // Prevent iOS back-swipe from accidentally closing the player
+      // Android's back button still closes it, the same way the close
+      // button does.
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) widget.onClose();
+      },
       child: Scaffold(
       backgroundColor: Colors.black,
       // Use a top-level Stack so the EpisodeDrawer sits ABOVE and OUTSIDE

@@ -215,6 +215,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   StreamSubscription? _bufferSub;
   StreamSubscription? _bufferingSub;
   StreamSubscription? _tracksSub;
+  StreamSubscription? _errorSub;
+  StreamSubscription? _completedSub;
+  // A player error being checked on (see _onPlayerError).
+  Timer? _errorCheck;
   List<SubtitleTrackData> _embeddedSubtitles = [];
   List<SubtitleTrackData> _externalSubtitles = [];
   List<SubtitleTrackData> _availableSubtitles = [];
@@ -736,6 +740,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     // video stream) are discovered and preferred over generic external SRTs.
     _tracksSub = player.stream.tracks.listen(_onMpvTracksChanged);
 
+    // A failed open or a lost stream: mpv says so only here — the stall
+    // watchdog acts only while playing, so the spinner would stay forever.
+    _errorSub = player.stream.error.listen(_onPlayerError);
+    // The end of the file: the next episode, or the controls.
+    _completedSub = player.stream.completed.listen(_onPlaybackCompleted);
+
     await _openMediaWithResume(_streamUrl);
     if (mounted &&
         _duration <= Duration.zero &&
@@ -747,6 +757,61 @@ class _PlayerScreenState extends State<PlayerScreen>
     _stallWatchdogTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       _checkForStall();
     });
+  }
+
+  /// An error from mpv (see _errorSub). Some are passing decoder complaints
+  /// that playback carries on through, so it's taken for a dead stream only
+  /// if, a few seconds on, the video is still opening or stuck in place.
+  void _onPlayerError(String error) {
+    if (!mounted || _closing) return;
+    print('[player] error: $error');
+    if (_switchingQuality || _recoveringStream || _errorCheck != null) return;
+    final at = _currentPosition;
+    _errorCheck = Timer(const Duration(seconds: 5), () {
+      _errorCheck = null;
+      if (!mounted || _closing || _switchingQuality || _recoveringStream) {
+        return;
+      }
+      final stuck = _isMediaOpening || (_isPlaying && _currentPosition == at);
+      if (!stuck) return;
+      if (_autoRecoverAttempts >= _maxAutoRecoverAttempts) {
+        // Nothing left to try: no endless spinner — recovery's message
+        // says to try another quality.
+        setState(() => _isMediaOpening = false);
+      }
+      _attemptStreamRecovery(reason: 'mpv error: $error');
+    });
+  }
+
+  /// The file played to its end (see _completedSub): the next episode,
+  /// unless Up Next is already offering it; otherwise the controls.
+  void _onPlaybackCompleted(bool done) {
+    if (!done ||
+        !mounted ||
+        _closing ||
+        _switchingQuality ||
+        _recoveringStream) {
+      return;
+    }
+    // Well before the end: mpv takes a dropped stream for the end of the
+    // file. That's a stall, not the end.
+    final nearEnd = _duration > Duration.zero &&
+        _currentPosition >= _duration - const Duration(seconds: 60);
+    if (!nearEnd) {
+      _attemptStreamRecovery(reason: 'Ended early at $_currentPosition');
+      return;
+    }
+    _saveProgress(force: true);
+    final next = _nextEpisode;
+    if (widget.details.type == 'tv' &&
+        next != null &&
+        !next.isUnreleased &&
+        !_upNextShown.value) {
+      _playNextEpisode();
+    } else {
+      _controlsTimer?.cancel();
+      setState(() => _controlsVisible = true);
+    }
   }
 
   /// Ends the opening state once playback is genuinely under way: playing,
@@ -2852,6 +2917,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     _bufferSub?.cancel();
     _bufferingSub?.cancel();
     _tracksSub?.cancel();
+    _errorSub?.cancel();
+    _completedSub?.cancel();
+    _errorCheck?.cancel();
     _torrentSub?.cancel();
     _controlsTimer?.cancel();
     _volumeCollapseTimer?.cancel();

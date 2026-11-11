@@ -192,6 +192,9 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
   late List<Episode> _episodes;
   // When progress from the page was last saved (ms since epoch).
   int _lastProgressSave = 0;
+  // Set while switching episodes, till the new one's page starts: the old
+  // page's progress messages would otherwise be saved as the new episode's.
+  bool _ignoreProgressUntilLoaded = false;
 
   // YouTube-style continuous gyro rotation
   StreamSubscription? _accelSubscription;
@@ -351,6 +354,8 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
                 final double duration = (data['duration'] as num).toDouble();
                 final p = currentTime / duration;
                 if (!p.isFinite || p < 0 || p > 1) return;
+                // Mid-switch: the old episode's page, still reporting.
+                if (_ignoreProgressUntilLoaded) return;
                 final now = DateTime.now().millisecondsSinceEpoch;
                 if (now - _lastProgressSave < 4000) return;
 
@@ -399,6 +404,9 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
           // embed player's own JavaScript.
           // ----------------------------------------------------------------
           onPageStarted: (String url) {
+            // The episode switched to has started loading: progress from
+            // here on is its own.
+            _ignoreProgressUntilLoaded = false;
             if (mounted) {
               setState(() => _isLoading = true);
               _showControls.value = true;
@@ -419,14 +427,15 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
               _startHideTimer();
             }
 
-            // Get saved progress for resume
+            // Get saved progress for resume — of the episode loaded now,
+            // which after a switch isn't the one the player opened on.
             double startProgress = 0.0;
             final service = SavedMoviesService();
-            if (widget.season != null && widget.episode != null) {
+            if (_currentSeason != null && _currentEpisode != null) {
               startProgress = service.getEpisodeProgress(
                     widget.movie.id,
-                    widget.season!,
-                    widget.episode!,
+                    _currentSeason!,
+                    _currentEpisode!,
                   ) ??
                   0.0;
             } else {
@@ -572,24 +581,32 @@ if (window.flutterTrackingActive) {
   }
 
   Future<void> _switchEpisode(int episodeNumber) async {
-    // 1. Save current progress of old episode before switching
+    // 1. Save current progress of old episode before switching. Read
+    // straight from the page and saved here, under the old episode: a
+    // message posted for it could arrive after the switch below and be
+    // taken for the new one's.
     final oldSeason = _currentSeason;
     final oldEpisode = _currentEpisode;
-    
-    await _controller.runJavaScript("""
-      (function() {
-        var v = document.querySelector('video');
-        if (v && v.duration > 60) {
-          FlutterControlChannel.postMessage(JSON.stringify({
-            type: 'pause',
-            currentTime: v.currentTime,
-            duration: v.duration,
-            season: $oldSeason,
-            episode: $oldEpisode
-          }));
-        }
-      })();
-    """);
+    _ignoreProgressUntilLoaded = true;
+
+    try {
+      final result = await _controller.runJavaScriptReturningResult("""
+        (function() {
+          var v = document.querySelector('video');
+          return (v && v.duration > 60) ? v.currentTime / v.duration : -1;
+        })();
+      """);
+      final p = result is num ? result.toDouble() : double.tryParse('$result');
+      if (p != null && p.isFinite && p >= 0 && p <= 1) {
+        SavedMoviesService().addToHistory(
+          widget.movie,
+          season: oldSeason,
+          episode: oldEpisode,
+          progress: p,
+        );
+      }
+    } catch (_) {}
+    if (!mounted) return;
 
     setState(() {
       // Update both playing and browsing state

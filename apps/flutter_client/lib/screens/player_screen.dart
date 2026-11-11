@@ -355,6 +355,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _orientationHandedOn = false;
   // Turning back to portrait before closing: the player shows black.
   bool _closing = false;
+  // The progress has had its last save (closing, or off to the web
+  // player): nothing after may change it — stopping reports position 0.
+  bool _progressFinal = false;
 
   @override
   void initState() {
@@ -541,6 +544,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     // position as 0, which would otherwise be saved as the progress (the
     // position listener ignores it too, now _closing is set).
     _saveProgress(force: true);
+    _progressFinal = true;
     if (isComputer) {
       // The desktop app stops the video outright, so it's gone before the
       // window leaves full screen.
@@ -697,7 +701,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     // Listen to video position
     _positionSub = player.stream.position.listen((pos) {
       // Closing stops the player, which reports 0 — not where they were.
-      if (_closing) return;
+      if (_closing || _progressFinal) return;
       if (mounted && !_isDragging) {
         if (_duration <= Duration.zero &&
             player.state.duration > Duration.zero) {
@@ -2085,55 +2089,18 @@ class _PlayerScreenState extends State<PlayerScreen>
     return null;
   }
 
-  Future<void> _openWebPlayer(String provider) async {
-    await player.stop();
-
-    final s = _currentSeason;
-    final e = _currentEpisode;
-
-    await SavedMoviesService().addToHistory(
-      widget.movie,
-      season: s,
-      episode: e,
-    );
-
-    final url = ScraperService().getEmbedUrl(
-      widget.details.id,
-      season: s,
-      episode: e,
-      imdbId: widget.details.imdbId,
-      provider: provider,
-    );
-
-    if (!mounted) return;
-
-    _handOrientationToWebPlayer();
-    Navigator.pop(context); // Close player
-
-    await Navigator.push(
-      context,
-      PlayerRoute(
-        builder: (_) => WebPlayer(
-          url: url,
-          onClose: () => Navigator.pop(context),
-          movie: widget.movie,
-          season: s,
-          episode: e,
-          episodes: _episodes,
-          seasons: widget.details.seasons,
-          details: widget.details,
-        ),
-      ),
-    );
-  }
-
-  /// Same as [_openWebPlayer], but for a specific episode chosen from
-  /// [EpisodeBrowser]'s source picker rather than the currently-playing one.
+  /// Opens the web player for an episode chosen from [EpisodeBrowser]'s
+  /// source picker, closing this one.
   Future<void> _openWebPlayerForEpisode(
     Episode targetEp,
     int seasonNumber,
     String provider,
   ) async {
+    // Where they'd got to in the episode playing, saved for good before
+    // stopping: stop() reports 0, which would otherwise end up saved (by
+    // dispose) over it — after the new episode's put in the history.
+    await _saveProgress(force: true);
+    _progressFinal = true;
     await player.stop();
 
     await SavedMoviesService().addToHistory(
@@ -2893,8 +2860,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     // Does nothing off Windows, or when it's already off.
     WindowFullScreen.exit();
 
-    // 2. Save final history position
-    _saveProgress(force: true);
+    // 2. Save final history position — unless that's been done already
+    // (_progressFinal), and the position since is stop()'s 0.
+    if (!_progressFinal) _saveProgress(force: true);
 
     // Save final torrent download progress too — the periodic update in
     // _subscribeToTorrent is throttled to every 5s, so without this a

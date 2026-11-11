@@ -581,39 +581,61 @@ class _PlayerScreenState extends State<PlayerScreen>
     _tilt?.cancel();
   }
 
+  /// Sets the player up and opens the video. If any of that fails, the
+  /// spinner stops and the viewer's told, rather than it spinning forever.
   Future<void> _initPlayer() async {
+    try {
+      await _setUpPlayer();
+    } catch (e) {
+      // Closed meanwhile: the player's gone, nothing to say.
+      if (!mounted) return;
+      debugPrint('Player setup failed: $e');
+      setState(() => _isMediaOpening = false);
+      showAppMessage(
+        context,
+        "Couldn't start playback. Try another quality.",
+        error: true,
+      );
+    }
+  }
+
+  Future<void> _setUpPlayer() async {
     _loadSubtitles();
     _loadApiSkipSegments();
     // Configure MPV for torrent streaming — P2P data arrives in bursts,
     // so we tune the cache to fill a sensible buffer before starting playback
     // and to re-pause when the buffer drains rather than stalling mid-stream.
+    // Each step stops if the player's been closed meanwhile.
     final mpv = player.platform as NativePlayer;
     await mpv.observeProperty('chapter-list', _onMpvChapterList);
-    await mpv.setProperty('cache', 'yes');
-    await mpv.setProperty(
-        'cache-secs', '60'); // Keep up to 60s of video cached ahead
-    await mpv.setProperty('demuxer-readahead-secs',
-        '10'); // Fetch 10s ahead (not 30) to start sooner
-    await mpv.setProperty('demuxer-max-bytes', '150M'); // 150MB demuxer cache
-    await mpv.setProperty(
-        'demuxer-max-back-bytes', '50M'); // 50MB back-buffer for seeking
-    await mpv.setProperty('cache-pause-initial',
-        'yes'); // Pause at startup until initial cache fills
-    await mpv.setProperty(
-        'cache-pause-wait', '5'); // Re-pause if buffer drops below 5s
-    // Seeks land on the nearest keyframe rather than the exact second: an
-    // exact seek first downloads and decodes everything from the keyframe
-    // before it — up to ~10s of video in x265 releases, and slow to decode
-    // — which kept a seek spinning long after its data had arrived.
-    await mpv.setProperty('hr-seek', 'no');
+    for (final p in {
+      'cache': 'yes',
+      'cache-secs': '60', // Keep up to 60s of video cached ahead
+      'demuxer-readahead-secs': '10', // Fetch 10s ahead (not 30) to start sooner
+      'demuxer-max-bytes': '150M', // 150MB demuxer cache
+      'demuxer-max-back-bytes': '50M', // 50MB back-buffer for seeking
+      'cache-pause-initial': 'yes', // Pause at startup until initial cache fills
+      'cache-pause-wait': '5', // Re-pause if buffer drops below 5s
+      // Seeks land on the nearest keyframe rather than the exact second: an
+      // exact seek first downloads and decodes everything from the keyframe
+      // before it — up to ~10s of video in x265 releases, and slow to decode
+      // — which kept a seek spinning long after its data had arrived.
+      'hr-seek': 'no',
+    }.entries) {
+      if (!mounted) return;
+      await mpv.setProperty(p.key, p.value);
+    }
     // Multi-language releases often make a dub their default audio track;
     // pick the one in the title's audio language when there is one —
     // English, or the original for a title not made in English if that's
     // what's chosen (AudioLanguageService; StreamResolver.languageRank
     // already prefers copies in it).
+    if (!mounted) return;
     await AudioLanguageService().ensureLoaded();
+    if (!mounted) return;
     await mpv.setProperty('alang',
         AudioLanguageService().trackOrderFor(widget.details).join(','));
+    if (!mounted) return;
     // Subscribe to playing/buffering *before* opening the media: events
     // fired while it opens (playback starting, buffering on/off) were
     // previously missed depending on timing, leaving the loading spinner
@@ -751,9 +773,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     _completedSub = player.stream.completed.listen(_onPlaybackCompleted);
 
     await _openMediaWithResume(_streamUrl);
-    if (mounted &&
-        _duration <= Duration.zero &&
-        player.state.duration > Duration.zero) {
+    // Closed while it opened: no watchdog left running for good, holding
+    // on to this screen (dispose has been and gone).
+    if (!mounted) return;
+    if (_duration <= Duration.zero && player.state.duration > Duration.zero) {
       applyDuration(player.state.duration);
     }
 
@@ -1216,8 +1239,15 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!Platform.isAndroid && !Platform.isIOS) return;
 
     try {
+      // After each step: if the player closed meanwhile, its dispose has
+      // already deactivated the session — so undo this one's activation.
       await _mediaSession.requestNotificationPermission();
+      if (!mounted) return;
       await _mediaSession.activate();
+      if (!mounted) {
+        await _mediaSession.deactivate();
+        return;
+      }
 
       // Only show play/pause (no skip buttons)
       await _mediaSession.updateAvailableActions({
@@ -1225,9 +1255,17 @@ class _PlayerScreenState extends State<PlayerScreen>
         MediaAction.pause,
         MediaAction.seekTo,
       });
+      if (!mounted) {
+        await _mediaSession.deactivate();
+        return;
+      }
 
       // Set initial metadata
       await _updateMediaSessionMetadata();
+      if (!mounted) {
+        await _mediaSession.deactivate();
+        return;
+      }
 
       // Listen for play/pause commands from the notification
       _mediaActionSub = _mediaSession.onMediaAction.listen((action) {

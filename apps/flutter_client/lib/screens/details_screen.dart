@@ -16,6 +16,9 @@ import '../services/scraper_service.dart';
 import '../services/saved_movies_service.dart';
 import '../services/feature_flags_service.dart';
 import '../services/streaming_link_service.dart';
+import '../services/windows_streaming_apps.dart';
+import '../services/audio_language_service.dart';
+import '../services/torrent/last_played_torrents.dart';
 import '../services/torrent/torrent_index_service.dart';
 import '../services/torrent/stream_resolver.dart';
 import '../services/torrent/torrent_download_registry.dart';
@@ -25,6 +28,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:ui'; // For BackdropFilter
 import '../widgets/glass_blur.dart';
+import '../widgets/glass_dialog.dart' show showGlassSheet;
 import '../widgets/artwork_glow.dart';
 import '../widgets/glass_bubble_bar.dart';
 import '../widgets/details_overview.dart';
@@ -60,14 +64,13 @@ class DetailsScreen extends StatefulWidget {
       final details =
           await TMDBService().prefetchDetails(movie.id, type: movie.type);
       if (details == null || !context.mounted) return;
-      final header =
-          _DetailsScreenState.headerImageFor(details, screen);
+      final header = _DetailsScreenState.headerImageFor(details, screen);
       if (header.isNotEmpty && !header.toLowerCase().endsWith('.svg')) {
         final decode =
             _DetailsScreenState.headerDecodeSize(details, screen, dpr);
         precacheImage(
-          ResizeImage.resizeIfNeeded(decode.width, decode.height,
-              CachedNetworkImageProvider(header)),
+          ResizeImage.resizeIfNeeded(
+              decode.width, decode.height, CachedNetworkImageProvider(header)),
           context,
           onError: (_, __) {},
         );
@@ -96,6 +99,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // load so the popup can list the qualities straight away (see
   // _openMovie). Null until then, or when playback is hidden.
   Future<List<TorrentStream>>? _movieStreams;
+  // AudioLanguageService.changes when _movieStreams was looked up.
+  int _movieStreamsLanguages = 0;
   // Whether _movieStreams found anything to play. While a movie is only in
   // cinemas (Movie.isCinemaOnly) its Play button is disabled unless it
   // did — rarely, a proper online copy is out before TMDB says so.
@@ -107,6 +112,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // Whether the skeleton has been taken off the page, a moment after
   // _loading turns false (see _revealOverSkeleton).
   bool _skeletonDone = false;
+
+  // Whether the header picture and its glow are downloaded and decoded.
+  // Until then a shimmer covers the tab behind the page; then the whole
+  // background fades in over it at once (see _loadDetails / build).
+  bool _backgroundReady = false;
   // Streaming-service button: a tap in progress, and the snackbar message
   // currently showing (see _openProvider / _showProviderMessage).
   bool _openingProvider = false;
@@ -131,8 +141,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   bool _onPageScroll(Notification notification) {
     // depth 0 = the page's own scroll view, not nested ones (the cast row).
-    if (notification is ScrollUpdateNotification &&
-        notification.depth == 0) {
+    if (notification is ScrollUpdateNotification && notification.depth == 0) {
       _setScroll(notification.metrics.pixels);
     } else if (notification is ScrollMetricsNotification &&
         notification.depth == 0) {
@@ -140,6 +149,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     }
     return false;
   }
+
   final Dio _shareDio = Dio();
   final CancelToken _detailsCancelToken = CancelToken();
 
@@ -218,6 +228,15 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // SavedMoviesService().isFavorite(...) directly inside the
   // ListenableBuilder(listenable: SavedMoviesService()) further down, so it
   // updates on its own without a second, full-screen rebuild.
+  /// The Like button's heart: filled, in the accent, once it's liked.
+  Widget _likeIcon() {
+    final liked = SavedMoviesService().isFavorite(widget.movie.id);
+    return Icon(
+      liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+      color: liked ? AppTheme.primaryColor : Colors.white,
+    );
+  }
+
   Future<void> _toggleFavorite() async {
     await SavedMoviesService().toggleFavorite(_details ?? widget.movie);
   }
@@ -270,13 +289,17 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
     var opened = false;
     try {
-      // Non-browser only: the OS opens the link in the service's app, or
-      // refuses (returns false / throws) rather than falling back to a
-      // browser.
-      opened = await launchUrl(
-        Uri.parse(url),
-        mode: LaunchMode.externalNonBrowserApplication,
-      );
+      // Windows ignores "non-browser only" and hands web links to the
+      // browser, so there the app is found and opened directly instead.
+      opened = WindowsStreamingApps.supported
+          ? await WindowsStreamingApps().open(url)
+          // Non-browser only: the OS opens the link in the service's app,
+          // or refuses (returns false / throws) rather than falling back
+          // to a browser.
+          : await launchUrl(
+              Uri.parse(url),
+              mode: LaunchMode.externalNonBrowserApplication,
+            );
     } catch (e) {
       debugPrint('Failed to open ${provider.name}: $e');
     }
@@ -345,6 +368,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
             Tooltip(
               message: 'Watch on ${p.name}',
               child: InkWell(
+                mouseCursor: WidgetStateMouseCursor.clickable,
                 onTap: () => _openProvider(p),
                 borderRadius: BorderRadius.circular(6),
                 child: Padding(
@@ -373,6 +397,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
             child: Container(width: 1, height: 26, color: Colors.black12),
           ),
           InkWell(
+            mouseCursor: WidgetStateMouseCursor.clickable,
             onTap: () => _openProvider(provider),
             borderRadius:
                 const BorderRadius.horizontal(right: Radius.circular(30)),
@@ -402,10 +427,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
   ) async {
     final list = await streams;
     final prefs = await SharedPreferences.getInstance();
+    final lastPlayed = await LastPlayedTorrents.lastPlayed(
+        prefs, 'last_played_torrent_$imdbId', _details ?? widget.movie);
     if (!mounted) return;
     _warmedStreams = StreamResolver.headStartCandidates(
       list,
-      lastPlayedHash: prefs.getString('last_played_torrent_$imdbId'),
+      lastPlayedHash: lastPlayed,
     );
     StreamResolver().warmUp(
       _warmedStreams,
@@ -438,10 +465,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
   /// backdrop: on a phone's tall header, as Apple TV does with its key art.
   /// A wide backdrop there shows only its middle half — about half its
   /// detail, with the subject often cut off. Wide screens keep the backdrop.
-  static bool usesPosterHeader(Movie m, Size screen, {bool sidePanel = false}) =>
-      m.textlessPoster != null && !sidePanel && screen.width / _headerHeight < 1.2;
+  static bool usesPosterHeader(Movie m, Size screen,
+          {bool sidePanel = false}) =>
+      m.textlessPoster != null &&
+      !sidePanel &&
+      screen.width / _headerHeight < 1.2;
 
-  static String headerImageFor(Movie m, Size screen, {bool sidePanel = false}) =>
+  static String headerImageFor(Movie m, Size screen,
+          {bool sidePanel = false}) =>
       usesPosterHeader(m, screen, sidePanel: sidePanel)
           ? m.textlessPosterHighRes!
           : _backdropUrlFor(m);
@@ -459,13 +490,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
           ? (width: (screen.width * dpr).toInt(), height: null)
           : (width: null, height: (_headerHeight * dpr).toInt());
 
-  bool _usesPosterHeader(Movie m) => usesPosterHeader(
-      m, MediaQuery.sizeOf(context),
-      sidePanel: widget.isSidePanel);
+  bool _usesPosterHeader(Movie m) =>
+      usesPosterHeader(m, MediaQuery.sizeOf(context),
+          sidePanel: widget.isSidePanel);
 
-  String _headerImageFor(Movie m) => headerImageFor(
-      m, MediaQuery.sizeOf(context),
-      sidePanel: widget.isSidePanel);
+  String _headerImageFor(Movie m) =>
+      headerImageFor(m, MediaQuery.sizeOf(context),
+          sidePanel: widget.isSidePanel);
 
   /// How far below the header image its glow (see ArtworkGlow) runs
   /// before it has faded to black: past the title, buttons and synopsis.
@@ -482,9 +513,19 @@ class _DetailsScreenState extends State<DetailsScreen> {
   static String? _logoUrlFor(Movie m) =>
       m.logoUrl == null ? null : (m.logoHighRes ?? m.logoUrl!);
 
-  // Longest the skeleton waits on header images / the first season before
-  // showing the page anyway; anything slower finishes loading in place.
+  // Longest the skeleton waits on the first season's episodes and the
+  // "Also on" row before showing the page anyway.
   static const _maxPreloadWait = Duration(seconds: 4);
+
+  // Longest the skeleton waits on the header picture and logo: long enough
+  // for ones already saved on the device to be ready on the first frame,
+  // not for downloads — those finish in place, each under its own
+  // shimmer, while the rest of the page is already up.
+  static const _headerImageGrace = Duration(milliseconds: 400);
+
+  // How long the background takes to fade in over its shimmer, when it
+  // wasn't ready as the page appeared.
+  static const _backgroundFade = Duration(milliseconds: 400);
 
   Future<void> _loadDetails() async {
     Movie? d;
@@ -508,6 +549,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
     if (provider != null &&
         loaded.wikidataId != null &&
         StreamingLinkService().supports(provider.id)) {
+      // Windows: which streaming apps are installed, ready for the tap.
+      WindowsStreamingApps().warmUp();
       StreamingLinkService().prefetch(
         wikidataId: loaded.wikidataId!,
         providerId: provider.id,
@@ -520,8 +563,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
     // Still behind the skeleton (_loading stays true): store the details
     // and pick the starting season, then keep the skeleton up while the
-    // header images and first season's episodes load, so the page appears
-    // complete instead of filling in piece by piece.
+    // first season's episodes load — but not for the header images beyond
+    // a moment (see _headerImageGrace).
     setState(() {
       _details = d ?? widget.movie;
 
@@ -529,6 +572,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
       // when Play is pressed — Torrentio can take several seconds.
       if (_details!.type == 'movie' &&
           !FeatureFlagsService().hidePlayback.value) {
+        _movieStreamsLanguages = AudioLanguageService().changes.value;
         _movieStreams = StreamResolver().getAvailableStreams(
           imdbId: _details!.imdbId ?? _details!.id,
           type: _details!.type,
@@ -557,9 +601,20 @@ class _DetailsScreenState extends State<DetailsScreen> {
       }
     });
 
+    // Keeps downloading after the page is shown; the page's own image
+    // widgets pick up the same downloads rather than starting again. Done
+    // (or failed, or given up on) → the background fades in.
+    final header = _preloadHeader(_details!)
+        .timeout(const Duration(seconds: 15))
+        .catchError((_) {})
+        .whenComplete(() {
+      if (mounted && !_backgroundReady) {
+        setState(() => _backgroundReady = true);
+      }
+    });
     try {
       await Future.wait([
-        _preloadHeader(_details!),
+        header.timeout(_headerImageGrace, onTimeout: () {}),
         if (_selectedSeason != null)
           _loadSeasonDetails(_selectedSeason!.seasonNumber),
         alsoOn,
@@ -733,11 +788,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
     }
 
     final provider = m.streamingProvider;
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      barrierColor: Colors.black54,
+    showGlassSheet(
+      context,
       builder: (sheetContext) => EpisodeInfoSheet(
         image: image,
         header: header,
@@ -766,7 +818,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
     final backdrop = _headerImageFor(_details ?? widget.movie);
     _playWithTorrent(
       backgroundImage: backdrop.isEmpty ? null : backdrop,
-      streams: _movieStreams,
+      // Not when an audio language has been chosen since: they're ranked
+      // for the old one. (The popup ranks them again, without looking
+      // them up again — see StreamResolver._find.)
+      streams: AudioLanguageService().changes.value == _movieStreamsLanguages
+          ? _movieStreams
+          : null,
     );
   }
 
@@ -787,11 +844,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
         : null;
     int? e = _selectedEpisode;
 
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      barrierColor: Colors.black54,
+    showGlassSheet(
+      context,
       builder: (sheetContext) {
         return TorrentQualitySelectorSheet(
           imdbId: _details!.imdbId ?? _details!.id,
@@ -842,12 +896,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
     if (!mounted) return;
 
-    await Navigator.push(
-      context,
+    await Navigator.of(context, rootNavigator: true).push(
       PlayerRoute(
         builder: (_) => WebPlayer(
           url: url,
-          onClose: () => Navigator.pop(context),
+          onClose: () => Navigator.of(context, rootNavigator: true).pop(),
           movie: widget.movie,
           season: s,
           episode: e,
@@ -979,6 +1032,20 @@ class _DetailsScreenState extends State<DetailsScreen> {
             ? const SizedBox.shrink()
             : Stack(
                 children: [
+                  // Stands in for the background, across the whole tab,
+                  // while its picture downloads; fades out as it fades in.
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: AnimatedOpacity(
+                        opacity: _backgroundReady ? 0 : 1,
+                        duration: _backgroundFade,
+                        child: _backgroundReady
+                            // Still once it's going: no shimmer to animate.
+                            ? const ColoredBox(color: Color(0xFF212121))
+                            : const SkeletonBlock(),
+                      ),
+                    ),
+                  ),
                   // Parallax background image — kept OUTSIDE the sliver tree.
                   // A SliverToBoxAdapter stops painting its child entirely
                   // once the scroll offset passes the child's declared
@@ -994,30 +1061,50 @@ class _DetailsScreenState extends State<DetailsScreen> {
                     top: 0,
                     left: 0,
                     right: 0,
-                    child: SizedBox(
-                      height: _headerHeight + _glowHeight,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          ValueListenableBuilder<double>(
-                            // See _scrollOffset — a plain controller listener
-                            // missed position corrections (e.g. after the
-                            // synopsis collapses) and left this stuck.
-                            valueListenable: _scrollOffset,
-                            // Only the offset changes per frame: the image
-                            // subtree is built once (`child`) and sits behind
-                            // a RepaintBoundary, so scrolling just moves its
-                            // layer instead of rebuilding and repainting it.
-                            builder: (context, offset, child) =>
-                                Transform.translate(
-                              offset: Offset(0, -offset * 0.5),
-                              child: child,
-                            ),
-                            child: RepaintBoundary(
+                    // Picture, glow and shading appear together, as one,
+                    // once the picture's ready — not piece by piece. (At
+                    // full opacity this costs nothing extra per frame.)
+                    child: AnimatedOpacity(
+                      opacity: _backgroundReady ? 1 : 0,
+                      duration: _backgroundFade,
+                      child: SizedBox(
+                        height: _headerHeight + _glowHeight,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            ValueListenableBuilder<double>(
+                              // See _scrollOffset — a plain controller listener
+                              // missed position corrections (e.g. after the
+                              // synopsis collapses) and left this stuck.
+                              valueListenable: _scrollOffset,
+                              // Only the offset changes per frame: the image
+                              // subtree is built once (`child`) and sits behind
+                              // a RepaintBoundary, so scrolling just moves its
+                              // layer instead of rebuilding and repainting it.
+                              builder: (context, offset, child) =>
+                                  Transform.translate(
+                                offset: Offset(0, -offset * 0.5),
+                                child: child,
+                              ),
+                              child: RepaintBoundary(
                                 child: Stack(
                                   fit: StackFit.expand,
                                   children: [
-                                    ArtworkGlow(url: _headerImageFor(m)),
+                                    // Stopping a little short of the box's
+                                    // bottom, under the shading's solid
+                                    // black: the parallax leaves that edge
+                                    // on a part-pixel, where the glow and
+                                    // the black over it are each drawn only
+                                    // partly, and a faint line of the
+                                    // glow's colour showed through.
+                                    Positioned(
+                                      top: 0,
+                                      left: 0,
+                                      right: 0,
+                                      bottom: 8,
+                                      child:
+                                          ArtworkGlow(url: _headerImageFor(m)),
+                                    ),
                                     // The picture melts into the glow
                                     // rather than fading to black.
                                     Positioned(
@@ -1030,13 +1117,20 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                         // Full-width parallax header — like the home hero banners, this
                                         // renders large enough that TMDB's standard w1280 backdrop tier
                                         // can look soft, so it uses the full-resolution source.
-                                        child: _headerImageFor(m).toLowerCase().endsWith('.svg')
+                                        child: _headerImageFor(m)
+                                                .toLowerCase()
+                                                .endsWith('.svg')
                                             ? ShaderMask(
                                                 blendMode: BlendMode.dstIn,
-                                                shaderCallback: (rect) => const LinearGradient(
+                                                shaderCallback: (rect) =>
+                                                    const LinearGradient(
                                                   begin: Alignment.topCenter,
                                                   end: Alignment.bottomCenter,
-                                                  colors: [Colors.white, Colors.white, Colors.transparent],
+                                                  colors: [
+                                                    Colors.white,
+                                                    Colors.white,
+                                                    Colors.transparent
+                                                  ],
                                                   stops: [0, 0.55, 1],
                                                 ).createShader(rect),
                                                 child: SvgPicture.network(
@@ -1050,8 +1144,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                 url: _headerImageFor(m),
                                                 // Only one side is given (see _headerDecodeSize), so the
                                                 // decoder keeps the picture's proportions.
-                                                cacheWidth: _headerDecodeSize(m).width,
-                                                cacheHeight: _headerDecodeSize(m).height,
+                                                cacheWidth:
+                                                    _headerDecodeSize(m).width,
+                                                cacheHeight:
+                                                    _headerDecodeSize(m).height,
                                                 // A tall poster loses its bottom rather than its top:
                                                 // that's under the fade and the title.
                                                 alignment: _usesPosterHeader(m)
@@ -1074,16 +1170,21 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                             Color(0x80000000), // 50%
                                             Color(0xB3000000), // 70%
                                             Colors.black,
+                                            Colors.black,
                                           ],
-                                          stops: [0, 0.38, 0.6, 0.8, 1],
+                                          // Solid black for its last few
+                                          // pixels, over where the glow
+                                          // stops short (see above).
+                                          stops: [0, 0.38, 0.6, 0.8, 0.97, 1],
                                         ),
                                       ),
                                     ),
                                   ],
                                 ),
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -1129,6 +1230,34 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                     .toInt(),
                                                 fit: BoxFit.contain,
                                                 alignment: Alignment.centerLeft,
+                                                // Still downloading when the
+                                                // page appeared (see
+                                                // _loadDetails): nothing in
+                                                // its place (a grey bar over
+                                                // the picture looked off),
+                                                // then it fades in. The
+                                                // header is anchored at its
+                                                // bottom, so nothing moves.
+                                                placeholder: (_, __) =>
+                                                    const SizedBox.shrink(),
+                                                fadeInDuration: const Duration(
+                                                    milliseconds: 350),
+                                                // No logo after all: the
+                                                // title in words instead.
+                                                errorWidget: (_, __, ___) =>
+                                                    Text(
+                                                  m.title,
+                                                  style: const TextStyle(
+                                                    fontSize: 32,
+                                                    fontWeight: FontWeight.bold,
+                                                    shadows: [
+                                                      Shadow(
+                                                        color: Colors.black,
+                                                        blurRadius: 10,
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
                                               ))
                                         : Text(
                                             m.title,
@@ -1151,7 +1280,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                             '${m.year}',
                                             // Only what's known: no made-up
                                             // rating or "N/A".
-                                            if (m.certification?.isNotEmpty ?? false)
+                                            if (m.certification?.isNotEmpty ??
+                                                false)
                                               m.certification!,
                                             if (m.runtime != null &&
                                                 m.runtime!.isNotEmpty &&
@@ -1286,337 +1416,390 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                 // playback is hidden.
                                 final provider = m.streamingProvider;
 
-                                return Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        // Hidden entirely (not just disabled) when
-                                        // FeatureFlagsService.hidePlayback is on.
-                                        if (!hidePlayback) ...[
-                                          if (!isTv)
-                                            // Premium Direct Torrent Play Button
-                                            Expanded(
-                                              flex: provider != null ? 4 : 3,
-                                              child: Container(
-                                                height: 50,
-                                                decoration: BoxDecoration(
-                                                  color: movieBlocked
-                                                      ? Colors.white10
-                                                      : Colors.white,
-                                                  borderRadius:
-                                                      BorderRadius.circular(30),
-                                                  boxShadow: movieBlocked
-                                                      ? null
-                                                      : [
-                                                          BoxShadow(
-                                                            color: Colors.white
-                                                                .withOpacity(
-                                                                    0.15),
-                                                            blurRadius: 12,
-                                                            offset: const Offset(
-                                                                0, 4),
-                                                          ),
-                                                        ],
-                                                ),
-                                                child: _withProviderSegment(provider, InkWell(
-                                                  onTap: movieBlocked
-                                                      ? null
-                                                      : _openMovie,
-                                                  borderRadius:
-                                                      BorderRadius.circular(30),
-                                                  child: Row(
-                                                    mainAxisAlignment:
-                                                        MainAxisAlignment.center,
-                                                    children: [
-                                                      Icon(
-                                                        movieInCinemas
-                                                            ? Icons
-                                                                .theaters_rounded
-                                                            : movieUnreleased
+                                // With room (the wide layout's side panel, a
+                                // tablet), Trailer and Like show their names
+                                // too, not just their icons.
+                                return LayoutBuilder(builder: (context, box) {
+                                  final roomy = box.maxWidth >= 480;
+                                  return Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          // Hidden entirely (not just disabled) when
+                                          // FeatureFlagsService.hidePlayback is on.
+                                          if (!hidePlayback) ...[
+                                            if (!isTv)
+                                              // Premium Direct Torrent Play Button
+                                              Expanded(
+                                                flex: provider != null ? 4 : 3,
+                                                child: Container(
+                                                  height: 50,
+                                                  decoration: BoxDecoration(
+                                                    color: movieBlocked
+                                                        ? Colors.white10
+                                                        : Colors.white,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            30),
+                                                    boxShadow: movieBlocked
+                                                        ? null
+                                                        : [
+                                                            BoxShadow(
+                                                              color: Colors
+                                                                  .white
+                                                                  .withOpacity(
+                                                                      0.15),
+                                                              blurRadius: 12,
+                                                              offset:
+                                                                  const Offset(
+                                                                      0, 4),
+                                                            ),
+                                                          ],
+                                                  ),
+                                                  child: _withProviderSegment(
+                                                    provider,
+                                                    InkWell(
+                                                      mouseCursor: WidgetStateMouseCursor.clickable,
+                                                      onTap: movieBlocked
+                                                          ? null
+                                                          : _openMovie,
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              30),
+                                                      child: Row(
+                                                        mainAxisAlignment:
+                                                            MainAxisAlignment
+                                                                .center,
+                                                        children: [
+                                                          Icon(
+                                                            movieInCinemas
                                                                 ? Icons
-                                                                    .event_available_rounded
-                                                                : Icons
-                                                                    .play_arrow_rounded,
-                                                        color: movieBlocked
-                                                            ? Colors.white54
-                                                            : Colors.black,
-                                                        size: movieBlocked
-                                                            ? 20
-                                                            : 28,
-                                                      ),
-                                                      const SizedBox(width: 8),
-                                                      Flexible(
-                                                        child: Text(
-                                                          movieUnreleased
-                                                              ? (movieReleaseText ??
-                                                                  'Not yet released')
-                                                              : movieInCinemas
-                                                                  ? 'Still in cinemas'
-                                                              : (historyMovie?.progress !=
-                                                                          null &&
-                                                                      historyMovie!
-                                                                              .progress! >
-                                                                          0
-                                                                  ? 'Resume'
-                                                                  : 'Play Movie'),
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                          maxLines: 1,
-                                                          style: TextStyle(
+                                                                    .theaters_rounded
+                                                                : movieUnreleased
+                                                                    ? Icons
+                                                                        .event_available_rounded
+                                                                    : Icons
+                                                                        .play_arrow_rounded,
                                                             color: movieBlocked
                                                                 ? Colors.white54
                                                                 : Colors.black,
-                                                            fontWeight:
-                                                                FontWeight.bold,
-                                                            fontSize:
-                                                                movieBlocked
-                                                                    ? 11
-                                                                    : 16,
+                                                            size: movieBlocked
+                                                                ? 20
+                                                                : 28,
                                                           ),
-                                                        ),
+                                                          const SizedBox(
+                                                              width: 8),
+                                                          Flexible(
+                                                            child: Text(
+                                                              movieUnreleased
+                                                                  ? (movieReleaseText ??
+                                                                      'Not yet released')
+                                                                  : movieInCinemas
+                                                                      ? 'Still in cinemas'
+                                                                      : (historyMovie?.progress != null &&
+                                                                              historyMovie!.progress! > 0
+                                                                          ? 'Resume'
+                                                                          : 'Play Movie'),
+                                                              overflow:
+                                                                  TextOverflow
+                                                                      .ellipsis,
+                                                              maxLines: 1,
+                                                              style: TextStyle(
+                                                                color: movieBlocked
+                                                                    ? Colors
+                                                                        .white54
+                                                                    : Colors
+                                                                        .black,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                                fontSize:
+                                                                    movieBlocked
+                                                                        ? 11
+                                                                        : 16,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
                                                       ),
-                                                    ],
+                                                    ),
                                                   ),
                                                 ),
+                                              )
+                                            else
+                                              // TV Show Play/Resume direct Button
+                                              Expanded(
+                                                flex: provider != null ? 4 : 3,
+                                                child: Container(
+                                                  height: 50,
+                                                  decoration: BoxDecoration(
+                                                    color: tvUnreleased
+                                                        ? Colors.white10
+                                                        : Colors.white,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            30),
+                                                    boxShadow: tvUnreleased
+                                                        ? null
+                                                        : [
+                                                            BoxShadow(
+                                                              color: Colors
+                                                                  .white
+                                                                  .withOpacity(
+                                                                      0.15),
+                                                              blurRadius: 12,
+                                                              offset:
+                                                                  const Offset(
+                                                                      0, 4),
+                                                            ),
+                                                          ],
+                                                  ),
+                                                  child: _withProviderSegment(
+                                                    provider,
+                                                    InkWell(
+                                                      mouseCursor: WidgetStateMouseCursor.clickable,
+                                                      onTap: tvUnreleased
+                                                          ? null
+                                                          : () async {
+                                                              int s = historyMovie
+                                                                      ?.currentSeason ??
+                                                                  1;
+                                                              int e = historyMovie
+                                                                      ?.currentEpisode ??
+                                                                  1;
+                                                              if (_details?.seasons !=
+                                                                      null &&
+                                                                  _details!
+                                                                      .seasons!
+                                                                      .isNotEmpty) {
+                                                                setState(() {
+                                                                  _selectedSeason =
+                                                                      _details!
+                                                                          .seasons!
+                                                                          .firstWhere(
+                                                                    (sea) =>
+                                                                        sea.seasonNumber ==
+                                                                        s,
+                                                                    orElse: () =>
+                                                                        _details!
+                                                                            .seasons!
+                                                                            .first,
+                                                                  );
+                                                                  _selectedEpisode =
+                                                                      e;
+                                                                });
+                                                              } else {
+                                                                _selectedEpisode =
+                                                                    e;
+                                                              }
+
+                                                              await _loadSeasonDetails(
+                                                                  s);
+                                                              // The same popup as
+                                                              // tapping that
+                                                              // episode's card.
+                                                              final i = _episodes
+                                                                  .indexWhere(
+                                                                      (ep) =>
+                                                                          ep.episodeNumber ==
+                                                                          e);
+                                                              if (i != -1) {
+                                                                _openEpisode(
+                                                                    _episodes[
+                                                                        i]);
+                                                              } else {
+                                                                _playWithTorrent();
+                                                              }
+                                                            },
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              30),
+                                                      child: Row(
+                                                        mainAxisAlignment:
+                                                            MainAxisAlignment
+                                                                .center,
+                                                        children: [
+                                                          Icon(
+                                                            tvUnreleased
+                                                                ? Icons
+                                                                    .event_available_rounded
+                                                                : (historyMovie?.currentSeason !=
+                                                                        null
+                                                                    ? Icons
+                                                                        .play_circle_filled_rounded
+                                                                    : Icons
+                                                                        .play_arrow_rounded),
+                                                            color: tvUnreleased
+                                                                ? Colors.white54
+                                                                : Colors.black,
+                                                            size: tvUnreleased
+                                                                ? 20
+                                                                : 28,
+                                                          ),
+                                                          const SizedBox(
+                                                              width: 8),
+                                                          Flexible(
+                                                            child: Text(
+                                                              tvUnreleased
+                                                                  ? (tvReleaseText ??
+                                                                      'Not yet released')
+                                                                  : (historyMovie
+                                                                              ?.currentSeason !=
+                                                                          null
+                                                                      ? 'Resume S${historyMovie!.currentSeason} E${historyMovie.currentEpisode}'
+                                                                      : 'Play S1 E1'),
+                                                              overflow:
+                                                                  TextOverflow
+                                                                      .ellipsis,
+                                                              maxLines: 1,
+                                                              style: TextStyle(
+                                                                color: tvUnreleased
+                                                                    ? Colors
+                                                                        .white54
+                                                                    : Colors
+                                                                        .black,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                                fontSize:
+                                                                    tvUnreleased
+                                                                        ? 11
+                                                                        : 16,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            const SizedBox(width: 12),
+                                          ] else if (provider != null) ...[
+                                            // Playback hidden: the pill becomes
+                                            // a link to the service instead.
+                                            Expanded(
+                                              flex: 4,
+                                              child: _WatchOnProviderButton(
+                                                provider: provider,
+                                                onTap: () =>
+                                                    _openProvider(provider),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 12),
+                                          ],
+                                          // Trailer Button — icon-only (like the
+                                          // Like button) when a streaming service
+                                          // shares the row, so the Play / Watch
+                                          // on pill keeps room for its label.
+                                          if (m.trailerUrl != null &&
+                                              provider != null &&
+                                              !roomy)
+                                            GlassActionButton(
+                                              width: 50,
+                                              onTap: () =>
+                                                  _openTrailer(m.trailerUrl!),
+                                              child: const Icon(
+                                                Icons.movie_creation_rounded,
+                                                color: Colors.white,
+                                                semanticLabel: 'Trailer',
+                                              ),
+                                            )
+                                          else if (m.trailerUrl != null)
+                                            Expanded(
+                                              flex: 2,
+                                              child: GlassActionButton(
+                                                onTap: () =>
+                                                    _openTrailer(m.trailerUrl!),
+                                                child: const Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment.center,
+                                                  children: [
+                                                    Icon(
+                                                      Icons
+                                                          .movie_creation_rounded,
+                                                      color: Colors.white,
+                                                    ),
+                                                    SizedBox(width: 8),
+                                                    Text(
+                                                      'Trailer',
+                                                      style: TextStyle(
+                                                        color: Colors.white,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 16,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          if (!hidePlayback ||
+                                              m.trailerUrl != null)
+                                            const SizedBox(width: 12),
+                                          // Share Button — functionality kept, just not shown right now.
+                                          // Container(
+                                          //   height: 50,
+                                          //   width: 50,
+                                          //   decoration: BoxDecoration(
+                                          //     color: Colors.white10,
+                                          //     borderRadius:
+                                          //         BorderRadius.circular(30),
+                                          //   ),
+                                          //   child: InkWell(
+                                          //     onTap: _shareMovie,
+                                          //     borderRadius:
+                                          //         BorderRadius.circular(30),
+                                          //     child: const Icon(
+                                          //       Icons.share_rounded,
+                                          //       color: Colors.white,
+                                          //     ),
+                                          //   ),
+                                          // ),
+                                          // Like Button — moved here from the AppBar.
+                                          if (roomy)
+                                            Expanded(
+                                              flex: 2,
+                                              child: GlassActionButton(
+                                                onTap: _toggleFavorite,
+                                                child: Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment.center,
+                                                  children: [
+                                                    _likeIcon(),
+                                                    const SizedBox(width: 8),
+                                                    const Text(
+                                                      'My List',
+                                                      style: TextStyle(
+                                                        color: Colors.white,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 16,
+                                                      ),
+                                                    ),
+                                                  ],
                                                 ),
                                               ),
                                             )
                                           else
-                                            // TV Show Play/Resume direct Button
-                                            Expanded(
-                                              flex: provider != null ? 4 : 3,
-                                              child: Container(
-                                                height: 50,
-                                                decoration: BoxDecoration(
-                                                  color: tvUnreleased
-                                                      ? Colors.white10
-                                                      : Colors.white,
-                                                  borderRadius:
-                                                      BorderRadius.circular(30),
-                                                  boxShadow: tvUnreleased
-                                                      ? null
-                                                      : [
-                                                          BoxShadow(
-                                                            color: Colors.white
-                                                                .withOpacity(
-                                                                    0.15),
-                                                            blurRadius: 12,
-                                                            offset: const Offset(
-                                                                0, 4),
-                                                          ),
-                                                        ],
-                                                ),
-                                                child: _withProviderSegment(provider, InkWell(
-                                                  onTap: tvUnreleased
-                                                      ? null
-                                                      : () async {
-                                                          int s = historyMovie
-                                                                  ?.currentSeason ??
-                                                              1;
-                                                          int e = historyMovie
-                                                                  ?.currentEpisode ??
-                                                              1;
-                                                          if (_details?.seasons !=
-                                                                  null &&
-                                                              _details!.seasons!
-                                                                  .isNotEmpty) {
-                                                            setState(() {
-                                                              _selectedSeason =
-                                                                  _details!
-                                                                      .seasons!
-                                                                      .firstWhere(
-                                                                (sea) =>
-                                                                    sea.seasonNumber ==
-                                                                    s,
-                                                                orElse: () =>
-                                                                    _details!
-                                                                        .seasons!
-                                                                        .first,
-                                                              );
-                                                              _selectedEpisode =
-                                                                  e;
-                                                            });
-                                                          } else {
-                                                            _selectedEpisode = e;
-                                                          }
-  
-                                                          await _loadSeasonDetails(
-                                                              s);
-                                                          // The same popup as
-                                                          // tapping that
-                                                          // episode's card.
-                                                          final i = _episodes
-                                                              .indexWhere((ep) =>
-                                                                  ep.episodeNumber ==
-                                                                  e);
-                                                          if (i != -1) {
-                                                            _openEpisode(
-                                                                _episodes[i]);
-                                                          } else {
-                                                            _playWithTorrent();
-                                                          }
-                                                        },
-                                                  borderRadius:
-                                                      BorderRadius.circular(30),
-                                                  child: Row(
-                                                    mainAxisAlignment:
-                                                        MainAxisAlignment.center,
-                                                    children: [
-                                                      Icon(
-                                                        tvUnreleased
-                                                            ? Icons
-                                                                .event_available_rounded
-                                                            : (historyMovie?.currentSeason !=
-                                                                    null
-                                                                ? Icons
-                                                                    .play_circle_filled_rounded
-                                                                : Icons
-                                                                    .play_arrow_rounded),
-                                                        color: tvUnreleased
-                                                            ? Colors.white54
-                                                            : Colors.black,
-                                                        size: tvUnreleased
-                                                            ? 20
-                                                            : 28,
-                                                      ),
-                                                      const SizedBox(width: 8),
-                                                      Flexible(
-                                                        child: Text(
-                                                          tvUnreleased
-                                                              ? (tvReleaseText ??
-                                                                  'Not yet released')
-                                                              : (historyMovie
-                                                                          ?.currentSeason !=
-                                                                      null
-                                                                  ? 'Resume S${historyMovie!.currentSeason} E${historyMovie.currentEpisode}'
-                                                                  : 'Play S1 E1'),
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                          maxLines: 1,
-                                                          style: TextStyle(
-                                                            color: tvUnreleased
-                                                                ? Colors.white54
-                                                                : Colors.black,
-                                                            fontWeight:
-                                                                FontWeight.bold,
-                                                            fontSize: tvUnreleased
-                                                                ? 11
-                                                                : 16,
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ),
-                                                ),
-                                              ),
+                                            GlassActionButton(
+                                              width: 50,
+                                              onTap: _toggleFavorite,
+                                              child: _likeIcon(),
                                             ),
-                                          const SizedBox(width: 12),
-                                        ] else if (provider != null) ...[
-                                          // Playback hidden: the pill becomes
-                                          // a link to the service instead.
-                                          Expanded(
-                                            flex: 4,
-                                            child: _WatchOnProviderButton(
-                                              provider: provider,
-                                              onTap: () =>
-                                                  _openProvider(provider),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 12),
                                         ],
-                                        // Trailer Button — icon-only (like the
-                                        // Like button) when a streaming service
-                                        // shares the row, so the Play / Watch
-                                        // on pill keeps room for its label.
-                                        if (m.trailerUrl != null &&
-                                            provider != null)
-                                          GlassActionButton(
-                                            width: 50,
-                                            onTap: () =>
-                                                _openTrailer(m.trailerUrl!),
-                                            child: const Icon(
-                                              Icons.movie_creation_rounded,
-                                              color: Colors.white,
-                                              semanticLabel: 'Trailer',
-                                            ),
-                                          )
-                                        else if (m.trailerUrl != null)
-                                          Expanded(
-                                            flex: 2,
-                                            child: GlassActionButton(
-                                              onTap: () =>
-                                                  _openTrailer(m.trailerUrl!),
-                                              child: const Row(
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment.center,
-                                                children: [
-                                                  Icon(
-                                                    Icons
-                                                        .movie_creation_rounded,
-                                                    color: Colors.white,
-                                                  ),
-                                                  SizedBox(width: 8),
-                                                  Text(
-                                                    'Trailer',
-                                                    style: TextStyle(
-                                                      color: Colors.white,
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      fontSize: 16,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ),
-                                        if (!hidePlayback || m.trailerUrl != null)
-                                          const SizedBox(width: 12),
-                                        // Share Button — functionality kept, just not shown right now.
-                                        // Container(
-                                        //   height: 50,
-                                        //   width: 50,
-                                        //   decoration: BoxDecoration(
-                                        //     color: Colors.white10,
-                                        //     borderRadius:
-                                        //         BorderRadius.circular(30),
-                                        //   ),
-                                        //   child: InkWell(
-                                        //     onTap: _shareMovie,
-                                        //     borderRadius:
-                                        //         BorderRadius.circular(30),
-                                        //     child: const Icon(
-                                        //       Icons.share_rounded,
-                                        //       color: Colors.white,
-                                        //     ),
-                                        //   ),
-                                        // ),
-                                        // Like Button — moved here from the AppBar.
-                                        GlassActionButton(
-                                          width: 50,
-                                          onTap: _toggleFavorite,
-                                          child: Icon(
-                                            SavedMoviesService()
-                                                    .isFavorite(widget.movie.id)
-                                                ? Icons.favorite_rounded
-                                                : Icons.favorite_border_rounded,
-                                            color: SavedMoviesService()
-                                                    .isFavorite(widget.movie.id)
-                                                ? AppTheme.primaryColor
-                                                : Colors.white,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    if (provider != null)
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                            top: 10, left: 4),
-                                        child: _buildStreamingCredit(),
                                       ),
-                                  ],
-                                );
+                                      if (provider != null)
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                              top: 10, left: 4),
+                                          child: _buildStreamingCredit(),
+                                        ),
+                                    ],
+                                  );
+                                });
                               },
                             ),
                             const SizedBox(height: 24),
@@ -1735,9 +1918,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                     ),
                                   ),
                                   // Skeleton cards while the season loads.
-                                  itemCount: _loadingEpisodes
-                                      ? 6
-                                      : _episodes.length,
+                                  itemCount:
+                                      _loadingEpisodes ? 6 : _episodes.length,
                                   itemBuilder: (context, index) {
                                     if (_loadingEpisodes) {
                                       return const EpisodeCardSkeleton();
@@ -1883,11 +2065,40 @@ class _TorrentQualitySelectorSheetState
   String? _lastPlayedHash;
   // The likely picks, connecting ahead of a tap (see StreamResolver.warmUp).
   List<TorrentStream> _warmed = const [];
+  // Whether the qualities were listed again here, in another audio
+  // language: the torrents passed in (widget.prefetchedStreams) are
+  // ranked for the saved one.
+  bool _languageChanged = false;
+  // The audio language the qualities are listed in: the one saved for the
+  // title until another is picked to look at. Only saved once a quality
+  // is picked in it (see _selectQuality).
+  AudioLanguage? _language;
 
   @override
   void initState() {
     super.initState();
+    // The saved audio language, for the picker (see _buildSources).
+    AudioLanguageService().ensureLoaded().then((_) {
+      if (!mounted) return;
+      setState(() => _language ??= AudioLanguageService().of(widget.details));
+    });
     _loadStreams();
+  }
+
+  /// An audio language picked: the qualities listed again, ranked for it.
+  /// Saved for the whole series only when one of them is picked.
+  Future<void> _showLanguage(AudioLanguage choice) async {
+    if (choice == _language) return;
+    widget.resolver.coolDown(_warmed);
+    _warmed = const [];
+    setState(() {
+      _language = choice;
+      _languageChanged = true;
+      _loading = true;
+      _error = null;
+      _resolveError = null;
+    });
+    await _loadStreams();
   }
 
   @override
@@ -1902,9 +2113,13 @@ class _TorrentQualitySelectorSheetState
       final String key = widget.season != null && widget.episode != null
           ? 'last_played_torrent_${widget.imdbId}_${widget.season}_${widget.episode}'
           : 'last_played_torrent_${widget.imdbId}';
-      _lastPlayedHash = prefs.getString(key);
+      // Only in the language it was watched in: the same copy is often
+      // listed in both (see LastPlayedTorrents).
+      _lastPlayedHash = await LastPlayedTorrents.lastPlayed(
+          prefs, key, widget.details,
+          language: _language);
 
-      final prefetched = widget.prefetchedStreams == null
+      final prefetched = widget.prefetchedStreams == null || _languageChanged
           ? null
           : await widget.prefetchedStreams;
       final list = prefetched != null && prefetched.isNotEmpty
@@ -1916,6 +2131,7 @@ class _TorrentQualitySelectorSheetState
               season: widget.season,
               episode: widget.episode,
               title: widget.details,
+              audioLanguage: _language,
             );
 
       if (mounted) {
@@ -1943,8 +2159,9 @@ class _TorrentQualitySelectorSheetState
           _loading = false;
         });
         // Not for a movie: its page already did, and owns it — closing
-        // this popup mustn't end the page's head start.
-        if (widget.prefetchedStreams == null) {
+        // this popup mustn't end the page's head start. (Unless the audio
+        // language changed: the page's head start is for the old one.)
+        if (widget.prefetchedStreams == null || _languageChanged) {
           _warmed = StreamResolver.headStartCandidates(list,
               lastPlayedHash: _lastPlayedHash);
           final s = widget.season, e = widget.episode;
@@ -1970,6 +2187,13 @@ class _TorrentQualitySelectorSheetState
 
   void _selectQuality(QualityOption option) async {
     final stream = option.best;
+    // Listed in another audio language than the saved one: that's the one
+    // to play in now, and for the rest of the series.
+    final language = _language;
+    if (language != null) {
+      await AudioLanguageService().set(widget.details, language);
+      if (!mounted) return;
+    }
     if (widget.onStreamSelected != null && !widget.resolveOnSelect) {
       Navigator.pop(context);
       widget.onStreamSelected!(
@@ -2008,6 +2232,7 @@ class _TorrentQualitySelectorSheetState
           ? 'last_played_torrent_${widget.imdbId}_${widget.season}_${widget.episode}'
           : 'last_played_torrent_${widget.imdbId}';
       await prefs.setString(key, resolvedStream.infoHash);
+      await LastPlayedTorrents.rememberLanguage(prefs, key, widget.details);
 
       // Record which movie/episode this download is and how big it's
       // supposed to be, so Settings > Storage can show something more
@@ -2021,7 +2246,8 @@ class _TorrentQualitySelectorSheetState
           image: widget.movie.image,
           season: widget.season,
           episode: widget.episode,
-          totalBytes: TorrentDownloadRegistry.parseSizeBytes(resolvedStream.size),
+          totalBytes:
+              TorrentDownloadRegistry.parseSizeBytes(resolvedStream.size),
         ),
       );
 
@@ -2040,6 +2266,7 @@ class _TorrentQualitySelectorSheetState
       );
 
       if (!mounted) return;
+      final rootNav = Navigator.of(context, rootNavigator: true);
       Navigator.pop(context); // Pop bottom sheet
 
       if (widget.onStreamSelected != null) {
@@ -2053,8 +2280,7 @@ class _TorrentQualitySelectorSheetState
       }
 
       // Navigate to premium native player
-      await Navigator.push(
-        context,
+      await rootNav.push(
         PlayerRoute(
           builder: (_) => PlayerScreen(
             url: result.streamUrl,
@@ -2114,24 +2340,37 @@ class _TorrentQualitySelectorSheetState
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (widget.header == null)
+                  Padding(
+                    // Aligns with the 44px close button at top: 14 (y = 14..58)
+                    // and leaves a 12px gap before the quality list container.
+                    padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
+                    child: _buildTitleRow(context, closeButton: false),
+                  ),
                 Flexible(
                   child: CustomScrollView(
                     shrinkWrap: true,
                     // Pulling past the top drags the sheet (EpisodeSheetFrame).
                     physics: const ClampingScrollPhysics(),
                     slivers: [
-                      if (widget.header != null)
+                      if (widget.header != null) ...[
                         SliverToBoxAdapter(child: widget.header),
-                      SliverPadding(
-                        // Without a header, clear the frame's drag handle.
-                        padding: EdgeInsets.fromLTRB(
-                            20, widget.header != null ? 16 : 32, 20, 0),
-                        sliver: SliverToBoxAdapter(
-                          child: _buildTitleRow(context, closeButton: false),
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                          sliver: SliverToBoxAdapter(
+                            child: _buildTitleRow(context, closeButton: false),
+                          ),
                         ),
-                      ),
+                      ],
                       SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                        padding: EdgeInsets.fromLTRB(
+                          20,
+                          0,
+                          20,
+                          TorrentQualitySelectorSheet.showWebServers
+                              ? 0
+                              : bottomPadding,
+                        ),
                         sliver: _buildSources(isLandscape),
                       ),
                     ],
@@ -2142,9 +2381,7 @@ class _TorrentQualitySelectorSheetState
                     padding: EdgeInsets.fromLTRB(
                         20, isLandscape ? 8 : 12, 20, bottomPadding),
                     child: _buildWebServersMenu(context),
-                  )
-                else
-                  SizedBox(height: bottomPadding),
+                  ),
               ],
             ),
           ),
@@ -2278,6 +2515,20 @@ class _TorrentQualitySelectorSheetState
 
     return SliverMainAxisGroup(
       slivers: [
+        // English or the original soundtrack, for a title not made in
+        // English — saved for the whole series.
+        if (AudioLanguageService.appliesTo(widget.details))
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 14),
+              child: AudioLanguagePicker(
+                title: widget.details,
+                selected: _language,
+                enabled: !_loading && _startingOption == null,
+                onChanged: _showLanguage,
+              ),
+            ),
+          ),
         if (_resolveError != null && _resolvingMessage == null)
           SliverToBoxAdapter(child: _buildResolveError()),
         state,
@@ -2323,8 +2574,8 @@ class _TorrentQualitySelectorSheetState
   Widget _buildOptionList(List<QualityOption> options) {
     bool isLastPlayed(QualityOption option) =>
         _lastPlayedHash != null &&
-        option.streams.any((s) =>
-            s.infoHash.toLowerCase() == _lastPlayedHash!.toLowerCase());
+        option.streams.any(
+            (s) => s.infoHash.toLowerCase() == _lastPlayedHash!.toLowerCase());
     final hasLastPlayed = options.any(isLastPlayed);
 
     return QualityOptionList(
@@ -2502,6 +2753,7 @@ class _WatchOnProviderButton extends StatelessWidget {
       ),
       child: _PillInk(
         child: InkWell(
+          mouseCursor: WidgetStateMouseCursor.clickable,
           onTap: onTap,
           borderRadius: BorderRadius.circular(30),
           child: Padding(
@@ -2554,4 +2806,3 @@ class _PillInk extends StatelessWidget {
     );
   }
 }
-

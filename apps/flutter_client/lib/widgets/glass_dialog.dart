@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'floating_bottom_nav_bar.dart' show SideColumnScope, windowIsWide;
 import 'glass_blur.dart';
 
 /// Shows [builder]'s content in a frosted panel centred over a dimmed
@@ -39,6 +40,81 @@ Future<T?> showGlassDialog<T>(
       ),
     ),
   );
+}
+
+/// Shows one of the app's sheets ([builder], built on EpisodeSheetFrame:
+/// the quality picker, an episode's or a person's) — rising from the
+/// bottom on a phone; on a wide window, a popup centred over the dimmed
+/// page, fading and growing in as [showGlassDialog]'s, which a click
+/// outside or Esc closes. [GlassSheetScope] tells the frame which.
+Future<T?> showGlassSheet<T>(
+  BuildContext context, {
+  required WidgetBuilder builder,
+}) {
+  final inColumn = SideColumnScope.inColumn(context);
+  if (inColumn || !windowIsWide(context)) {
+    return showModalBottomSheet<T>(
+      context: context,
+      useRootNavigator: !inColumn,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      barrierColor: Colors.black54,
+      builder: builder,
+    );
+  }
+  return showGeneralDialog<T>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Close',
+    barrierColor: Colors.black54,
+    transitionDuration: const Duration(milliseconds: 220),
+    transitionBuilder: (_, animation, __, child) {
+      final curved =
+          CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween(begin: 0.96, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
+    pageBuilder: (sheetContext, _, __) => SafeArea(
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 600,
+              maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.85,
+            ),
+            child: GlassSheetScope(
+              popup: true,
+              child: Material(
+                type: MaterialType.transparency,
+                child: Builder(builder: builder),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// Whether the sheets under it are shown as centred popups (see
+/// [showGlassSheet]) rather than rising from the bottom.
+class GlassSheetScope extends InheritedWidget {
+  final bool popup;
+
+  const GlassSheetScope({super.key, required this.popup, required super.child});
+
+  static bool popupOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<GlassSheetScope>()?.popup ??
+      false;
+
+  @override
+  bool updateShouldNotify(GlassSheetScope old) => old.popup != popup;
 }
 
 /// Asks [title] / [message] with Cancel and [confirmLabel] buttons; true
@@ -171,7 +247,7 @@ class _DialogButton extends StatelessWidget {
             ? _shape
             : _shape.copyWith(side: BorderSide(color: kGlassEdge)),
         clipBehavior: Clip.antiAlias,
-        child: InkWell(onTap: onTap, child: Center(child: text)),
+        child: InkWell(mouseCursor: WidgetStateMouseCursor.clickable, onTap: onTap, child: Center(child: text)),
       ),
     );
   }

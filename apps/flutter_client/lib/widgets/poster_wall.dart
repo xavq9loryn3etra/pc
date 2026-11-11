@@ -5,7 +5,15 @@ import 'package:flutter/material.dart';
 /// maintenance, offline). Uses bundled assets, so it renders instantly and
 /// works without a connection.
 class PosterWall extends StatelessWidget {
-  const PosterWall({super.key});
+  /// The artwork's size against the usual (1). Smaller on a phone's welcome
+  /// screen, so more of it shows through the logo cut out of the frost.
+  final double scale;
+
+  /// How far down the wall (0 top, 1 bottom) its middle row of movies runs:
+  /// through the welcome screen's logo, wherever that sits.
+  final double focus;
+
+  const PosterWall({super.key, this.scale = 1.0, this.focus = 0.5});
 
   static const _movieAssets = [
     'assets/welcome/movies/movie_1.jpg',
@@ -40,32 +48,33 @@ class PosterWall extends StatelessWidget {
     'assets/welcome/books/book_8.jpg',
   ];
 
-  static const _rowCount = 6;
+  // At least this many rows; more when smaller artwork or a taller screen
+  // needs them to fill it.
+  static const _minRows = 6;
 
-  List<String> _getAssetsForRow(int rowIndex) {
-    switch (rowIndex % 3) {
-      case 0:
-        return _bookAssets;
-      case 1:
-        return _musicAssets;
-      case 2:
-        return _movieAssets;
-      default:
-        return _bookAssets;
-    }
-  }
+  static const _books = 0, _music = 1, _movies = 2;
 
-  Widget _buildRow(int rowIndex) {
-    final assets = _getAssetsForRow(rowIndex);
-    if (assets.isEmpty) return const SizedBox.shrink();
+  /// Books, music and movies in turn, counted from the middle row ([middle]),
+  /// which is movies.
+  static int _kindOf(int rowIndex, int middle) =>
+      ((rowIndex - middle + _movies) % 3 + 3) % 3;
 
-    final isMusic = (rowIndex % 3 == 1);
+  double _rowHeight(int kind) => ((kind == _music ? 135.0 : 155.0) + 8) * scale;
+
+  Widget _buildRow(int rowIndex, int kind) {
+    final assets = switch (kind) {
+      _books => _bookAssets,
+      _music => _musicAssets,
+      _ => _movieAssets,
+    };
+    final isMusic = kind == _music;
     final scrollRight = rowIndex.isEven;
-    final speed = 1.0 + (rowIndex * 0.15);
+    // Repeats every six rows, so extra rows don't get ever faster.
+    final speed = 1.0 + ((rowIndex % _minRows) * 0.15);
 
     // Music uses 1:1 square aspect ratio; movies and books use ~2:3 portrait
-    final double itemWidth = isMusic ? 135.0 : 105.0;
-    final double itemHeight = isMusic ? 135.0 : 155.0;
+    final double itemWidth = (isMusic ? 135.0 : 105.0) * scale;
+    final double itemHeight = (isMusic ? 135.0 : 155.0) * scale;
 
     return _ScrollingRow(
       imageAssets: assets,
@@ -73,37 +82,69 @@ class PosterWall extends StatelessWidget {
       speed: speed,
       itemWidth: itemWidth,
       itemHeight: itemHeight,
+      gap: 8 * scale,
+      radius: 12 * scale,
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    // The rows scroll every frame; the boundary keeps that repaint to the
-    // wall, instead of also repainting the text and buttons over it.
-    return RepaintBoundary(
-      child: ClipRect(
-        child: OverflowBox(
-          maxHeight: double.infinity,
-          alignment: Alignment.center,
-          child: Transform(
+    return LayoutBuilder(builder: (context, constraints) {
+      final height =
+          constraints.maxHeight.isFinite ? constraints.maxHeight : 800.0;
+      // How far the middle row is moved off the wall's centre to sit at
+      // [focus]; the wall needs that many more rows above or below.
+      final shift = (focus - 0.5) * height;
+      // Rows average (155 + 135 + 155) / 3 tall, plus their gap; a couple
+      // more than fit, as the tilt pulls the corners in. An odd count, so
+      // there's a middle row.
+      final averageRow = (445 / 3 + 8) * scale;
+      var rows = ((height + 2 * shift.abs()) / averageRow).ceil() + 2;
+      rows = rows.clamp(_minRows, 60);
+      if (rows.isEven) rows++;
+      final middle = rows ~/ 2;
+
+      // The column is centred, but its rows above and below the middle
+      // aren't quite the same height: where that leaves the middle row's
+      // centre, against the column's.
+      var above = 0.0, below = 0.0;
+      for (var i = 0; i < rows; i++) {
+        final h = _rowHeight(_kindOf(i, middle));
+        if (i < middle) above += h;
+        if (i > middle) below += h;
+      }
+      final offset = shift - (above - below) / 2;
+
+      // The rows scroll every frame; the boundary keeps that repaint to the
+      // wall, instead of also repainting the text and buttons over it.
+      return RepaintBoundary(
+        child: ClipRect(
+          child: OverflowBox(
+            maxHeight: double.infinity,
             alignment: Alignment.center,
-            transform: Matrix4.identity()
-              ..setEntry(3, 2, 0.001)
-              ..rotateX(0.15)
-              ..rotateZ(-0.05),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: List.generate(_rowCount, (i) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: _buildRow(i),
-                );
-              }),
+            child: Transform.translate(
+              offset: Offset(0, offset),
+              child: Transform(
+                alignment: Alignment.center,
+                transform: Matrix4.identity()
+                  ..setEntry(3, 2, 0.001)
+                  ..rotateX(0.15)
+                  ..rotateZ(-0.05),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: List.generate(rows, (i) {
+                    return Padding(
+                      padding: EdgeInsets.symmetric(vertical: 4 * scale),
+                      child: _buildRow(i, _kindOf(i, middle)),
+                    );
+                  }),
+                ),
+              ),
             ),
           ),
         ),
-      ),
-    );
+      );
+    });
   }
 }
 
@@ -113,6 +154,8 @@ class _ScrollingRow extends StatefulWidget {
   final double speed;
   final double itemWidth;
   final double itemHeight;
+  final double gap;
+  final double radius;
 
   const _ScrollingRow({
     required this.imageAssets,
@@ -120,6 +163,8 @@ class _ScrollingRow extends StatefulWidget {
     required this.speed,
     required this.itemWidth,
     required this.itemHeight,
+    required this.gap,
+    required this.radius,
   });
 
   @override
@@ -150,8 +195,8 @@ class _ScrollingRowState extends State<_ScrollingRow>
   Widget build(BuildContext context) {
     if (widget.imageAssets.isEmpty) return const SizedBox.shrink();
 
-    // itemWidth + 8 total horizontal margin
-    final double totalItemWidth = widget.itemWidth + 8.0;
+    // itemWidth + its horizontal margin
+    final double totalItemWidth = widget.itemWidth + widget.gap;
     final double setWidth = totalItemWidth * widget.imageAssets.length;
 
     return SizedBox(
@@ -193,9 +238,9 @@ class _ScrollingRowState extends State<_ScrollingRow>
       return Container(
         width: widget.itemWidth,
         height: widget.itemHeight,
-        margin: const EdgeInsets.symmetric(horizontal: 4),
+        margin: EdgeInsets.symmetric(horizontal: widget.gap / 2),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(widget.radius),
           child: Image.asset(
             assetPath,
             fit: BoxFit.cover,

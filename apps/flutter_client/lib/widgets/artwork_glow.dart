@@ -175,8 +175,8 @@ class _FadingCoverPainter extends CustomPainter {
       final sourceY = source.top + source.height * at;
       final color = Colors.white.withValues(alpha: opacity);
       positions.addAll([Offset(0, y), Offset(size.width, y)]);
-      textureCoordinates
-          .addAll([Offset(source.left, sourceY), Offset(source.right, sourceY)]);
+      textureCoordinates.addAll(
+          [Offset(source.left, sourceY), Offset(source.right, sourceY)]);
       colors.addAll([color, color]);
     }
     final indices = <int>[

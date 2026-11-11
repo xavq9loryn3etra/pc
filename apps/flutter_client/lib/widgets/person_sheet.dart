@@ -9,6 +9,7 @@ import 'artwork_glow.dart';
 import 'details_overview.dart';
 import 'episode_card.dart';
 import 'glass_blur.dart';
+import 'glass_dialog.dart' show showGlassSheet;
 import 'movie_poster.dart';
 
 /// A person's page, as a bottom sheet in the quality popup's frosted style
@@ -25,11 +26,8 @@ class PersonSheet extends StatefulWidget {
   const PersonSheet({super.key, required this.member});
 
   static Future<void> show(BuildContext context, CastMember member) =>
-      showModalBottomSheet(
-        context: context,
-        backgroundColor: Colors.transparent,
-        isScrollControlled: true,
-        barrierColor: Colors.black54,
+      showGlassSheet(
+        context,
         builder: (_) => PersonSheet(member: member),
       );
 
@@ -296,11 +294,14 @@ class _PersonSheetState extends State<PersonSheet> {
               ),
               Positioned(
                 bottom: 0,
-                child: GestureDetector(
+                child: MouseRegion(
+                  cursor: photo == null ? MouseCursor.defer : SystemMouseCursors.click,
+                  child: GestureDetector(
                   onTap: photo == null
                       ? null
                       : () => _viewPhoto(photo, person?.photoUrl),
                   child: _portraitOf(name, photo),
+                ),
                 ),
               ),
             ],
@@ -418,7 +419,9 @@ class _PersonSheetState extends State<PersonSheet> {
     Widget half(bool shows, String label, int count) {
       final chosen = _shows == shows;
       return Expanded(
-        child: GestureDetector(
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () => setState(() => _shows = shows),
           child: Center(
@@ -441,6 +444,7 @@ class _PersonSheetState extends State<PersonSheet> {
               ])),
             ),
           ),
+        ),
         ),
       );
     }

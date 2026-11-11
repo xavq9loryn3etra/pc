@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:volume_controller/volume_controller.dart';
 import 'package:screen_brightness/screen_brightness.dart';
@@ -25,6 +28,10 @@ class PlayerGestureOverlay extends StatefulWidget {
   final VoidCallback? onSwipeUp;
   final ValueChanged<bool>? onDoubleTapSeek;
 
+  /// A double-click with a mouse, when set: then it does this instead of
+  /// seeking (on a computer, a double-click is for full screen).
+  final VoidCallback? onDoubleClick;
+
   /// A finger held still on the screen for [holdDelay] (e.g. to play at 2×
   /// speed), and its release. A hold is neither a tap nor a volume /
   /// brightness swipe.
@@ -43,6 +50,7 @@ class PlayerGestureOverlay extends StatefulWidget {
     this.onTapAt,
     this.onSwipeUp,
     this.onDoubleTapSeek,
+    this.onDoubleClick,
     this.onHoldStart,
     this.onHoldEnd,
     this.enabled = true,
@@ -91,23 +99,27 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   DateTime? _lastSeekTapTime;
   Offset _rippleOrigin = Offset.zero; // in the feedback region's coordinates
   Timer? _seekHideTimer;
-  late final AnimationController _seekFade = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 150),
-    reverseDuration: const Duration(milliseconds: 300),
-  );
-  late final AnimationController _ripple = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 450),
-  );
+  late final AnimationController _seekFade;
+  late final AnimationController _ripple;
 
   @override
   void initState() {
     super.initState();
-    VolumeController.instance.showSystemUI = false;
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      VolumeController.instance.showSystemUI = false;
+    }
     _fadeController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
+    );
+    _seekFade = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 150),
+      reverseDuration: const Duration(milliseconds: 300),
+    );
+    _ripple = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 450),
     );
   }
 
@@ -120,11 +132,13 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
     _ripple.dispose();
     _fadeController.dispose();
     _currentValueNotifier.dispose();
-    VolumeController.instance.showSystemUI = true;
-    // Reset brightness back to system default when leaving the player
-    ScreenBrightness.instance
-        .resetApplicationScreenBrightness()
-        .catchError((_) {});
+    // Reset brightness and volume UI back to system default when leaving the player on mobile
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      VolumeController.instance.showSystemUI = true;
+      ScreenBrightness.instance
+          .resetApplicationScreenBrightness()
+          .catchError((_) {});
+    }
     super.dispose();
   }
 
@@ -176,26 +190,28 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   void _onPointerDown(PointerDownEvent event) {
     if (!widget.enabled) return;
     final screenSize = MediaQuery.of(context).size;
-    
-    // Detect bottom edge swipe for drawer
-    if (event.localPosition.dy > screenSize.height - 80) {
-      _isBottomEdgeSwipe = true;
-      _pointerStart = event.localPosition;
-      _isDragging = false;
-      return;
+
+    if (event.kind != PointerDeviceKind.mouse) {
+      // Detect bottom edge swipe for drawer
+      if (event.localPosition.dy > screenSize.height - 80) {
+        _isBottomEdgeSwipe = true;
+        _pointerStart = event.localPosition;
+        _isDragging = false;
+        return;
+      }
+
+      // Ignore other edge swipes (50px on all sides) so the user can pull system UI
+      // or trigger native back gestures without accidentally triggering volume/brightness.
+      if (event.localPosition.dy < 50 ||
+          event.localPosition.dy > screenSize.height - 50 ||
+          event.localPosition.dx < 50 ||
+          event.localPosition.dx > screenSize.width - 50) {
+        _pointerStart = null;
+        _isDragging = false;
+        return;
+      }
     }
 
-    // Ignore other edge swipes (50px on all sides) so the user can pull system UI
-    // or trigger native back gestures without accidentally triggering volume/brightness.
-    if (event.localPosition.dy < 50 || 
-        event.localPosition.dy > screenSize.height - 50 ||
-        event.localPosition.dx < 50 || 
-        event.localPosition.dx > screenSize.width - 50) {
-      _pointerStart = null;
-      _isDragging = false;
-      return;
-    }
-    
     _pointerStart = event.localPosition;
     _isDragging = false;
 
@@ -241,6 +257,15 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
       // Check for swipe up if it started from bottom edge
       if (_isBottomEdgeSwipe && delta.dy < 0) {
         widget.onSwipeUp?.call();
+        _pointerStart = null;
+        _isBottomEdgeSwipe = false;
+        return;
+      }
+
+      // Volume and brightness are a finger's swipes: dragged with a mouse
+      // (the Windows app) they'd change the computer's volume, or try to
+      // its monitor's brightness, by accident. A mouse drag does nothing.
+      if (event.kind == PointerDeviceKind.mouse) {
         _pointerStart = null;
         _isBottomEdgeSwipe = false;
         return;
@@ -334,8 +359,13 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
           now.difference(_lastTapTime!) < const Duration(milliseconds: 320) &&
           _lastTapPosition != null &&
           (tapPos - _lastTapPosition!).distance < 35.0) {
-        // Registered a double tap — starts a seek streak.
-        _seek(isForward, event.localPosition);
+        if (event.kind == PointerDeviceKind.mouse &&
+            widget.onDoubleClick != null) {
+          widget.onDoubleClick!();
+        } else {
+          // Registered a double tap — starts a seek streak.
+          _seek(isForward, event.localPosition);
+        }
         _lastTapTime = null; // Avoid triple taps triggering immediately again
       } else {
         _lastTapTime = now;

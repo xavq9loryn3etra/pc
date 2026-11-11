@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../enums/app_mode.dart';
@@ -15,7 +17,17 @@ class AppModeService {
 
   final ValueNotifier<AppMode> currentMode = ValueNotifier(AppMode.movies);
 
+  /// The desktop app (Windows; a native Mac or Linux build) is Popcorn
+  /// only: no mode selector after the splash, no mode switch in Settings.
+  /// An iPad or the iPad app on a Mac still has them.
+  static final bool canSwitchMode =
+      kIsWeb || !(Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+
   Future<void> init() async {
+    if (!canSwitchMode) {
+      currentMode.value = AppMode.movies;
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     final savedModeIndex = prefs.getInt(_storageKey);
     if (savedModeIndex != null &&

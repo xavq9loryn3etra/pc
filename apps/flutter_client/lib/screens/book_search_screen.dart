@@ -140,11 +140,11 @@ class _BookSearchScreenState extends State<BookSearchScreen> {
             },
           ),
       ],
-      body: (context, isDesktop, padding) => _buildBody(padding),
+      body: (context, isDesktop, padding) => _buildBody(padding, isDesktop),
     );
   }
 
-  Widget _buildBody(EdgeInsets padding) {
+  Widget _buildBody(EdgeInsets padding, bool isDesktop) {
     if (_errorMessage != null) {
       return Center(
         child: Text(
@@ -176,8 +176,10 @@ class _BookSearchScreenState extends State<BookSearchScreen> {
 
     return GridView.builder(
       padding: padding.copyWith(top: 16, left: 16, right: 16),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
+      // As many columns as fit, so covers stay book-sized on a wide
+      // window (still 3 on a phone).
+      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: isDesktop ? 180 : 140,
         childAspectRatio: 0.45,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,

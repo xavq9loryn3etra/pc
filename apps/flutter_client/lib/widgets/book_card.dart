@@ -19,7 +19,9 @@ class BookCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
       onTap: onTap,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -103,6 +105,7 @@ class BookCard extends StatelessWidget {
           ),
         ],
       ),
+    ),
     );
   }
 }

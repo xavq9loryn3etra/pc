@@ -216,6 +216,9 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
         trendingMovies: _trendingMovies,
         historyMovies: history,
         topRatedMovies: _topRatedMovies,
+        trendingRank: _trendingMovies
+                .indexWhere((m) => m.id == _featuredMovie!.id) +
+            1,
         onTrailerHero: onTrailer,
         onInfoHero: () => _navigateToDetails(
           _featuredMovie!,

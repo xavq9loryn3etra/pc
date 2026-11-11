@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../theme/app_theme.dart';
 import '../services/feature_flags_service.dart';
+import '../widgets/status_screen.dart';
 
 class OnboardingScreen extends StatefulWidget {
   final VoidCallback onComplete;
@@ -95,6 +96,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // A wide window has room for all three modes at once, so there's
+    // nothing to page through.
+    if (MediaQuery.sizeOf(context).width >= 900) {
+      return _WideOnboarding(pages: _pages, onComplete: widget.onComplete);
+    }
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -150,9 +156,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         ),
                         const SizedBox(height: 32),
 
-                        // Next / Get Started button
+                        // Next / Get Started button: full width on a
+                        // phone, a button's width on a wide window.
                         SizedBox(
-                          width: double.infinity,
+                          width: 420,
                           height: 56,
                           child: ElevatedButton(
                             onPressed: _nextPage,
@@ -295,63 +302,226 @@ class _OnboardingPageItemState extends State<_OnboardingPageItem>
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 40),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Spacer(flex: 2),
-
-              // Icon
-              if (page.isSvg)
-                SvgPicture.asset(
-                  page.assetPath,
-                  width: page.iconSize,
-                  height: page.iconSize,
-                  colorFilter: ColorFilter.mode(
-                    page.accentColor,
-                    BlendMode.srcIn,
-                  ),
-                )
-              else
-                Image.asset(
-                  page.assetPath,
-                  width: page.iconSize,
-                  height: page.iconSize,
-                ),
-
-              const SizedBox(height: 32),
-
-              // Subtitle
-              Text(
-                hidePlayback
-                    ? page.hidePlaybackSubtitle ?? page.subtitle
-                    : page.subtitle,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                  letterSpacing: -0.3,
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              // Description
-              Text(
-                hidePlayback
-                    ? page.hidePlaybackDescription ?? page.description
-                    : page.description,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 15,
-                  color: Colors.white.withValues(alpha: 0.6),
-                  height: 1.6,
-                ),
-              ),
-
-              const Spacer(flex: 3),
-            ],
+          // Short lines on a wide window, as on a phone.
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: _content(page, hidePlayback),
+            ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _content(_OnboardingPageData page, bool hidePlayback) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Spacer(flex: 2),
+        _ModeIntro(page: page, hidePlayback: hidePlayback),
+        const Spacer(flex: 3),
+      ],
+    );
+  }
+}
+
+/// One mode's logo, headline and blurb: a whole page on a phone, one of
+/// three panels on a wide window.
+class _ModeIntro extends StatelessWidget {
+  final _OnboardingPageData page;
+  final bool hidePlayback;
+
+  const _ModeIntro({required this.page, required this.hidePlayback});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Icon
+        if (page.isSvg)
+          SvgPicture.asset(
+            page.assetPath,
+            width: page.iconSize,
+            height: page.iconSize,
+            colorFilter: ColorFilter.mode(
+              page.accentColor,
+              BlendMode.srcIn,
+            ),
+          )
+        else
+          Image.asset(
+            page.assetPath,
+            width: page.iconSize,
+            height: page.iconSize,
+          ),
+
+        const SizedBox(height: 32),
+
+        // Subtitle
+        Text(
+          hidePlayback
+              ? page.hidePlaybackSubtitle ?? page.subtitle
+              : page.subtitle,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w700,
+            color: Colors.white,
+            letterSpacing: -0.3,
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Description
+        Text(
+          hidePlayback
+              ? page.hidePlaybackDescription ?? page.description
+              : page.description,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 15,
+            color: Colors.white.withValues(alpha: 0.6),
+            height: 1.6,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Wide-window onboarding: the three modes side by side, each in a panel
+/// lit by its own colour, fading in left to right, with one Continue.
+class _WideOnboarding extends StatefulWidget {
+  final List<_OnboardingPageData> pages;
+  final VoidCallback onComplete;
+
+  const _WideOnboarding({required this.pages, required this.onComplete});
+
+  @override
+  State<_WideOnboarding> createState() => _WideOnboardingState();
+}
+
+class _WideOnboardingState extends State<_WideOnboarding>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1400),
+  )..forward();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// Fade-and-rise for the item at [index] of [count], each starting a
+  /// beat after the one before.
+  Widget _staggered(int index, int count, Widget child) {
+    final start = index * 0.15;
+    final anim = CurvedAnimation(
+      parent: _controller,
+      curve: Interval(start, (start + 0.55).clamp(0.0, 1.0),
+          curve: Curves.easeOutCubic),
+    );
+    return AnimatedBuilder(
+      animation: anim,
+      builder: (context, child) => Opacity(
+        opacity: anim.value,
+        child: Transform.translate(
+          offset: Offset(0, 24 * (1 - anim.value)),
+          child: child,
+        ),
+      ),
+      child: child,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hidePlayback = FeatureFlagsService().hidePlayback.value;
+    final pages = widget.pages;
+    // Tall, poster-like cards: about 60% of the window, within reason.
+    final cardHeight =
+        (MediaQuery.sizeOf(context).height * 0.6).clamp(460.0, 720.0);
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 48),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1320),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    height: cardHeight,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (var i = 0; i < pages.length; i++) ...[
+                          if (i > 0) const SizedBox(width: 24),
+                          Expanded(
+                            child: _staggered(
+                              i,
+                              pages.length + 1,
+                              _ModePanel(
+                                page: pages[i],
+                                hidePlayback: hidePlayback,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 56),
+                  _staggered(
+                    pages.length,
+                    pages.length + 1,
+                    StatusPrimaryButton(
+                      label: 'Continue',
+                      onPressed: widget.onComplete,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ModePanel extends StatelessWidget {
+  final _OnboardingPageData page;
+  final bool hidePlayback;
+
+  const _ModePanel({required this.page, required this.hidePlayback});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        // The same glow from the top as the mode's phone page.
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [page.gradientColor, Colors.black],
+          stops: const [0.0, 0.75],
+        ),
+      ),
+      // A little above the middle, so the colour glow sits behind the logo.
+      child: Align(
+        alignment: const Alignment(0, -0.2),
+        child: _ModeIntro(page: page, hidePlayback: hidePlayback),
       ),
     );
   }

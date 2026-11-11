@@ -18,8 +18,8 @@ class SearchHistoryService {
   final ValueNotifier<List<String>> entries = ValueNotifier(const []);
   bool _loaded = false;
 
-  Future<void> load() async {
-    if (_loaded) return;
+  Future<void> load({bool force = false}) async {
+    if (_loaded && !force) return;
     _loaded = true;
     try {
       final prefs = await SharedPreferences.getInstance();

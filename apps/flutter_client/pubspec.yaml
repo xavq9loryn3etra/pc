@@ -51,6 +51,8 @@ dependencies:
   url_launcher: ^6.3.2
   webview_flutter_wkwebview: ^3.23.6
   window_manager: ^0.5.1
+  # Win32 calls for the desktop app's full screen (window_full_screen.dart).
+  ffi: ^2.1.5
   animations: ^2.1.1
   path_provider: ^2.1.5
   internet_file: ^1.2.0
@@ -149,3 +151,7 @@ flutter_launcher_icons:
   min_sdk_android: 21
   # The App Store refuses icons with an alpha channel.
   remove_alpha_ios: true
+  windows:
+    generate: true
+    image_path: "assets/icon_windows.png"
+    icon_size: 256

@@ -111,7 +111,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
           padding: padding.copyWith(
             left: horizontalPadding,
             right: horizontalPadding,
-            top: 100,
+            top: ScreenScaffold.contentTop(context),
           ),
           gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
             maxCrossAxisExtent: isDesktop ? 200 : 150,

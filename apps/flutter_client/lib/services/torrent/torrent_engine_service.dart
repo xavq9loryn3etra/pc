@@ -265,7 +265,17 @@ class TorrentEngineService {
       print('[timing] playing from the head start '
           '(${((engine.torrents[id]?.totalDone ?? 0) / (1024 * 1024)).toStringAsFixed(1)} MB in)');
     } else {
-      if (warm != null) _stopStream(warm.id);
+      // One stream to a torrent: any other of its streams goes first — a
+      // head start for another file, or the file played until now (a
+      // season pack's previous episode, the next one being another file
+      // of the same torrent). The engine tells only the first stream of a
+      // torrent its pieces have arrived, so a second one waited forever
+      // for pieces already downloaded: the next episode never started.
+      try {
+        engine.stopAllStreamsForTorrent(id);
+      } catch (e) {
+        print('Error stopping streams of torrent $id: $e');
+      }
       stream = _openStream(id, videoIdx);
     }
     _logOpening(id);
@@ -364,6 +374,15 @@ class TorrentEngineService {
   bool isReady(String infoHash) {
     final id = _liveId(infoHash.toLowerCase());
     return id != null && (engine.torrents[id]?.hasMetadata ?? false);
+  }
+
+  /// Whether torrent [infoHash] got a head start's download going (see
+  /// warmUp): of the copies it raced, the one that connected — and has
+  /// some of the file already. StreamResolver.resolveWithFallback tries it
+  /// before any other.
+  bool hasHeadStart(String infoHash) {
+    final id = _liveId(infoHash.toLowerCase());
+    return id != null && _warmStreams.containsKey(id);
   }
 
   /// A head start for what the user is likely to play next — the movie

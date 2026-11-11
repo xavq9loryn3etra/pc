@@ -14,6 +14,7 @@ import 'dart:async';
 import 'screens/welcome_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/mode_selector_screen.dart';
+import 'screens/main_screen.dart';
 import 'screens/update_overlay.dart';
 import 'screens/maintenance_overlay.dart';
 import 'screens/no_internet_overlay.dart';
@@ -29,10 +30,13 @@ import 'services/torrent/download_ahead_settings.dart';
 import 'services/torrent/torrent_engine_service.dart';
 import 'services/torrent/torrent_storage_service.dart';
 import 'services/trending_service.dart';
+import 'services/smooth_wheel_binding.dart';
 import 'services/visual_effects_service.dart';
+import 'services/window_full_screen.dart';
 
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  // Smooth mouse-wheel scrolling on Windows; the stock binding elsewhere.
+  SmoothWheelBinding.ensureInitialized();
 
   // Apache 2.0 attribution for the bundled Yellowtail font.
   LicenseRegistry.addLicense(() async* {
@@ -74,6 +78,7 @@ void main() async {
   SystemChrome.setSystemUIOverlayStyle(AppTheme.systemUiStyle);
 
   MediaKit.ensureInitialized();
+  await WindowFullScreen.init();
   await SavedMoviesService().init();
   await AppModeService().init();
   await FeatureFlagsService().init();
@@ -244,7 +249,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     try {
       final prefs = await SharedPreferences.getInstance();
       final hasSeenWelcome = prefs.getBool('has_seen_welcome') ?? false;
-      final hasSeenOnboarding = prefs.getBool('has_seen_onboarding') ?? false;
+      // The desktop app is Popcorn only, so it has no modes to introduce.
+      final hasSeenOnboarding = !AppModeService.canSwitchMode ||
+          (prefs.getBool('has_seen_onboarding') ?? false);
 
       if (!hasSeenWelcome && mounted) {
         setState(() => _currentScreen = _AppScreen.welcome);
@@ -284,6 +291,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   Future<void> _onWelcomeComplete() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('has_seen_welcome', true);
+    // Straight into Popcorn on the desktop app: the onboarding cards
+    // introduce three modes it doesn't have.
+    if (!AppModeService.canSwitchMode) return _onOnboardingComplete();
     if (mounted) {
       setState(() => _currentScreen = _AppScreen.onboarding);
     }
@@ -319,7 +329,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       case _AppScreen.onboarding:
         return OnboardingScreen(onComplete: _onOnboardingComplete);
       case _AppScreen.modeSelector:
-        return const ModeSelectorScreen();
+        // Straight into Popcorn where there are no modes (the desktop app).
+        return AppModeService.canSwitchMode
+            ? const ModeSelectorScreen()
+            : const MainScreen();
     }
   }
 
@@ -331,6 +344,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       title: 'Popcorn',
       navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
+      scrollBehavior: const _AppScrollBehavior(),
       theme: AppTheme.darkTheme,
       builder: (context, child) {
         // `child` is the app's whole Navigator — swapping it out for
@@ -436,4 +450,22 @@ class _ShaderWarmup extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Scrolling as on the phone, wherever the app runs: no scroll bars (on a
+/// computer Flutter adds one under every list, which drew a line across
+/// the cast row), and a mouse can drag a list as a finger swipes it — how
+/// a row scrolls sideways without a bar to pull. (The wheel scrolls
+/// sideways with Shift held.)
+class _AppScrollBehavior extends MaterialScrollBehavior {
+  const _AppScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices =>
+      {...super.dragDevices, PointerDeviceKind.mouse};
+
+  @override
+  Widget buildScrollbar(
+          BuildContext context, Widget child, ScrollableDetails details) =>
+      child;
 }

@@ -33,6 +33,13 @@ if(ANDROID)
         # Required by Google Play for Android 15+ devices with 16 KB pages.
         "-Wl,-z,max-page-size=16384"
     )
+elseif(WIN32)
+    # libtorrent_flutter.dll, libtorrent linked in statically; only the
+    # bridge's lt_* entry points (TORRENT_API, dllexport) are exported.
+    add_library(libtorrent_flutter SHARED ../src/torrent_bridge.cpp)
+    target_compile_definitions(libtorrent_flutter PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(libtorrent_flutter PRIVATE /utf-8 /bigobj)
 else()
     add_library(libtorrent_flutter STATIC ../src/torrent_bridge.cpp)
 endif()
@@ -48,3 +55,8 @@ set_target_properties(libtorrent_flutter PROPERTIES
     PREFIX ""
     OUTPUT_NAME "liblibtorrent_flutter"
 )
+if(WIN32)
+    # The name the Dart side opens (see lib/src/ffi_bindings.dart).
+    set_target_properties(libtorrent_flutter PROPERTIES
+        OUTPUT_NAME "libtorrent_flutter")
+endif()

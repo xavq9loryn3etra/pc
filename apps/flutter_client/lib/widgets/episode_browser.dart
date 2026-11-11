@@ -1,14 +1,17 @@
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import '../models/movie.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/audio_language_service.dart';
 import '../services/saved_movies_service.dart';
 import '../services/torrent/torrent_index_service.dart';
+import '../services/torrent/last_played_torrents.dart';
 import '../services/torrent/stream_resolver.dart';
 import 'episode_card.dart';
 import 'glass_blur.dart';
 import 'quality_option_list.dart';
+import 'floating_bottom_nav_bar.dart' show kNavButtonHeight;
+import 'glass_bubble_bar.dart' show GlassBubbleBar, MovieTitleLogo;
 import 'season_picker.dart';
 
 /// YouTube-style, full-screen episode browser for the in-player "Episodes"
@@ -37,6 +40,14 @@ class EpisodeBrowser extends StatefulWidget {
   final ValueChanged<int> onSeasonChanged;
   final VoidCallback onClose;
 
+  /// The copy playing (of [playingEpisode]): its quality is marked as
+  /// playing in that episode's list.
+  final TorrentStream? playingStream;
+
+  /// The audio language was changed in an episode's list (it's saved by
+  /// then): what's playing should follow it.
+  final VoidCallback? onAudioLanguageChanged;
+
   /// [stream] is the chosen quality's best torrent; [allStreams] is every
   /// torrent found for the episode (for falling back and for the player's
   /// Quality menu).
@@ -45,8 +56,19 @@ class EpisodeBrowser extends StatefulWidget {
   final void Function(Episode episode, int season, String provider)
       onWebPlayerChosen;
 
+  /// A panel down the side of a computer's wide window (see PlayerScreen),
+  /// a phone screen wide, instead of the whole screen: two columns of
+  /// episodes, and an episode's details and qualities down the panel.
+  final bool asPanel;
+
+  /// The side panel's TapRegion group (see PlayerScreen): the panel, its
+  /// season menu and the Episodes button — a click anywhere else closes
+  /// the panel, as one outside a menu closes that.
+  static const Object panelTapGroup = #episodePanel;
+
   const EpisodeBrowser({
     super.key,
+    this.asPanel = false,
     required this.episodes,
     this.seasons,
     required this.movie,
@@ -56,6 +78,8 @@ class EpisodeBrowser extends StatefulWidget {
     required this.playingSeason,
     required this.playingEpisode,
     required this.resolver,
+    this.playingStream,
+    this.onAudioLanguageChanged,
     required this.onSeasonChanged,
     required this.onClose,
     required this.onTorrentChosen,
@@ -71,8 +95,13 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
   final ScrollController _gridScrollController = ScrollController();
   bool _hasScrolled = false;
 
-  static const int _crossAxisCount = 4;
-  static const double _gridPadding = 24.0;
+  // Where the grid was scrolled to when an episode was opened: put back on
+  // returning to it, which builds it anew (from the top, otherwise — the
+  // playing episode it had scrolled to on opening gone off the top).
+  double? _gridOffsetToRestore;
+
+  int get _crossAxisCount => widget.asPanel ? 2 : 4;
+  double get _gridPadding => widget.asPanel ? 16.0 : 24.0;
   // The details screen's card gap.
   static const double _gap = 12.0;
 
@@ -100,6 +129,11 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
     _gridScrollController.jumpTo(offset);
   }
 
+  // The header floats over the top of the grid (see _buildGrid): its row,
+  // and where the grid's first row starts, under it.
+  static const double _headerTop = 12;
+  static const double _gridTop = _headerTop + 44 + 16;
+
   @override
   void dispose() {
     _gridScrollController.dispose();
@@ -111,8 +145,10 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
     // Edge to edge, behind a camera cutout like the video: the grid sits in
     // a SafeArea, and the episode view keeps its own content clear of it
     // (see _buildDetailAndSource) so its backdrop can still fill the screen.
+    // As a side panel: on the player's frosted glass (the menus' — see
+    // PlayerScreen._episodeBrowserLayer), with no backdrop of its own.
     return Material(
-      color: Colors.black,
+      color: widget.asPanel ? Colors.transparent : Colors.black,
       child: AnimatedSwitcher(
         duration: const Duration(milliseconds: 250),
         switchInCurve: Curves.easeOutCubic,
@@ -137,10 +173,11 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    EpisodeBackdrop(
-                      image: widget.details.backdrop ?? widget.movie.backdrop,
-                      dim: 0.6,
-                    ),
+                    if (!widget.asPanel)
+                      EpisodeBackdrop(
+                        image: widget.details.backdrop ?? widget.movie.backdrop,
+                        dim: 0.6,
+                      ),
                     SafeArea(child: _buildGrid()),
                   ],
                 ),
@@ -155,21 +192,34 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
 
   // ─────────────────────────── Grid view ───────────────────────────
 
+  /// The episodes, the whole screen high, scrolling under a floating
+  /// header — the title, season picker and close button as glass islands,
+  /// as on the app's pages — rather than below a header strip that cut
+  /// the cards off along its edge.
   Widget _buildGrid() {
-    return Column(
+    return Stack(
       children: [
-        _buildHeader(),
-        Expanded(
+        Positioned.fill(
           child: LayoutBuilder(
             builder: (context, constraints) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (mounted && _gridScrollController.hasClients) {
-                  _scrollToCurrentEpisode(constraints.maxWidth);
+                  final restore = _gridOffsetToRestore;
+                  // (Not the outgoing grid, fading out as an episode
+                  // opens: the one coming back.)
+                  if (restore != null && _selectedEpisode == null) {
+                    _gridOffsetToRestore = null;
+                    _gridScrollController.jumpTo(restore.clamp(0.0,
+                        _gridScrollController.position.maxScrollExtent));
+                  } else {
+                    _scrollToCurrentEpisode(constraints.maxWidth);
+                  }
                 }
               });
               return GridView.builder(
                 controller: _gridScrollController,
-                padding: const EdgeInsets.all(_gridPadding),
+                padding: EdgeInsets.fromLTRB(
+                    _gridPadding, _gridTop, _gridPadding, _gridPadding),
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: _crossAxisCount,
                   crossAxisSpacing: _gap,
@@ -183,60 +233,96 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
             },
           ),
         ),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: _buildHeader(),
+        ),
       ],
     );
   }
 
+  /// Close, the show's logo (or name), and the season picker: one piece
+  /// of glass, each bubble growing out of the last (GlassBubbleBar), as
+  /// the details screen's back button and title — floating over the grid.
   Widget _buildHeader() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
-      child: Row(
-        children: [
-          if (widget.movie.logoUrl != null)
-            SizedBox(
-              height: 40,
-              width: 100,
-              child: CachedNetworkImage(
-                imageUrl: widget.movie.logoUrl!,
-                fit: BoxFit.contain,
-                alignment: Alignment.centerLeft,
-                memCacheHeight:
-                    (40 * MediaQuery.of(context).devicePixelRatio).toInt(),
-              ),
-            )
-          else
-            Expanded(
-              child: Text(
-                widget.movie.title,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  height: 1.25,
-                  fontWeight: FontWeight.w700,
+    final seasons = widget.seasons?.where((s) => s.seasonNumber > 0).toList();
+    final picker = seasons == null || seasons.isEmpty
+        ? null
+        : SeasonPicker(
+            bare: true,
+            seasons: seasons,
+            current: widget.currentSeason,
+            onSelected: widget.onSeasonChanged,
+          );
+    final close = CircleAvatar(
+      backgroundColor: Colors.transparent,
+      child: IconButton(
+        icon: const Icon(Icons.close_rounded, color: Colors.white),
+        tooltip: 'Close',
+        onPressed: widget.onClose,
+        iconSize: 20,
+        padding: EdgeInsets.zero,
+      ),
+    );
+    // In the side panel, beside the playing video, the show's logo is
+    // already on screen: just the season picker and close, in the right
+    // corner — one piece of glass, as the details screen's back button and
+    // title (GlassBubbleBar), mirrored: close in the corner, the season
+    // bubble grown out of it to the left.
+    if (widget.asPanel) {
+      return Padding(
+        padding:
+            EdgeInsets.fromLTRB(_gridPadding, _headerTop, _gridPadding, 0),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: seasons == null || seasons.isEmpty
+              ? GlassCircleButton(
+                  icon: Icons.close_rounded,
+                  onPressed: widget.onClose,
+                )
+              : GlassBubbleBar(
+                  reveal: 1,
+                  leadingOnRight: true,
+                  leading: close,
+                  titlePadding: 0,
+                  // The bubble's full height, so all of it takes the click.
+                  title: SizedBox(
+                    height: kNavButtonHeight,
+                    child: SeasonPicker(
+                      bare: true,
+                      large: true,
+                      menuTapGroup: EpisodeBrowser.panelTapGroup,
+                      seasons: seasons,
+                      current: widget.currentSeason,
+                      onSelected: widget.onSeasonChanged,
+                    ),
+                  ),
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          if (widget.movie.logoUrl != null) const Spacer(),
-          const SizedBox(width: 12),
-          if (widget.seasons != null)
-            SeasonPicker(
-              seasons: widget.seasons!
-                  .where((s) => s.seasonNumber > 0)
-                  .toList(),
-              current: widget.currentSeason,
-              onSelected: widget.onSeasonChanged,
-            ),
-          const SizedBox(width: 10),
-          GlassCircleButton(
-            icon: Icons.close_rounded,
-            onPressed: widget.onClose,
-          ),
-        ],
+        ),
+      );
+    }
+    return Padding(
+      padding: EdgeInsets.fromLTRB(_gridPadding, _headerTop, _gridPadding, 0),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: GlassBubbleBar(
+          reveal: 1,
+          leading: close,
+          // The full details: the copy passed as movie often has no logo,
+          // which left the name in plain text.
+          title: MovieTitleLogo(movie: widget.details),
+          trailing: picker,
+        ),
       ),
     );
   }
+
+  /// Whether [ep] (of the season being browsed) is the one playing.
+  bool _isPlaying(Episode ep) =>
+      widget.currentSeason == widget.playingSeason &&
+      ep.episodeNumber == widget.playingEpisode;
 
   /// The details screen's episode card (see EpisodeCard) — unaired
   /// episodes greyed out and inert, the playing one marked.
@@ -251,9 +337,13 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
       episode: ep,
       fallbackImage: widget.details.backdrop ?? widget.movie.backdrop,
       progress: progress,
-      playing: widget.currentSeason == widget.playingSeason &&
-          ep.episodeNumber == widget.playingEpisode,
-      onTap: () => setState(() => _selectedEpisode = ep),
+      playing: _isPlaying(ep),
+      onTap: () => setState(() {
+        if (_gridScrollController.hasClients) {
+          _gridOffsetToRestore = _gridScrollController.offset;
+        }
+        _selectedEpisode = ep;
+      }),
     );
   }
 
@@ -275,6 +365,11 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
           ep.episodeNumber,
         ) ??
         ep.progress;
+
+    // The side panel: down it instead (_buildDetailColumn).
+    if (widget.asPanel) {
+      return _buildDetailColumn(ep, fallback, progress);
+    }
 
     return Stack(
       children: [
@@ -313,6 +408,8 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
                   details: widget.details,
                   season: widget.currentSeason,
                   episode: ep.episodeNumber,
+                  playingStream: _isPlaying(ep) ? widget.playingStream : null,
+                  onAudioLanguageChanged: widget.onAudioLanguageChanged,
                   onTorrentChosen: (stream, allStreams) =>
                       widget.onTorrentChosen(
                           ep, widget.currentSeason, stream, allStreams),
@@ -343,6 +440,66 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
       ],
     );
   }
+
+  /// [_buildDetailAndSource] in the side panel (see [EpisodeBrowser.
+  /// asPanel]), a phone screen wide: as the details screen's episode popup
+  /// on a phone — the still across the top, the episode's name, time and
+  /// description over its foot, the qualities under them — on the panel's
+  /// frosted glass, scrolling as one. Back and close float over
+  /// the top corners.
+  Widget _buildDetailColumn(Episode ep, String? fallback, double? progress) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                EpisodeDetailHeader(
+                  episode: ep,
+                  fallbackImage: fallback,
+                  progress: progress,
+                ),
+                _EpisodeSourcePicker(
+                  key: ValueKey('${widget.currentSeason}_${ep.episodeNumber}'),
+                  inCard: true,
+                  resolver: widget.resolver,
+                  imdbId: widget.imdbId,
+                  details: widget.details,
+                  season: widget.currentSeason,
+                  episode: ep.episodeNumber,
+                  playingStream: _isPlaying(ep) ? widget.playingStream : null,
+                  onAudioLanguageChanged: widget.onAudioLanguageChanged,
+                  onTorrentChosen: (stream, allStreams) =>
+                      widget.onTorrentChosen(
+                          ep, widget.currentSeason, stream, allStreams),
+                  onWebPlayerChosen: (provider) => widget.onWebPlayerChosen(
+                      ep, widget.currentSeason, provider),
+                ),
+              ],
+            ),
+          ),
+        ),
+        Positioned(
+          top: 12,
+          left: 12,
+          child: GlassCircleButton(
+            icon: GlassCircleButton.backIcon,
+            iconSize: GlassCircleButton.backIconSize,
+            onPressed: () => setState(() => _selectedEpisode = null),
+          ),
+        ),
+        Positioned(
+          top: 12,
+          right: 12,
+          child: GlassCircleButton(
+            icon: Icons.close_rounded,
+            onPressed: widget.onClose,
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 /// Right-panel source list: fetches available torrent streams for one
@@ -359,12 +516,27 @@ class _EpisodeSourcePicker extends StatefulWidget {
       onTorrentChosen;
   final ValueChanged<String> onWebPlayerChosen;
 
+  /// The copy playing, when this is the episode playing: its quality is
+  /// marked, and can't be picked (see QualityOptionList.isCurrent).
+  final TorrentStream? playingStream;
+
+  /// The copy playing was picked again in another audio language (saved
+  /// by then): what's playing should switch to it. See
+  /// EpisodeBrowser.onAudioLanguageChanged.
+  final VoidCallback? onAudioLanguageChanged;
+
   /// The web player servers are hidden for now, like the Play popup's
   /// (see TorrentQualitySelectorSheet.showWebServers).
   static const bool _showWebServers = false;
 
+  /// In the side panel's episode view (see _buildDetailColumn), under the
+  /// episode's header: as tall as its rows (the view scrolls as one), and
+  /// inset as the header's text is.
+  final bool inCard;
+
   const _EpisodeSourcePicker({
     super.key,
+    this.inCard = false,
     required this.resolver,
     required this.imdbId,
     required this.details,
@@ -372,6 +544,8 @@ class _EpisodeSourcePicker extends StatefulWidget {
     required this.episode,
     required this.onTorrentChosen,
     required this.onWebPlayerChosen,
+    this.playingStream,
+    this.onAudioLanguageChanged,
   });
 
   @override
@@ -385,40 +559,109 @@ class _EpisodeSourcePickerState extends State<_EpisodeSourcePicker> {
   String? _error;
   // The likely picks, connecting ahead of a tap (see StreamResolver.warmUp).
   List<TorrentStream> _warmed = const [];
+  // The audio language the list is in: the one saved for the series
+  // (what's playing) until another is picked to look at. Only saved once
+  // a quality is picked in it (see _choose) — looking changes nothing.
+  AudioLanguage? _language;
 
   @override
   void initState() {
     super.initState();
+    // Back to the saved language when it's changed in the player's Audio
+    // menu.
+    AudioLanguageService().changes.addListener(_followSaved);
     _load();
+  }
+
+  void _followSaved() {
+    final saved = AudioLanguageService().of(widget.details);
+    if (saved == _language) return;
+    _language = saved;
+    _reload();
   }
 
   @override
   void dispose() {
+    AudioLanguageService().changes.removeListener(_followSaved);
     widget.resolver.coolDown(_warmed);
     super.dispose();
   }
 
+  void _reload() {
+    if (!mounted) return;
+    widget.resolver.coolDown(_warmed);
+    _warmed = const [];
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    _load();
+  }
+
+  /// Picked in the list's Audio row: the qualities listed in it, to look
+  /// at. Nothing playing changes, and nothing's saved, until a quality is
+  /// picked (see [_choose]).
+  void _showLanguage(AudioLanguage choice) {
+    if (choice == _language) return;
+    _language = choice;
+    _reload();
+  }
+
+  /// Whether the list is in the language what's playing is in.
+  bool get _inPlayingLanguage =>
+      _language == null || _language == AudioLanguageService().of(widget.details);
+
+  /// A quality picked: its language saved for the whole series if it's
+  /// another, then played — or, for the copy already playing (now wanted
+  /// in another language), just its soundtrack switched.
+  Future<void> _choose(QualityOption option) async {
+    final languages = AudioLanguageService();
+    final language = _language;
+    final changed = language != null && language != languages.of(widget.details);
+    if (changed) await languages.set(widget.details, language);
+    final playing = widget.playingStream;
+    if (changed &&
+        playing != null &&
+        option.best.infoHash.toLowerCase() == playing.infoHash.toLowerCase()) {
+      widget.onAudioLanguageChanged?.call();
+      return;
+    }
+    widget.onTorrentChosen(option.best, _streams!);
+  }
+
   Future<void> _load() async {
     try {
+      final languages = AudioLanguageService();
+      await languages.ensureLoaded();
+      _language ??= languages.of(widget.details);
       final list = await widget.resolver.getAvailableStreams(
         imdbId: widget.imdbId,
         type: 'tv',
         season: widget.season,
         episode: widget.episode,
         title: widget.details,
+        audioLanguage: _language,
       );
       if (mounted) {
         setState(() {
           _streams = list;
-          _options = StreamResolver.qualityOptions(list);
+          _options = StreamResolver.qualityOptions(list,
+              preferHash: widget.playingStream?.infoHash);
           _loading = false;
         });
+        // The episode playing needs no head start.
+        if (widget.playingStream != null) return;
         final prefs = await SharedPreferences.getInstance();
+        final lastPlayed = await LastPlayedTorrents.lastPlayed(
+            prefs,
+            'last_played_torrent_'
+            '${widget.imdbId}_${widget.season}_${widget.episode}',
+            widget.details,
+            language: _language);
         if (!mounted) return;
         _warmed = StreamResolver.headStartCandidates(
           list,
-          lastPlayedHash: prefs.getString('last_played_torrent_'
-              '${widget.imdbId}_${widget.season}_${widget.episode}'),
+          lastPlayedHash: lastPlayed,
         );
         widget.resolver.warmUp(
           _warmed,
@@ -439,9 +682,25 @@ class _EpisodeSourcePickerState extends State<_EpisodeSourcePicker> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(8, 12, 24, 24),
+      padding: widget.inCard
+          ? const EdgeInsets.fromLTRB(20, 12, 20, 20)
+          : const EdgeInsets.fromLTRB(8, 12, 24, 24),
       child: ListView(
+        shrinkWrap: widget.inCard,
+        physics: widget.inCard ? const NeverScrollableScrollPhysics() : null,
+        padding: widget.inCard ? EdgeInsets.zero : null,
         children: [
+          // English or the original soundtrack, for a series not made in
+          // English: lists the qualities in it (see _showLanguage).
+          if (AudioLanguageService.appliesTo(widget.details)) ...[
+            AudioLanguagePicker(
+              title: widget.details,
+              selected: _language,
+              enabled: !_loading,
+              onChanged: _showLanguage,
+            ),
+            const SizedBox(height: 16),
+          ],
           const QualitySectionLabel('Choose quality'),
           const SizedBox(height: 10),
           if (_loading)
@@ -476,12 +735,20 @@ class _EpisodeSourcePickerState extends State<_EpisodeSourcePicker> {
   Widget _buildOptionList(List<QualityOption> options) {
     // The resolver sorts its overall pick first (see getAvailableStreams).
     final recommendedTier = StreamResolver.tierOf(_streams!.first);
+    // Marked as playing only in the language it's playing in.
+    final playing = _inPlayingLanguage ? widget.playingStream : null;
+    final playingTier = playing == null ? null : StreamResolver.tierOf(playing);
     return QualityOptionList(
       options: options,
       compact: true,
-      tagFor: (option) => option.tier == recommendedTier ? 'Recommended' : null,
-      isPrimary: (option) => option.tier == recommendedTier,
-      onSelected: (option) => widget.onTorrentChosen(option.best, _streams!),
+      isCurrent: (option) => option.tier == playingTier,
+      tagFor: (option) => option.tier == playingTier
+          ? 'Playing'
+          : (option.tier == recommendedTier ? 'Recommended' : null),
+      // The episode playing: nothing's the obvious next pick.
+      isPrimary: (option) =>
+          playingTier == null && option.tier == recommendedTier,
+      onSelected: _choose,
     );
   }
 

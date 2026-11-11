@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'glass_blur.dart';
 
@@ -132,8 +131,9 @@ class _StatusScreenState extends State<StatusScreen>
 /// the app-wide screens: these status pages and the welcome screen.
 class IridescentScriptText extends StatelessWidget {
   final String text;
+  final double fontSize;
 
-  const IridescentScriptText(this.text, {super.key});
+  const IridescentScriptText(this.text, {super.key, this.fontSize = 44});
 
   @override
   Widget build(BuildContext context) {
@@ -145,9 +145,9 @@ class IridescentScriptText extends StatelessWidget {
         child: Text(
           text,
           textAlign: TextAlign.center,
-          style: const TextStyle(
+          style: TextStyle(
             fontFamily: StatusScreen.scriptFont,
-            fontSize: 44,
+            fontSize: fontSize,
             height: 1.25,
             color: Colors.white,
           ),
@@ -172,22 +172,27 @@ class StatusPrimaryButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      height: 56,
-      child: ElevatedButton(
-        onPressed: onPressed,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.white,
-          foregroundColor: Colors.black,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+    // Full width on a phone; on a wide window a stretched bar looks broken,
+    // so it stops at a normal button's width (centred by its column).
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 400),
+      child: SizedBox(
+        width: double.infinity,
+        height: 56,
+        child: ElevatedButton(
+          onPressed: onPressed,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            elevation: 0,
           ),
-          elevation: 0,
-        ),
-        child: Text(
-          label,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
         ),
       ),
     );

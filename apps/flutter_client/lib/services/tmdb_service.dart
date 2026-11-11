@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 import 'dart:ui' show PlatformDispatcher;
 import 'package:flutter/services.dart' show MethodChannel;
 import 'package:dio/dio.dart';
+import 'logo_brightness.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/movie.dart';
 import 'saved_movies_service.dart';
@@ -367,6 +368,8 @@ class TMDBService {
           cancelToken: cancelToken,
         );
         await _addOriginalLanguageExtras(response.data, 'movie', id, cancelToken);
+        // A black logo can come first (see LogoBrightness).
+        await LogoBrightness().preferLight(response.data, _imageBase);
         final movie = _formatMovieDetails(response.data,
             isTv: false, watchCountry: await watchCountry);
         _cache[key] = _CacheEntry(movie);
@@ -390,6 +393,7 @@ class TMDBService {
         cancelToken: cancelToken,
       );
       await _addOriginalLanguageExtras(response.data, 'tv', id, cancelToken);
+      await LogoBrightness().preferLight(response.data, _imageBase);
       final split = await _splitSeasons(id, response.data['seasons']);
       if (split != null) {
         response.data['seasons'] = [

@@ -137,21 +137,32 @@ class _SearchScreenState extends State<SearchScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // The field takes the whole row: the same 16 from the edge on both
+    // sides, and 12 between it and the back button (each of the app bar's
+    // gaps is titleSpacing; the right one has the 4 from actions too). On
+    // a wide window there's no back button — Home is in the bar beside it.
+    final wide = windowIsWide(context);
     return ScreenScaffold(
       bottomNavTab: BottomNavTab.search,
-      leading: Center(
-        child: GlassCircleButton(
-          icon: GlassCircleButton.backIcon,
-          iconSize: GlassCircleButton.backIconSize,
-          // Search is a bottom-nav tab, not a pushed route, so there's no
-          // route to pop — "back" here means returning to the Home tab,
-          // same as tapping the Home icon in FloatingBottomNavBar.
-          onPressed: () =>
-              MovieTabService().currentTab.value = BottomNavTab.home,
-        ),
-      ),
+      titleIsLabel: false,
+      leadingWidth: wide ? 0 : 16 + 40,
+      titleSpacing: wide ? 16 : 12,
+      leading: wide
+          ? const SizedBox.shrink()
+          : Align(
+              alignment: Alignment.centerRight,
+              child: GlassCircleButton(
+                icon: GlassCircleButton.backIcon,
+                iconSize: GlassCircleButton.backIconSize,
+                // Search is a bottom-nav tab, not a pushed route, so there's
+                // no route to pop — "back" here means returning to the Home
+                // tab, same as tapping the Home icon in FloatingBottomNavBar.
+                onPressed: () =>
+                    MovieTabService().currentTab.value = BottomNavTab.home,
+              ),
+            ),
       title: _buildSearchField(),
-      actions: const [SizedBox(width: 16)],
+      actions: [SizedBox(width: wide ? 0 : 4)],
       body: _buildBody,
       selectedMovie: _selectedMovie,
       onCloseSidePanel: _closeSidePanel,
@@ -162,10 +173,11 @@ class _SearchScreenState extends State<SearchScreen> {
   /// button it's opened from: a search icon, the field, and ✕ to clear
   /// once there's text.
   Widget _buildSearchField() {
+    const double fieldHeight = 52.0;
     return SizedBox(
-      height: 44,
+      height: fieldHeight,
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(fieldHeight / 2),
         child: GlassBlur(
           reducedTint: Colors.black.withValues(alpha: 0.45),
           child: DecoratedBox(
@@ -175,10 +187,10 @@ class _SearchScreenState extends State<SearchScreen> {
             ),
             child: Row(
               children: [
-                const SizedBox(width: 14),
+                const SizedBox(width: 18),
                 const Icon(Icons.search_rounded,
-                    color: Colors.white70, size: 20),
-                const SizedBox(width: 8),
+                    color: Colors.white70, size: 22),
+                const SizedBox(width: 10),
                 Expanded(
                   child: TextField(
                     controller: _controller,
@@ -227,21 +239,32 @@ class _SearchScreenState extends State<SearchScreen> {
         mainAxisSpacing: isDesktop ? 16 : 12,
       );
 
-  EdgeInsets _resultsPadding(bool isDesktop, EdgeInsets padding) {
+  // Search's app bar holds its 52px text field (titleIsLabel: false) inside
+  // an 80px toolbar in the side column.
+  double _topPadding(BuildContext context) =>
+      SideColumnScope.inColumn(context) ? 80 : 100;
+
+  EdgeInsets _resultsPadding(
+      BuildContext context, bool isDesktop, EdgeInsets padding) {
     final horizontal = isDesktop ? 60.0 : 16.0;
-    return padding.copyWith(left: horizontal, right: horizontal, top: 100);
+    return padding.copyWith(
+      left: horizontal,
+      right: horizontal,
+      top: _topPadding(context),
+    );
   }
 
   /// Poster-and-title placeholders in the results' own grid, shimmering —
   /// the app's skeleton style (as on Home and the details page), for while
   /// a fresh search loads.
-  Widget _buildResultsSkeleton(bool isDesktop, EdgeInsets padding) {
+  Widget _buildResultsSkeleton(
+      BuildContext context, bool isDesktop, EdgeInsets padding) {
     return Shimmer.fromColors(
       baseColor: Colors.grey[900]!,
       highlightColor: Colors.grey[800]!,
       child: GridView.builder(
         physics: const NeverScrollableScrollPhysics(),
-        padding: _resultsPadding(isDesktop, padding),
+        padding: _resultsPadding(context, isDesktop, padding),
         gridDelegate: _resultsGrid(isDesktop),
         itemCount: 12,
         itemBuilder: (context, _) => Column(
@@ -278,7 +301,7 @@ class _SearchScreenState extends State<SearchScreen> {
     // are swapped when the new ones arrive — wiping them on every letter
     // typed made the screen flash. Placeholders only for a fresh search.
     if (_isLoading && _results.isEmpty) {
-      return _buildResultsSkeleton(isDesktop, padding);
+      return _buildResultsSkeleton(context, isDesktop, padding);
     }
 
     if (_error != null) {
@@ -313,14 +336,14 @@ class _SearchScreenState extends State<SearchScreen> {
               ),
             );
           }
-          return _buildRecentSearches(history, isDesktop, padding);
+          return _buildRecentSearches(context, history, isDesktop, padding);
         },
       );
     }
 
     return GridView.builder(
       controller: _scrollController,
-      padding: _resultsPadding(isDesktop, padding),
+      padding: _resultsPadding(context, isDesktop, padding),
       gridDelegate: _resultsGrid(isDesktop),
       itemCount: _results.length,
       itemBuilder: (context, index) {
@@ -354,20 +377,21 @@ class _SearchScreenState extends State<SearchScreen> {
   /// "Recent" list shown while the search box is empty: tap to search
   /// again, ✕ to forget.
   Widget _buildRecentSearches(
+    BuildContext context,
     List<String> history,
     bool isDesktop,
     EdgeInsets padding,
   ) {
-    final horizontalPadding = isDesktop ? 60.0 : 8.0;
+    final horizontalPadding = isDesktop ? 60.0 : 16.0;
     return ListView(
       padding: padding.copyWith(
         left: horizontalPadding,
         right: horizontalPadding,
-        top: 100,
+        top: _topPadding(context),
       ),
       children: [
         const Padding(
-          padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+          padding: EdgeInsets.fromLTRB(12, 8, 12, 8),
           child: Text(
             'RECENT SEARCHES',
             style: TextStyle(
@@ -380,10 +404,11 @@ class _SearchScreenState extends State<SearchScreen> {
         ),
         for (final query in history)
           InkWell(
+            mouseCursor: WidgetStateMouseCursor.clickable,
             onTap: () => _searchNow(query),
             borderRadius: BorderRadius.circular(12),
             child: Padding(
-              padding: const EdgeInsets.only(left: 16, right: 4),
+              padding: const EdgeInsets.only(left: 12, right: 4),
               child: Row(
                 children: [
                   const Icon(Icons.history_rounded, color: Colors.white38, size: 22),

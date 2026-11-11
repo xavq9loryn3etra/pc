@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shimmer/shimmer.dart';
+import '../models/movie.dart';
+import '../services/audio_language_service.dart';
 import '../services/torrent/stream_resolver.dart';
 
 /// The quality picker, in the episode cards' style (see EpisodeCard): one
@@ -92,7 +94,9 @@ class QualityOptionList extends StatelessWidget {
       duration: _fade,
       opacity: busy && !isStarting ? 0.35 : 1,
       child: InkWell(
-        onTap: busy ? null : () => onSelected(option),
+        mouseCursor: WidgetStateMouseCursor.clickable,
+        // The quality playing ([isCurrent]) isn't a choice: it's on.
+        onTap: busy || current ? null : () => onSelected(option),
         child: Padding(
           padding: EdgeInsets.symmetric(
             horizontal: 16,
@@ -289,6 +293,85 @@ class QualityOptionListSkeleton extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// "AUDIO  [German · Original] [English]": which language a title not made
+/// in English is listed (and then played) in, above its qualities.
+/// [selected] is the one shown — by default the one saved for it (see
+/// AudioLanguageService).
+class AudioLanguagePicker extends StatelessWidget {
+  final Movie title;
+  final AudioLanguage? selected;
+  final bool enabled;
+  final ValueChanged<AudioLanguage> onChanged;
+
+  const AudioLanguagePicker({
+    super.key,
+    required this.title,
+    required this.onChanged,
+    this.selected,
+    this.enabled = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final current = selected ?? AudioLanguageService().of(title);
+    final original = AudioLanguageService.originalOf(title);
+    Widget chip(AudioLanguage choice, String label) {
+      final selected = choice == current;
+      return Material(
+        color: selected
+            ? Colors.white.withValues(alpha: 0.22)
+            : Colors.white.withValues(alpha: 0.06),
+        shape: StadiumBorder(
+          side: BorderSide(
+            color: Colors.white.withValues(alpha: selected ? 0.35 : 0.12),
+          ),
+        ),
+        child: InkWell(
+          mouseCursor: WidgetStateMouseCursor.clickable,
+          customBorder: const StadiumBorder(),
+          onTap: enabled && !selected ? () => onChanged(choice) : null,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? Colors.white : Colors.white70,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return AnimatedOpacity(
+      opacity: enabled ? 1 : 0.4,
+      duration: const Duration(milliseconds: 200),
+      child: Row(
+        children: [
+          const QualitySectionLabel('Audio'),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              // The original first: it's the default, and the title's own.
+              children: [
+                chip(AudioLanguage.original,
+                    original.name == 'Original'
+                        ? 'Original'
+                        : '${original.name} · Original'),
+                chip(AudioLanguage.english, 'English'),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

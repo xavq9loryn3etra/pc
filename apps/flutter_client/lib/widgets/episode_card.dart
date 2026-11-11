@@ -7,7 +7,9 @@ import 'package:shimmer/shimmer.dart';
 
 import '../models/movie.dart';
 import '../theme/app_theme.dart';
+import 'floating_bottom_nav_bar.dart' show SideColumnScope;
 import 'glass_blur.dart';
+import 'glass_dialog.dart' show GlassSheetScope;
 
 /// An episode as a card (Apple TV style): the still across the top,
 /// melting into a blurred, darkened copy of itself behind the text —
@@ -26,8 +28,8 @@ class EpisodeCard extends StatelessWidget {
   /// Playback hidden (FeatureFlagsService.hidePlayback): no play glyph.
   final bool hidePlayback;
 
-  /// The episode the player is on (its episode browser): says so beside
-  /// "EPISODE n" and brightens the card's edge.
+  /// The episode the player is on (its episode browser): a "Now Playing"
+  /// badge on the still, and a solid white edge.
   final bool playing;
 
   /// Opens the episode (on the details screen, its popup). Null makes the
@@ -163,9 +165,8 @@ class EpisodeCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    playing
-                        ? 'EPISODE ${episode.episodeNumber}  ·  PLAYING'
-                        : 'EPISODE ${episode.episodeNumber}',
+                    // Playing: said by the badge on the still instead.
+                    'EPISODE ${episode.episodeNumber}',
                     style: _labelStyle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -240,14 +241,51 @@ class EpisodeCard extends StatelessWidget {
               ),
             ),
 
-            // Faint edge, as on the reference cards — brighter on the
-            // episode that's playing.
+            // The episode that's playing, marked so it stands out in a
+            // grid of photos (whose own bright edges a faint outline was
+            // lost among): a solid white badge on its still.
+            if (playing)
+              Positioned(
+                top: _padding,
+                left: _padding,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(7, 4, 10, 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(999),
+                    boxShadow: const [
+                      BoxShadow(color: Color(0x66000000), blurRadius: 8),
+                    ],
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.graphic_eq_rounded,
+                          size: 14, color: Colors.black),
+                      SizedBox(width: 4),
+                      Text(
+                        'Now Playing',
+                        style: TextStyle(
+                          color: Colors.black,
+                          fontSize: 11.5,
+                          height: 1.2,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // Faint edge, as on the reference cards — a solid white one,
+            // thicker, on the episode that's playing.
             IgnorePointer(
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(_radius),
                   border: Border.all(
-                    color: Colors.white.withValues(alpha: playing ? 0.5 : 0.12),
+                    color: Colors.white.withValues(alpha: playing ? 0.9 : 0.12),
+                    width: playing ? 2 : 1,
                   ),
                 ),
               ),
@@ -256,7 +294,7 @@ class EpisodeCard extends StatelessWidget {
             // Ink on top, so the ripple shows over the image.
             Material(
               type: MaterialType.transparency,
-              child: InkWell(onTap: unreleased ? null : onTap),
+              child: InkWell(mouseCursor: WidgetStateMouseCursor.clickable, onTap: unreleased ? null : onTap),
             ),
           ],
         ),
@@ -755,6 +793,12 @@ class _EpisodeSheetFrameState extends State<EpisodeSheetFrame> {
 
   @override
   Widget build(BuildContext context) {
+    // A popup centred on a wide window (see showGlassSheet): rounded all
+    // round with its edge all round, and no handle — it closes from
+    // outside it, or Esc.
+    final popup = GlassSheetScope.popupOf(context);
+    final radius =
+        popup ? BorderRadius.circular(24) : EpisodeSheetFrame._radius;
     return AnimatedContainer(
       duration: _dragging ? Duration.zero : _springBack,
       curve: Curves.easeOutCubic,
@@ -765,7 +809,7 @@ class _EpisodeSheetFrameState extends State<EpisodeSheetFrame> {
         // every frame — the photo, text and posters all drawn again.
         child: RepaintBoundary(
           child: ClipRRect(
-            borderRadius: EpisodeSheetFrame._radius,
+            borderRadius: radius,
             child: Stack(
               children: [
                 // A bit darker than the cards': the sheet is much bigger, so
@@ -784,40 +828,57 @@ class _EpisodeSheetFrameState extends State<EpisodeSheetFrame> {
                 ),
                 widget.child,
                 // The handle, with a generous strip around it to grab.
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: 28,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onVerticalDragUpdate: (d) => _dragBy(d.delta.dy),
-                    onVerticalDragEnd: (d) => _dragEnd(d.primaryVelocity ?? 0),
-                    child: Align(
-                      alignment: const Alignment(0, -0.15),
-                      child: Container(
-                        width: 36,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: Colors.white54,
-                          borderRadius: BorderRadius.circular(2),
+                if (!popup)
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: 28,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onVerticalDragUpdate: (d) => _dragBy(d.delta.dy),
+                      onVerticalDragEnd: (d) =>
+                          _dragEnd(d.primaryVelocity ?? 0),
+                      child: Align(
+                        alignment: const Alignment(0, -0.15),
+                        child: Container(
+                          width: 36,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.white54,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
+                // A popup's or side-column sheet's way out besides clicking
+                // outside it or Esc: the app's frosted round button, as the
+                // details panel's.
+                if (popup || SideColumnScope.inColumn(context))
+                  Positioned(
+                    top: 14,
+                    right: 14,
+                    child: GlassCircleButton(
+                      icon: Icons.close_rounded,
+                      iconSize: 20,
+                      onPressed: () => Navigator.of(context).maybePop(),
+                    ),
+                  ),
                 Positioned.fill(
                   child: IgnorePointer(
                     child: DecoratedBox(
-                      // No bottom edge: the sheet runs off the bottom of the
-                      // screen.
+                      // No bottom edge as a sheet: it runs off the bottom of
+                      // the screen.
                       decoration: BoxDecoration(
-                        borderRadius: EpisodeSheetFrame._radius,
-                        border: Border(
-                          top: EpisodeSheetFrame._edge,
-                          left: EpisodeSheetFrame._edge,
-                          right: EpisodeSheetFrame._edge,
-                        ),
+                        borderRadius: radius,
+                        border: popup
+                            ? Border.fromBorderSide(EpisodeSheetFrame._edge)
+                            : Border(
+                                top: EpisodeSheetFrame._edge,
+                                left: EpisodeSheetFrame._edge,
+                                right: EpisodeSheetFrame._edge,
+                              ),
                       ),
                     ),
                   ),

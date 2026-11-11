@@ -80,15 +80,16 @@ class AppTheme {
       ),
 
       // App Bar
-      appBarTheme: const AppBarTheme(
+      appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: false,
-        titleTextStyle: TextStyle(
+        titleTextStyle: GoogleFonts.outfit(
           fontSize: 24,
           fontWeight: FontWeight.bold,
           color: Colors.white,
-        ),
+          height: 1.0,
+        ).copyWith(leadingDistribution: TextLeadingDistribution.even),
       ),
 
       // Card
@@ -96,6 +97,21 @@ class AppTheme {
         color: surfaceColor,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
+
+      // The hand pointer over everything clickable, on a computer too.
+      // Flutter's buttons show the plain arrow there by default (as native
+      // desktop apps do); the app's own glass buttons and rows ask for it
+      // themselves (see clickCursor).
+      iconButtonTheme: const IconButtonThemeData(style: _clickable),
+      textButtonTheme: const TextButtonThemeData(style: _clickable),
+      elevatedButtonTheme: const ElevatedButtonThemeData(style: _clickable),
+      filledButtonTheme: const FilledButtonThemeData(style: _clickable),
+      outlinedButtonTheme: const OutlinedButtonThemeData(style: _clickable),
+      listTileTheme:
+          const ListTileThemeData(mouseCursor: WidgetStateMouseCursor.clickable),
     );
   }
+
+  static const ButtonStyle _clickable =
+      ButtonStyle(mouseCursor: WidgetStateMouseCursor.clickable);
 }

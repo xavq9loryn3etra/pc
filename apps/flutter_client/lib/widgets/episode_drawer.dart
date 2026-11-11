@@ -337,7 +337,9 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
       } catch (_) {}
     }
 
-    return GestureDetector(
+    return MouseRegion(
+      cursor: (isFuture || isCurrent) ? MouseCursor.defer : SystemMouseCursors.click,
+      child: GestureDetector(
       onTap: (isFuture || isCurrent)
           ? null
           : () => widget.onEpisodeTap(ep.episodeNumber),
@@ -536,6 +538,7 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
           ],
         ),
       ),
+    ),
     );
   }
 }

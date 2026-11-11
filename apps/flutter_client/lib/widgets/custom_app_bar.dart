@@ -7,6 +7,7 @@ import '../theme/app_theme.dart';
 import '../screens/search_screen.dart';
 import '../screens/favorites_screen.dart';
 import 'mode_switcher_dialog.dart';
+import 'floating_bottom_nav_bar.dart';
 
 class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   final Widget? title;
@@ -23,6 +24,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   final bool automaticallyImplyLeading;
   final bool centerTitle;
   final double? titleSpacing;
+  final double? leadingWidth;
 
   const CustomAppBar({
     super.key,
@@ -40,10 +42,23 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.automaticallyImplyLeading = true,
     this.centerTitle = false,
     this.titleSpacing,
+    this.leadingWidth,
   });
 
   @override
-  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
+  Size get preferredSize =>
+      Size.fromHeight(_isWide ? wideToolbarHeight : kToolbarHeight);
+
+  /// On a wide window the bar is taller, its row in line with the tab
+  /// buttons at its top right (see FloatingBottomNavBar), which it keeps
+  /// clear. preferredSize is read without a context, so this goes by the
+  /// app's window.
+  static const double wideToolbarHeight = 80;
+  static bool get _isWide {
+    final view = WidgetsBinding.instance.platformDispatcher.implicitView;
+    if (view == null) return false;
+    return view.physicalSize.width / view.devicePixelRatio > kTopNavBreakpoint;
+  }
 
   /// Renders the brand wordmark with a drop shadow shaped like the actual
   /// letterforms, not a rectangular box — a plain BoxShadow only shadows a
@@ -89,14 +104,19 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   Widget build(BuildContext context) {
     // Gradual opacity calculation (divisor 200)
     final double opacity = forceOpacity ?? (scrollOffset / 200).clamp(0.0, 1.0);
+    final wide = navBarAtTop(context);
+
+    final inColumn = SideColumnScope.inColumn(context);
 
     return AppBar(
+      toolbarHeight: (inColumn || wide) ? wideToolbarHeight : null,
       elevation: 0,
       scrolledUnderElevation: 0,
       automaticallyImplyLeading: automaticallyImplyLeading,
       leading: leading,
       centerTitle: centerTitle,
       titleSpacing: titleSpacing,
+      leadingWidth: leadingWidth,
       title: GestureDetector(
         onLongPress: onLogoLongPress,
         child: title ?? _buildDefaultLogo(),
@@ -122,40 +142,48 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
               ),
             )
           : const SizedBox.shrink(),
-      actions: actions ??
-          [
-            if (showActions) ...[
-              IconButton(
-                icon: const Icon(Icons.search_rounded, size: 28),
-                onPressed: onSearchTap ??
-                    () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const SearchScreen()),
-                      );
-                    },
-              ),
-              IconButton(
-                icon: const Icon(Icons.favorite_border_rounded, size: 28),
-                onPressed: onFavoritesTap ??
-                    () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => const FavoritesScreen()),
-                      );
-                    },
-              ),
-            ],
-            // App Mode Switcher (Mobile Only)
-            if (showModeSwitch)
-              IconButton(
-                icon: const Icon(Icons.grid_view_rounded, size: 28),
-                onPressed:
-                    onModeSwitchTap ?? () => showModeSwitcherDialog(context),
-              ),
-            const SizedBox(width: 16),
-          ],
+      actions: [
+        ..._actions(context),
+        // Room for the tab buttons, which sit here on a wide window.
+        if (wide) SizedBox(width: topNavWidth(context) + kTopNavRight + 8),
+      ],
     );
+  }
+
+  List<Widget> _actions(BuildContext context) {
+    return actions ??
+        [
+          if (showActions) ...[
+            IconButton(
+              icon: const Icon(Icons.search_rounded, size: 28),
+              onPressed: onSearchTap ??
+                  () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const SearchScreen()),
+                    );
+                  },
+            ),
+            IconButton(
+              icon: const Icon(Icons.favorite_border_rounded, size: 28),
+              onPressed: onFavoritesTap ??
+                  () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const FavoritesScreen()),
+                    );
+                  },
+            ),
+          ],
+          // App Mode Switcher (Mobile Only)
+          if (showModeSwitch)
+            IconButton(
+              icon: const Icon(Icons.grid_view_rounded, size: 28),
+              onPressed:
+                  onModeSwitchTap ?? () => showModeSwitcherDialog(context),
+            ),
+          const SizedBox(width: 16),
+        ];
   }
 }

@@ -50,6 +50,14 @@ class VisualEffectsService {
     final prefs = await SharedPreferences.getInstance();
     // The old "Reduce glass effects" setting, now decided automatically.
     unawaited(prefs.remove('reduce_glass_effects'));
+    // A debug build (`flutter run`) stutters on any device — it isn't
+    // compiled ahead — so its frames say nothing about the glass: neither
+    // probed nor watched, and nothing decided. It had switched a PC to
+    // plain for good (for the version) during a development run.
+    if (kDebugMode) {
+      _update();
+      return;
+    }
     try {
       final info = await PackageInfo.fromPlatform();
       _version = '${info.version}+${info.buildNumber}';

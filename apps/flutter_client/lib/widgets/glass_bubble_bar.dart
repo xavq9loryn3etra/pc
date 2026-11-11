@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../models/movie.dart';
 import 'glass_blur.dart';
+import 'floating_bottom_nav_bar.dart' show kNavButtonHeight, windowIsWide;
 import 'package:flutter/rendering.dart';
 
 /// A frosted-glass back button with a title "bubble" that grows out of it,
@@ -24,12 +25,29 @@ class GlassBubbleBar extends StatefulWidget {
   /// Sits in the bubble (logo or title text).
   final Widget title;
 
+  /// A second bubble, joined to the title's as that is to the circle — the
+  /// player's episode browser's season picker (SeasonPicker.bare). Brings
+  /// its own padding; it grows with the title's.
+  final Widget? trailing;
+
+  /// The title bubble's horizontal padding: 0 for a [title] that brings
+  /// its own (SeasonPicker.bare), so its tap area fills the bubble.
+  final double titlePadding;
+
+  /// Mirrored: the circle on the right, the bubble growing out of it to the
+  /// left — for a bar in a right-hand corner (the player's episode panel:
+  /// its season picker, then close in the corner). No [trailing] then.
+  final bool leadingOnRight;
+
   const GlassBubbleBar({
     super.key,
     required this.reveal,
     required this.leading,
     required this.title,
-  });
+    this.trailing,
+    this.titlePadding = 14,
+    this.leadingOnRight = false,
+  }) : assert(!leadingOnRight || trailing == null);
 
   /// Diameter of the back button circle, and the bubble's height.
   static const double size = 40;
@@ -40,30 +58,40 @@ class GlassBubbleBar extends StatefulWidget {
 
 class _GlassBubbleBarState extends State<GlassBubbleBar> {
   static const double _gap = 6; // circle edge → bubble edge
-  static const double _padH = 14; // bubble's horizontal padding
 
   // The title's natural width, measured off-screen so the bubble (and the
   // glass shape around it) can be sized to fit any logo or text.
   double _titleWidth = 0;
+  // The trailing bubble's content's natural width, likewise.
+  double _trailingWidth = 0;
 
   @override
   Widget build(BuildContext context) {
-    const d = GlassBubbleBar.size;
+    // As tall as the tab bar's buttons on a wide window.
+    final d = windowIsWide(context) ? kNavButtonHeight : GlassBubbleBar.size;
     // No overshoot: an overshooting curve made the bubble briefly taller
     // than the button beside it mid-animation.
     final grow = Curves.easeOutCubic.transform(widget.reveal.clamp(0.0, 1.0));
 
     return LayoutBuilder(
       builder: (context, constraints) {
+        final padH = widget.titlePadding;
         final maxTitle = math.max(
           0.0,
-          constraints.maxWidth - d - _gap - _padH * 2,
+          constraints.maxWidth - d - _gap - padH * 2,
         );
-        final pillWidth = _titleWidth + _padH * 2;
+        final pillWidth = math.max(d, _titleWidth + padH * 2);
+        final trailing = widget.trailing;
+        final trailingLeft = d + _gap + pillWidth + _gap;
+        final trailingWidth = math.max(d, _trailingWidth);
+        final mirror = widget.leadingOnRight;
+        final total = d + _gap + pillWidth;
 
         return SizedBox(
           height: d,
-          width: d + _gap + pillWidth,
+          width: trailing == null
+              ? d + _gap + pillWidth
+              : trailingLeft + trailingWidth,
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -73,7 +101,9 @@ class _GlassBubbleBarState extends State<GlassBubbleBar> {
                     diameter: d,
                     gap: _gap,
                     pillWidth: pillWidth,
+                    trailingWidth: trailing == null ? null : trailingWidth,
                     grow: grow,
+                    mirror: mirror,
                   ),
                   child: const GlassBlur(
                     child: ColoredBox(color: kGlassTint),
@@ -81,22 +111,23 @@ class _GlassBubbleBarState extends State<GlassBubbleBar> {
                 ),
               ),
               Positioned(
-                left: 0,
+                left: mirror ? total - d : 0,
                 top: 0,
                 width: d,
                 height: d,
                 child: widget.leading,
               ),
               Positioned(
-                left: d + _gap,
+                left: mirror ? 0 : d + _gap,
                 top: 0,
                 width: pillWidth,
                 height: d,
-                // Scaled from the bubble's left edge, matching how the
-                // clipper grows the glass, so the content rides with it.
+                // Scaled from the bubble's edge by the circle, matching how
+                // the clipper grows the glass, so the content rides with it.
                 child: Transform.scale(
                   scale: grow,
-                  alignment: Alignment.centerLeft,
+                  alignment:
+                      mirror ? Alignment.centerRight : Alignment.centerLeft,
                   child: Opacity(
                     opacity: widget.reveal.clamp(0.0, 1.0),
                     // OverflowBox lets the title take its natural width
@@ -125,6 +156,37 @@ class _GlassBubbleBarState extends State<GlassBubbleBar> {
                   ),
                 ),
               ),
+              if (trailing != null)
+                Positioned(
+                  // Rides with the title's bubble as it grows (see
+                  // _BubbleClipper), then its own grows from its left.
+                  left: d + _gap + pillWidth * grow + _gap,
+                  top: 0,
+                  width: trailingWidth,
+                  height: d,
+                  child: Transform.scale(
+                    scale: grow,
+                    alignment: Alignment.centerLeft,
+                    child: Opacity(
+                      opacity: widget.reveal.clamp(0.0, 1.0),
+                      child: OverflowBox(
+                        alignment: Alignment.centerLeft,
+                        minWidth: 0,
+                        maxWidth: constraints.maxWidth,
+                        minHeight: d,
+                        maxHeight: d,
+                        child: _SizeReporter(
+                          onWidth: (w) {
+                            if ((w - _trailingWidth).abs() > 0.5) {
+                              setState(() => _trailingWidth = w);
+                            }
+                          },
+                          child: trailing,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         );
@@ -133,18 +195,25 @@ class _GlassBubbleBarState extends State<GlassBubbleBar> {
   }
 }
 
-/// Circle ∪ bubble ∪ a thin concave neck between them.
+/// Circle ∪ bubble ∪ a thin concave neck between them — and, with
+/// [trailingWidth], a second bubble after the first, joined the same way.
 class _BubbleClipper extends CustomClipper<Path> {
   final double diameter;
   final double gap;
   final double pillWidth;
+  final double? trailingWidth;
   final double grow;
+
+  /// Flipped left to right (GlassBubbleBar.leadingOnRight).
+  final bool mirror;
 
   const _BubbleClipper({
     required this.diameter,
     required this.gap,
     required this.pillWidth,
+    this.trailingWidth,
     required this.grow,
+    this.mirror = false,
   });
 
   // Half-thickness of the neck at its narrowest, when fully grown — small
@@ -155,6 +224,16 @@ class _BubbleClipper extends CustomClipper<Path> {
 
   @override
   Path getClip(Size size) {
+    final shape = _shape(size);
+    if (!mirror) return shape;
+    // x becomes width - x.
+    final flip = Matrix4.identity()
+      ..translateByDouble(size.width, 0, 0, 1)
+      ..scaleByDouble(-1, 1, 1, 1);
+    return shape.transform(flip.storage);
+  }
+
+  Path _shape(Size size) {
     final r = diameter / 2;
     final cy = r;
     final circle = Path()
@@ -194,15 +273,49 @@ class _BubbleClipper extends CustomClipper<Path> {
       ..quadraticBezierTo(midX, c2y, p2.dx, p2.dy)
       ..close();
 
-    return Path.combine(
+    var shape = Path.combine(
       PathOperation.union,
       Path.combine(PathOperation.union, circle, pill),
       bridge,
     );
+
+    final tw = trailingWidth;
+    if (tw != null) {
+      // The second bubble, after the first (as it is now, growing), and
+      // a neck from the first's right cap to its left cap.
+      final left2 = left + w + gap;
+      final w2 = math.max(h, tw * grow);
+      final pill2 = Path()
+        ..addRRect(RRect.fromRectAndRadius(
+            Rect.fromLTWH(left2, cy - h / 2, w2, h), Radius.circular(rp)));
+      final aCx = left + w - rp; // first bubble's right cap
+      final bCx = left2 + rp; // second's left cap
+      final a1 = Offset(aCx + rp * cosA, cy - rp * sinA);
+      final a2 = Offset(aCx + rp * cosA, cy + rp * sinA);
+      final b1 = Offset(bCx - rp * cosA, cy - rp * sinA);
+      final b2 = Offset(bCx - rp * cosA, cy + rp * sinA);
+      final mid2 = (a1.dx + b1.dx) / 2;
+      final d1y = (4 * (cy - neck) - a1.dy - b1.dy) / 2;
+      final d2y = (4 * (cy + neck) - a2.dy - b2.dy) / 2;
+      final bridge2 = Path()
+        ..moveTo(a1.dx, a1.dy)
+        ..quadraticBezierTo(mid2, d1y, b1.dx, b1.dy)
+        ..lineTo(b2.dx, b2.dy)
+        ..quadraticBezierTo(mid2, d2y, a2.dx, a2.dy)
+        ..close();
+      shape = Path.combine(
+        PathOperation.union,
+        Path.combine(PathOperation.union, shape, pill2),
+        bridge2,
+      );
+    }
+    return shape;
   }
 
   @override
   bool shouldReclip(_BubbleClipper old) =>
+      old.mirror != mirror ||
+      old.trailingWidth != trailingWidth ||
       old.grow != grow ||
       old.pillWidth != pillWidth ||
       old.diameter != diameter ||

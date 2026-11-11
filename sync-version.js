@@ -2,7 +2,6 @@ const fs = require('fs');
 const path = require('path');
 
 const rootPackagePath = path.join(__dirname, 'package.json');
-const desktopPackagePath = path.join(__dirname, 'apps', 'desktop', 'package.json');
 const flutterPubspecPath = path.join(__dirname, 'apps', 'flutter_client', 'pubspec.yaml');
 
 if (!fs.existsSync(flutterPubspecPath)) {
@@ -28,14 +27,4 @@ if (fs.existsSync(rootPackagePath)) {
   rootPackage.version = newVersion;
   fs.writeFileSync(rootPackagePath, JSON.stringify(rootPackage, null, 2) + '\n');
   console.log(`Updated root package.json version to ${newVersion}`);
-}
-
-// 3. Update Desktop package.json
-if (fs.existsSync(desktopPackagePath)) {
-  const desktopPackage = JSON.parse(fs.readFileSync(desktopPackagePath, 'utf8'));
-  desktopPackage.version = newVersion;
-  fs.writeFileSync(desktopPackagePath, JSON.stringify(desktopPackage, null, 2) + '\n');
-  console.log(`Updated desktop package.json version to ${newVersion}`);
-} else {
-  console.warn(`Could not find ${desktopPackagePath}`);
 }

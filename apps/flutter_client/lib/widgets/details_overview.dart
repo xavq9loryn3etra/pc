@@ -1,4 +1,5 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shimmer/shimmer.dart';
 
@@ -129,7 +130,9 @@ class _ExpandableSynopsisState extends State<ExpandableSynopsis> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (widget.text.isNotEmpty)
-                GestureDetector(
+                MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: _toggle,
                   child: clipped
@@ -141,6 +144,7 @@ class _ExpandableSynopsisState extends State<ExpandableSynopsis> {
                         )
                       : Text(widget.text, style: _style),
                 ),
+                ),
               // Outside the tap target, so scrolling or tapping the cast
               // row doesn't collapse the section.
               if (_expanded && widget.extra != null) ...[
@@ -151,7 +155,9 @@ class _ExpandableSynopsisState extends State<ExpandableSynopsis> {
               // last line: once expanded (LESS), or when only [extra] is
               // hidden (the text fits).
               if (!clipped)
-                GestureDetector(
+                MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: _toggle,
                   child: Padding(
@@ -160,6 +166,7 @@ class _ExpandableSynopsisState extends State<ExpandableSynopsis> {
                     child: Text(_expanded ? 'LESS' : 'MORE',
                         style: _toggleStyle),
                   ),
+                ),
                 ),
             ],
           ),
@@ -236,21 +243,46 @@ class _Band extends CustomClipper<Rect> {
 }
 
 /// "Cast & Crew" (just "Cast" without crew) heading plus a horizontal row
-/// of circular headshots, each with the person's name and their character
-/// or job — directors and creators first. Tapping one opens their
+/// of small photo cards, each with the person's name and their character
+/// or job over the bottom of the photo — directors and creators first. Tapping one opens their
 /// PersonSheet. Bleeds past the screen's side padding ([bleed] on each
-/// side) so it scrolls edge to edge.
-class CastRow extends StatelessWidget {
+/// side) so it scrolls edge to edge. On a computer it has a scroll bar
+/// under it, like the home screen's rows there; a phone swipes it.
+class CastRow extends StatefulWidget {
   final List<CastMember> cast;
   final double bleed;
 
   const CastRow({super.key, required this.cast, this.bleed = 24});
 
-  static const double _avatar = 68;
-  static const double _itemWidth = 84;
+  static const double _cardWidth = 104;
+  static const double _cardHeight = 140;
+
+  @override
+  State<CastRow> createState() => _CastRowState();
+}
+
+class _CastRowState extends State<CastRow> {
+  final ScrollController _scroll = ScrollController();
+
+  static final bool _desktop = !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.macOS ||
+          defaultTargetPlatform == TargetPlatform.linux);
+
+  /// Room under the cards for the scroll bar (computer only).
+  static const double _barSpace = 20;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final cast = widget.cast;
+    final bleed = widget.bleed;
+    final barSpace = _desktop ? _barSpace : 0.0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -266,22 +298,35 @@ class CastRow extends StatelessWidget {
         LayoutBuilder(
           builder: (context, constraints) {
             final fullWidth = constraints.maxWidth + bleed * 2;
+            final list = ListView.separated(
+              controller: _scroll,
+              scrollDirection: Axis.horizontal,
+              padding: EdgeInsets.fromLTRB(bleed, 0, bleed, barSpace),
+              itemCount: cast.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (context, i) => _CastTile(member: cast[i]),
+            );
             return SizedBox(
-              height: 148,
+              height: CastRow._cardHeight + barSpace,
               child: OverflowBox(
                 minWidth: fullWidth,
                 maxWidth: fullWidth,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  // Less the tile's side inset around its photo, so the
-                  // first photo lines up with the text above it.
-                  padding: EdgeInsets.symmetric(
-                    horizontal: bleed - (_itemWidth - _avatar) / 2,
-                  ),
-                  itemCount: cast.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
-                  itemBuilder: (context, i) => _CastTile(member: cast[i]),
-                ),
+                child: !_desktop
+                    ? list
+                    // Same look as the computer home screen's row bars.
+                    : RawScrollbar(
+                        controller: _scroll,
+                        thumbColor: Colors.grey[800],
+                        radius: const Radius.circular(6),
+                        thickness: 12,
+                        thumbVisibility: true,
+                        trackVisibility: true,
+                        trackColor: Colors.black45,
+                        trackBorderColor: Colors.transparent,
+                        // Lined up with the cards, not the screen edges.
+                        padding: EdgeInsets.symmetric(horizontal: bleed),
+                        child: list,
+                      ),
               ),
             );
           },
@@ -298,59 +343,112 @@ class _CastTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return MouseRegion(
+      cursor: member.id == null ? MouseCursor.defer : SystemMouseCursors.click,
+      child: GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: member.id == null ? null : () => PersonSheet.show(context, member),
-      child: SizedBox(
-        width: CastRow._itemWidth,
-        child: Column(
-          children: [
-            PersonPhoto(url: member.profileUrl, size: CastRow._avatar),
-            const SizedBox(height: 8),
-            Text(
-              member.name,
-              maxLines: 2,
-              textAlign: TextAlign.center,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 12,
-                height: 1.25,
-                fontWeight: FontWeight.w600,
-                color: Colors.white,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: SizedBox(
+          width: CastRow._cardWidth,
+          height: CastRow._cardHeight,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              PersonPhoto(
+                url: member.profileUrl,
+                size: CastRow._cardWidth,
+                height: CastRow._cardHeight,
+                rounded: false,
               ),
-            ),
-            if (member.character != null) ...[
-              const SizedBox(height: 2),
-              Text(
-                member.character!,
-                maxLines: 2,
-                textAlign: TextAlign.center,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  height: 1.25,
-                  color: Colors.white.withValues(alpha: 0.45),
+              // Darkens the bottom so the name reads over any photo.
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    stops: const [0.4, 1],
+                    colors: [
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: 0.85),
+                    ],
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 8,
+                right: 8,
+                bottom: 7,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      member.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        height: 1.2,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                    if (member.character != null) ...[
+                      const SizedBox(height: 1),
+                      Text(
+                        member.character!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          height: 1.2,
+                          color: Colors.white.withValues(alpha: 0.7),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ],
-          ],
+          ),
         ),
       ),
+    ),
     );
   }
 }
 
-/// A person's round photo, [size] across: a soft shimmer while it loads,
-/// and a silhouette when there's none (or it won't load).
+/// A person's photo, [size] across (and [height] tall, square by default):
+/// round unless [rounded] is false, with a soft shimmer while it loads and
+/// a silhouette when there's none (or it won't load).
 class PersonPhoto extends StatelessWidget {
   final String? url;
   final double size;
+  final double? height;
+  final bool rounded;
 
-  const PersonPhoto({super.key, required this.url, required this.size});
+  const PersonPhoto({
+    super.key,
+    required this.url,
+    required this.size,
+    this.height,
+    this.rounded = true,
+  });
 
   @override
   Widget build(BuildContext context) {
     final dpr = MediaQuery.devicePixelRatioOf(context);
+    final h = height ?? size;
+    // In a circle, a smallish figure; in a card, a big head-and-shoulders
+    // bust filling it like a portrait photo, shoulders at the bottom edge.
+    final iconSize = rounded ? size * 0.7 : h * 1.1;
+    final icon = Icon(
+      Icons.person_rounded,
+      size: iconSize,
+      color: Colors.white.withValues(alpha: 0.3),
+    );
     final silhouette = DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -362,36 +460,41 @@ class PersonPhoto extends StatelessWidget {
           ],
         ),
       ),
-      child: Align(
-        alignment: const Alignment(0, 0.6),
-        child: Icon(
-          Icons.person_rounded,
-          size: size * 0.7,
-          color: Colors.white.withValues(alpha: 0.3),
-        ),
-      ),
+      child: rounded
+          ? Align(alignment: const Alignment(0, 0.6), child: icon)
+          : OverflowBox(
+              maxWidth: iconSize,
+              maxHeight: iconSize,
+              alignment: Alignment.bottomCenter,
+              // The glyph has empty space under its shoulders; push that
+              // below the card's edge.
+              child: Transform.translate(
+                offset: Offset(0, iconSize * 0.12),
+                child: icon,
+              ),
+            ),
     );
     final loading = Shimmer.fromColors(
       baseColor: Colors.grey[900]!,
       highlightColor: Colors.grey[800]!,
       child: const ColoredBox(color: Colors.black),
     );
-    return ClipOval(
-      child: SizedBox.square(
-        dimension: size,
-        child: url == null
-            ? silhouette
-            : CachedNetworkImage(
-                imageUrl: url!,
-                fit: BoxFit.cover,
-                // Faces are near the top of a portrait photo.
-                alignment: const Alignment(0, -0.4),
-                memCacheWidth: (size * dpr).toInt(),
-                fadeInDuration: const Duration(milliseconds: 200),
-                placeholder: (_, __) => loading,
-                errorWidget: (_, __, ___) => silhouette,
-              ),
-      ),
+    final photo = SizedBox(
+      width: size,
+      height: h,
+      child: url == null
+          ? silhouette
+          : CachedNetworkImage(
+              imageUrl: url!,
+              fit: BoxFit.cover,
+              // Faces are near the top of a portrait photo.
+              alignment: const Alignment(0, -0.4),
+              memCacheWidth: (size * dpr).toInt(),
+              fadeInDuration: const Duration(milliseconds: 200),
+              placeholder: (_, __) => loading,
+              errorWidget: (_, __, ___) => silhouette,
+            ),
     );
+    return rounded ? ClipOval(child: photo) : photo;
   }
 }

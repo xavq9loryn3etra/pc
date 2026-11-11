@@ -7,9 +7,11 @@ import '../theme/app_theme.dart';
 import '../models/movie.dart';
 import '../widgets/movie_poster.dart';
 import '../widgets/desktop_details_panel.dart';
-import '../widgets/floating_bottom_nav_bar.dart';
+import 'details_screen.dart';
 import '../widgets/image_precache.dart';
+import '../services/saved_movies_service.dart';
 import '../services/movie_tab_service.dart';
+import '../widgets/artwork_glow.dart';
 
 class DesktopHomeScreen extends StatefulWidget {
   final Movie featuredMovie;
@@ -22,6 +24,10 @@ class DesktopHomeScreen extends StatefulWidget {
   final Function(Movie) onMovieTap;
   final Function(Movie)? onRemoveHistory;
 
+  /// Where [featuredMovie] stands in TMDB's weekly trending list (1 = top),
+  /// for the "#3 Trending This Week" line; 0 or less hides it.
+  final int trendingRank;
+
   const DesktopHomeScreen({
     super.key,
     required this.featuredMovie,
@@ -32,6 +38,7 @@ class DesktopHomeScreen extends StatefulWidget {
     required this.onInfoHero,
     required this.onMovieTap,
     this.onRemoveHistory,
+    this.trendingRank = 0,
   });
 
   // The hero's images and decode sizes, shared by the state's build and
@@ -56,6 +63,7 @@ class DesktopHomeScreen extends StatefulWidget {
     return Future.wait([
       precacheNetworkImage(context, _heroBackdropUrlFor(movie),
           cacheWidth: _heroBackdropCacheWidth(context)),
+      ArtworkGlow.precache(context, _heroBackdropUrlFor(movie) ?? ''),
       precacheNetworkImage(context, _heroLogoUrlFor(movie),
           cacheHeight: (_heroLogoHeight * dpr).toInt()),
     ]);
@@ -69,37 +77,27 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
   // State for Side Panel
   Movie? _selectedMovie;
 
-  // Scroll tracking for top bar glass effect
   final ScrollController _scrollController = ScrollController();
-  double _topBarOpacity = 0.0;
-
-  @override
-  void initState() {
-    super.initState();
-    _scrollController.addListener(_onScroll);
-  }
 
   @override
   void dispose() {
+    if (_selectedMovie != null) MovieTabService().panelsOpen.value--;
     _scrollController.dispose();
     super.dispose();
   }
 
-  void _onScroll() {
-    final offset = _scrollController.offset;
-    double newOpacity = (offset / 50).clamp(0.0, 1.0);
-    if (newOpacity != _topBarOpacity) {
-      setState(() => _topBarOpacity = newOpacity);
-    }
-  }
-
   void _onMovieSelect(Movie movie) {
+    // In the side column beside the home, as on a phone (see
+    // MovieTabShell); this side panel only where there's no column.
+    if (MovieTabService().openInColumn(DetailsScreen(movie: movie))) return;
+    if (_selectedMovie == null) MovieTabService().panelsOpen.value++;
     setState(() {
       _selectedMovie = movie;
     });
   }
 
   void _closeSidePanel() {
+    if (_selectedMovie != null) MovieTabService().panelsOpen.value--;
     setState(() {
       _selectedMovie = null;
     });
@@ -122,82 +120,91 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
             ),
             child: SingleChildScrollView(
               controller: _scrollController,
-              child: Column(
+              child: Stack(
                 children: [
                   // -----------------------------
                   // 1. Hero Section (95vh)
                   // -----------------------------
                   SizedBox(
                     height: heroHeight,
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        // Background
-                        _buildBackground(context),
-                        // Gradients
-                        _buildGradients(),
-                        // Hero Content (Positioned from bottom to avoid overlap)
-                        // The overlapping lists start at heroHeight - 150.
-                        // We position this content to end at bottom: 180 (150 + 30px padding)
-                        Positioned(
-                          left: 60,
-                          bottom: 180,
-                          child: SizedBox(
-                            width: MediaQuery.of(context).size.width * 0.4,
-                            child: _buildHeroContent(context),
+                    width: double.infinity,
+                    child: ClipRect(
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          // Background (parallax)
+                          _buildBackground(context),
+                          // Gradients (stationary with the hero section so the
+                          // fade to black stays anchored above the poster rows)
+                          _buildGradients(),
+                          // Hero Content (Positioned from bottom to avoid overlap)
+                          // The overlapping lists start at heroHeight - 150.
+                          // We position this content to end at bottom: 180 (150 + 30px padding)
+                          Positioned(
+                            left: 60,
+                            bottom: 180,
+                            child: SizedBox(
+                              width: MediaQuery.of(context).size.width * 0.4,
+                              child: _buildHeroContent(context),
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
 
                   // -----------------------------
                   // 2. Lists Section (Overlapping)
                   // -----------------------------
-                  Transform.translate(
-                    offset: const Offset(0, -150),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 60),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (widget.historyMovies.isNotEmpty) ...[
-                            _buildSectionList(
-                              context,
-                              title: "Continue Watching",
-                              movies: widget.historyMovies,
-                              heroPrefix: "desktop_history",
-                              onLongPress: widget.onRemoveHistory,
-                              posterHeight: 300,
-                              posterWidth: 200,
-                              onTap: _onMovieSelect,
-                            ),
-                            const SizedBox(height: 40),
-                          ],
-
-                          // Trending List
+                  // Positioned via top padding inside a Stack rather than
+                  // Transform.translate(offset: Offset(0, -150)) on a Column,
+                  // which shifted the paint layer up by 150px while leaving
+                  // 150px of dead layout space at the bottom of the scroll view.
+                  Padding(
+                    padding: EdgeInsets.only(
+                      top: heroHeight - 150,
+                      left: 60,
+                      bottom: 24,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (widget.historyMovies.isNotEmpty) ...[
                           _buildSectionList(
                             context,
-                            title: "Trending This Week",
-                            movies: widget.trendingMovies,
-                            heroPrefix: "desktop_trending",
+                            title: "Continue Watching",
+                            movies: widget.historyMovies,
+                            heroPrefix: "desktop_history",
+                            onLongPress: widget.onRemoveHistory,
                             posterHeight: 300,
                             posterWidth: 200,
                             onTap: _onMovieSelect,
                           ),
                           const SizedBox(height: 40),
-
-                          _buildSectionList(
-                            context,
-                            title: "Top Rated",
-                            movies: widget.topRatedMovies,
-                            heroPrefix: "desktop_top_rated",
-                            posterHeight: 300,
-                            posterWidth: 200,
-                            onTap: _onMovieSelect,
-                          ),
                         ],
-                      ),
+
+                        // Trending List
+                        _buildSectionList(
+                          context,
+                          title: "Trending This Week",
+                          movies: widget.trendingMovies,
+                          heroPrefix: "desktop_trending",
+                          posterHeight: 300,
+                          posterWidth: 200,
+                          onTap: _onMovieSelect,
+                        ),
+                        const SizedBox(height: 40),
+
+                        _buildSectionList(
+                          context,
+                          title: "Top Rated",
+                          movies: widget.topRatedMovies,
+                          heroPrefix: "desktop_top_rated",
+                          posterHeight: 300,
+                          posterWidth: 200,
+                          onTap: _onMovieSelect,
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -258,62 +265,72 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
         DesktopHomeScreen._heroBackdropUrlFor(widget.featuredMovie);
     if (image == null) return const SizedBox.shrink();
 
-    return CachedNetworkImage(
-      imageUrl: image,
-      fit: BoxFit.cover,
-      memCacheWidth: DesktopHomeScreen._heroBackdropCacheWidth(context),
-      placeholder: (context, url) => Container(color: Colors.black),
-      errorWidget: (context, url, error) => Container(color: Colors.black),
+    // As the phone hero (MovieHeroBanner) and the details page: the
+    // picture melting into a soft wash of its own colours — and, as there,
+    // moving at half the page's speed as it scrolls (parallax). The
+    // subtree is built once (`child`) behind a RepaintBoundary, so
+    // scrolling just moves its layer.
+    final background = RepaintBoundary(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(
+            child: ArtworkGlow(url: image),
+          ),
+          FadingCoverImage(
+            url: image,
+            cacheWidth: DesktopHomeScreen._heroBackdropCacheWidth(context),
+            alignment: Alignment.topCenter,
+          ),
+        ],
+      ),
+    );
+    return ListenableBuilder(
+      listenable: _scrollController,
+      builder: (context, child) => Transform.translate(
+        offset: Offset(
+          0,
+          _scrollController.hasClients ? _scrollController.offset * 0.5 : 0,
+        ),
+        child: child,
+      ),
+      child: background,
     ).animate().fadeIn(duration: 800.ms);
   }
 
   Widget _buildGradients() {
-    return Stack(
+    // Both gradients stay anchored to the hero's bounds while the image
+    // layer beneath them moves with parallax, so the fade to black never
+    // slides down behind the poster rows below.
+    return const Stack(
       fit: StackFit.expand,
       children: [
-        // Top-down gradient
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          height: 200,
-          child: Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Colors.black87, Colors.black54, Colors.transparent],
-                stops: [0.0, 0.5, 1.0],
-              ),
+        // Lighter from the left, behind the text there (it's centred on
+        // the phone, so needs none).
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [Color(0x8A000000), Color(0x42000000), Colors.transparent],
+              stops: [0.0, 0.35, 0.7],
             ),
           ),
         ),
-        // Bottom-up gradient
-        Container(
-          decoration: const BoxDecoration(
+        DecoratedBox(
+          decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
                 Colors.transparent,
-                Colors.black45,
-                Colors.black87,
+                Colors.transparent,
+                Color(0x73000000), // 45%
+                Color(0xA6000000), // 65%
+                Colors.black,
                 Colors.black,
               ],
-              stops: [0.0, 0.5, 0.8, 1.0],
-            ),
-          ),
-        ),
-        // Left-to-right gradient
-        Positioned.fill(
-          child: Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: [Colors.black87, Colors.black54, Colors.transparent],
-                stops: [0.0, 0.3, 0.8],
-              ),
+              stops: [0, 0.35, 0.62, 0.82, 0.97, 1],
             ),
           ),
         ),
@@ -321,78 +338,23 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     );
   }
 
+  // Just the logo over the page: no bar or fade behind it.
   Widget _buildTopBar(BuildContext context) {
-    return ClipRect(
-      // Its own tint (up to 70%) needs no extra when the blur is reduced.
-      child: GlassBlur(
-        sigma: 15 * _topBarOpacity,
-        reducedTint: Colors.transparent,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 24),
-          decoration: BoxDecoration(
-            color: Colors.black.withOpacity(_topBarOpacity * 0.7),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 24),
+      child: Row(
+        children: [
+          SvgPicture.asset(
+            'assets/logo.svg',
+            height: 32,
+            colorFilter: const ColorFilter.mode(
+              AppTheme.primaryColor,
+              BlendMode.srcIn,
+            ),
           ),
-          child: Row(
-            children: [
-              SvgPicture.asset(
-                'assets/logo.svg',
-                height: 32,
-                colorFilter: const ColorFilter.mode(
-                  AppTheme.primaryColor,
-                  BlendMode.srcIn,
-                ),
-              ),
-              const Spacer(),
-              // Search Icon
-              MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: GestureDetector(
-                  onTap: () {
-                    // DesktopHomeScreen is itself the Home tab's content
-                    // inside MovieTabShell, so switch tabs in place rather
-                    // than pushing a second, disconnected SearchScreen route.
-                    MovieTabService().currentTab.value = BottomNavTab.search;
-                  },
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: const Icon(
-                      Icons.search_rounded,
-                      color: Colors.white,
-                      size: 20,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 16),
-              MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: GestureDetector(
-                  onTap: () {
-                    MovieTabService().currentTab.value = BottomNavTab.favorites;
-                  },
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: const Icon(
-                      Icons.favorite_border_rounded,
-                      color: Colors.white,
-                      size: 20,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
+          // The tab buttons sit at the right of this row (see
+          // FloatingBottomNavBar), over it.
+        ],
       ),
     );
   }
@@ -434,10 +396,12 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
         else
           _buildHeroTitle().animate().fadeIn().slideX(),
         const SizedBox(height: 16),
-        // Year and Rating
+        // Year, what it is (as the phone hero's line) and rating
         Text(
           [
             '${widget.featuredMovie.year}',
+            widget.featuredMovie.type == 'tv' ? 'TV Show' : 'Movie',
+            ...?widget.featuredMovie.genres?.take(2),
             if (widget.featuredMovie.certification?.isNotEmpty ?? false)
               widget.featuredMovie.certification!,
           ].join(' • '),
@@ -454,6 +418,24 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
             ],
           ),
         ).animate().fadeIn(delay: 200.ms),
+        if (widget.trendingRank > 0) ...[
+          const SizedBox(height: 6),
+          Text(
+            '#${widget.trendingRank} Trending This Week',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              shadows: [
+                Shadow(
+                  color: Colors.black45,
+                  offset: Offset(0, 2),
+                  blurRadius: 4,
+                ),
+              ],
+            ),
+          ).animate().fadeIn(delay: 250.ms),
+        ],
         const SizedBox(height: 16),
         SizedBox(
           width: 600,
@@ -472,7 +454,9 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // More Info — opens the side details panel.
+            // The phone hero's buttons (MovieHeroBanner): a white More Info
+            // pill — here opening the side details panel — then the round
+            // frosted Trailer and Like.
             ElevatedButton.icon(
               onPressed: () => _onMovieSelect(widget.featuredMovie),
               icon: const Icon(
@@ -480,60 +464,53 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                 color: Colors.black,
                 size: 26,
               ),
-              label: const Text("More Info"),
+              label: const Text('More Info'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: Colors.black,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 20,
-                ),
-                fixedSize: const Size.fromHeight(56),
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                fixedSize: const Size.fromHeight(50),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(30),
                 ),
                 textStyle: const TextStyle(
-                  fontWeight: FontWeight.bold,
                   fontSize: 16,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
             ),
             if (widget.onTrailerHero != null) ...[
-              const SizedBox(width: 16),
-              // Trailer — frosted glass, same recipe as the mobile hero
-              // banner's Trailer button.
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                // See mode_switcher_dialog.dart's comment on the sigma.
-                child: GlassBlur(
-                  child: ElevatedButton.icon(
-                    onPressed: widget.onTrailerHero,
-                    icon: const Icon(
-                      Icons.movie_creation_rounded,
-                      color: Colors.white,
-                    ),
-                    label: const Text("Trailer"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color.fromRGBO(109, 109, 109, 0.7),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 32, // Match More Info button
-                        vertical: 20,
-                      ),
-                      fixedSize: const Size.fromHeight(56),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      textStyle: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ),
+              const SizedBox(width: 12),
+              GlassActionButton(
+                onTap: widget.onTrailerHero!,
+                child: const _HeroButtonLabel(
+                  icon: Icon(Icons.movie_creation_rounded, color: Colors.white),
+                  label: 'Trailer',
                 ),
               ),
             ],
+            const SizedBox(width: 12),
+            ListenableBuilder(
+              listenable: SavedMoviesService(),
+              builder: (context, _) {
+                final liked =
+                    SavedMoviesService().isFavorite(widget.featuredMovie.id);
+                return GlassActionButton(
+                  onTap: () =>
+                      SavedMoviesService().toggleFavorite(widget.featuredMovie),
+                  child: _HeroButtonLabel(
+                    icon: Icon(
+                      liked
+                          ? Icons.favorite_rounded
+                          : Icons.favorite_border_rounded,
+                      color: liked ? AppTheme.primaryColor : Colors.white,
+                    ),
+                    label: 'My List',
+                  ),
+                );
+              },
+            ),
           ],
         ).animate().fadeIn(delay: 400.ms),
       ],
@@ -673,6 +650,37 @@ class _DesktopSectionListState extends State<_DesktopSectionList> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// A hero button's icon and name: the phone hero's round Trailer and Like
+/// buttons are icon-only for room, but here there's room for the name.
+class _HeroButtonLabel extends StatelessWidget {
+  final Widget icon;
+  final String label;
+
+  const _HeroButtonLabel({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          icon,
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

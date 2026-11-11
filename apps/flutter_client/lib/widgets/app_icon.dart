@@ -19,6 +19,14 @@ class AppIcon extends StatelessWidget {
   const AppIcon(
       {super.key, required this.size, this.color, this.semanticLabel});
 
+  /// The icon's shape, centred in [size]: for cutting it out of something
+  /// (the welcome screen's frost) rather than drawing it.
+  static Path shapeIn(Size size) => _AppIconPainter.shapeIn(size);
+
+  /// [shapeIn] with the rings' middles filled: the icon's outline as one
+  /// solid shape.
+  static Path silhouetteIn(Size size) => _AppIconPainter.silhouetteIn(size);
+
   @override
   Widget build(BuildContext context) {
     final icon = CustomPaint(
@@ -66,8 +74,8 @@ class _AppIconPainter extends CustomPainter {
       ..arcTo(Rect.fromCircle(center: at(a + s), radius: cap), a + s, math.pi,
           false)
       ..arcTo(Rect.fromCircle(center: centre, radius: inner), a + s, -s, false)
-      ..arcTo(Rect.fromCircle(center: at(a), radius: cap), a + math.pi,
-          math.pi, false)
+      ..arcTo(Rect.fromCircle(center: at(a), radius: cap), a + math.pi, math.pi,
+          false)
       ..close();
   }
 
@@ -81,8 +89,8 @@ class _AppIconPainter extends CustomPainter {
   /// hole, the left's in the bottom's.)
   static final Path _shape = () {
     final [(l, lf, ls), (r, rf, rs), (b, bf, bs)] = _rings;
-    final left = Path.combine(PathOperation.difference, _ring(l, lf, ls),
-        _hole(r));
+    final left =
+        Path.combine(PathOperation.difference, _ring(l, lf, ls), _hole(r));
     final bottom = Path.combine(
       PathOperation.difference,
       Path.combine(PathOperation.difference, _ring(b, bf, bs), _hole(r)),
@@ -92,8 +100,31 @@ class _AppIconPainter extends CustomPainter {
         Path.combine(PathOperation.union, left, _ring(r, rf, rs)), bottom);
   }();
 
+  // Solid: each ring's whole disc, and the triangle between their centres
+  // (filling where the holes didn't quite meet in the middle). The rings'
+  // missing arcs all run inside the other rings, so the discs' outline is
+  // the icon's own, top notch included.
+  static final Path _silhouette = _rings.fold(
+    Path.combine(
+      PathOperation.union,
+      _shape,
+      Path()..addPolygon([for (final ring in _rings) ring.$1], true),
+    ),
+    (path, ring) => Path.combine(
+      PathOperation.union,
+      path,
+      Path()
+        ..addOval(
+            Rect.fromCircle(center: ring.$1, radius: _radius + _stroke / 2)),
+    ),
+  );
+
   /// The shape, centred in [size].
-  static Path shapeIn(Size size) {
+  static Path shapeIn(Size size) => _fit(_shape, size);
+
+  static Path silhouetteIn(Size size) => _fit(_silhouette, size);
+
+  static Path _fit(Path path, Size size) {
     final scale = size.shortestSide / _side;
     final matrix = Matrix4.identity()
       ..translateByDouble(
@@ -104,7 +135,7 @@ class _AppIconPainter extends CustomPainter {
       )
       ..scaleByDouble(scale, scale, 1, 1)
       ..translateByDouble(-_left, -_top, 0, 1);
-    return _shape.transform(matrix.storage);
+    return path.transform(matrix.storage);
   }
 
   @override

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import '../../models/movie.dart';
+import '../audio_language_service.dart';
 import 'torrent_engine_service.dart';
 import 'torrent_index_service.dart';
 
@@ -76,12 +77,12 @@ class StreamResolver {
     int? season,
     int? episode,
     Movie? title,
+    // Ranks for this audio language instead of the one saved for [title]
+    // — for a list being looked at in another (see AudioLanguagePicker).
+    AudioLanguage? audioLanguage,
   }) async {
     final stopwatch = Stopwatch()..start();
-    final found = type == 'movie'
-        ? await _indexService.getMovieStreams(imdbId)
-        : await _indexService.getSeriesStreams(
-            imdbId, season ?? 1, episode ?? 1);
+    final found = await _find(imdbId, type, season, episode);
     print('[timing] found ${found.length} copies in '
         '${stopwatch.elapsedMilliseconds} ms');
     final cinemaOnly = title?.isCinemaOnly ?? false;
@@ -97,19 +98,68 @@ class StreamResolver {
     // Fan edits only when there's nothing else.
     final unedited = streams.where((s) => !_isCustomEdit(s, title)).toList();
     if (unedited.isNotEmpty) streams = unedited;
-    // English audio is preferred only for titles made in English: for, say,
-    // a Tamil film, an untagged (assumed English) copy with 11 sharers
-    // otherwise outranked the Tamil one with 235, and every fallback
-    // attempt went to barely-shared copies.
-    final madeIn = title?.originalLanguage;
-    if (madeIn != null && madeIn != 'en') {
-      streams = [for (final s in streams) s.withoutLanguagePreference()];
+    // English audio is preferred for titles made in English. For one made
+    // in another language, the audio chosen for it (AudioLanguageService,
+    // the original by default): for, say, a Tamil film, an untagged
+    // (assumed English) copy with 11 sharers otherwise outranked the Tamil
+    // one with 235, and every fallback attempt went to barely-shared
+    // copies.
+    if (title != null && AudioLanguageService.appliesTo(title)) {
+      final languages = AudioLanguageService();
+      await languages.ensureLoaded();
+      // Set either way, English included: for such a title, a copy that
+      // doesn't say its language isn't assumed to be in the one wanted
+      // (see languageRank) — so one that says it is comes first.
+      final flags =
+          (audioLanguage ?? languages.of(title)) == AudioLanguage.original
+              ? AudioLanguageService.originalOf(title).flags
+              : SpokenLanguage.english.flags;
+      streams = [for (final s in streams) s.wantingLanguage(flags)];
+    }
+
+    // A quality whose every copy is in another language isn't offered —
+    // when there are copies in the wanted one at all: The Mentalist's only
+    // SD copies were Russian, French and Italian ones, and SD played
+    // Russian.
+    final tiersInLanguage = {
+      for (final s in streams)
+        if (languageRank(s) < 2) tierOf(s),
+    };
+    if (tiersInLanguage.isNotEmpty) {
+      streams =
+          streams.where((s) => tiersInLanguage.contains(tierOf(s))).toList();
     }
 
     final recommendedTier = _recommendedTierRank(streams);
     streams.sort((a, b) =>
         _score(b, recommendedTier).compareTo(_score(a, recommendedTier)));
     return streams;
+  }
+
+  // What the finders listed for each movie / episode lately, so ranking
+  // it again (its audio language changed) needn't look it all up again.
+  static final _found =
+      <String, ({DateTime at, List<TorrentStream> streams})>{};
+  static const _foundFor = Duration(minutes: 20);
+
+  Future<List<TorrentStream>> _find(
+      String imdbId, String type, int? season, int? episode) async {
+    final key = type == 'movie'
+        ? 'movie:$imdbId'
+        : 'tv:$imdbId:${season ?? 1}:${episode ?? 1}';
+    final cached = _found[key];
+    if (cached != null && DateTime.now().difference(cached.at) < _foundFor) {
+      return cached.streams;
+    }
+    final found = type == 'movie'
+        ? await _indexService.getMovieStreams(imdbId)
+        : await _indexService.getSeriesStreams(
+            imdbId, season ?? 1, episode ?? 1);
+    // Nothing found may be a failed lookup: asked again next time.
+    if (found.isNotEmpty) {
+      _found[key] = (at: DateTime.now(), streams: List.unmodifiable(found));
+    }
+    return found;
   }
 
   // Words that mark a release as filmed in a cinema: camera (CAM, HDCAM),
@@ -334,20 +384,52 @@ class StreamResolver {
   static final _multiAudioPattern =
       RegExp(r'(multi|dual) audio', caseSensitive: false);
 
-  /// How well [stream]'s audio suits an English speaker, from Torrentio's
-  /// languages line ([TorrentStream.languages]) — lower is better:
-  ///  0 — English only: unmarked (the usual case), or only English flags
-  ///  1 — English among other languages, which may play by default (the
-  ///      player asks for English audio first, see PlayerScreen)
-  ///  2 — no English at all
+  // An AVI file (or the XviD / DivX video that comes in one).
+  static final _aviPattern = RegExp(
+      r'\.avi(?![A-Za-z0-9])|(?<![A-Za-z])(xvid|divx)(?![A-Za-z])',
+      caseSensitive: false);
+
+  /// Whether [stream] is an AVI file, whose soundtracks rarely say which
+  /// language they're in — so the player can't pick the wanted one.
+  static bool isAvi(TorrentStream stream) =>
+      _aviPattern.hasMatch(stream.title) || _aviPattern.hasMatch(stream.name);
+
+  /// The language flags on [stream]'s languages line.
+  static Set<String> flagsOf(TorrentStream stream) =>
+      _flagPattern.allMatches(stream.languages).map((m) => m[0]!).toSet();
+
+  /// Whether [stream] is marked as having audio in the language with
+  /// [flags], in a file the player can pick it from.
+  static bool hasMarkedAudio(TorrentStream stream, Set<String> flags) {
+    if (flags.isEmpty || !flagsOf(stream).any(flags.contains)) return false;
+    return flagsOf(stream).length == 1 || !isAvi(stream);
+  }
+
+  /// How well [stream]'s audio suits the language wanted (English, or the
+  /// one in [TorrentStream.wantedFlags]), from Torrentio's languages line
+  /// ([TorrentStream.languages]) — lower is better:
+  ///  0 — that language only: only its flags — or unmarked, for a title
+  ///      made in English (the usual case: unmarked means English)
+  ///  1 — that language among others, which may play by default (the
+  ///      player asks for it first, see PlayerScreen); or unmarked, for a
+  ///      title made in another language ([TorrentStream.wantedFlags]
+  ///      set): it might be in either. Dark's unmarked Full HD copy was
+  ///      the pick in German and in English alike, over ones marked
+  ///      "German" or "Dual Audio German + English"
+  ///  2 — not that language at all — or among others in an AVI file,
+  ///      whose soundtracks the player can't tell apart (The Mentalist's
+  ///      Russian "rus + eng" DVD rip played its Russian dub)
   static int languageRank(TorrentStream stream) {
-    if (stream.ignoreLanguage) return 0;
-    final flags =
-        _flagPattern.allMatches(stream.languages).map((m) => m[0]!).toSet();
+    final wanted = stream.wantedFlags ?? _preferredFlags;
+    if (wanted.isEmpty) return 0;
+    final flags = flagsOf(stream);
     final multiAudio = _multiAudioPattern.hasMatch(stream.languages);
-    final english = flags.intersection(_preferredFlags);
-    if (!multiAudio && english.length == flags.length) return 0;
-    if (english.isNotEmpty || multiAudio) return 1;
+    final matching = flags.intersection(wanted);
+    if (flags.isEmpty && !multiAudio) {
+      return stream.wantedFlags == null ? 0 : 1;
+    }
+    if (!multiAudio && matching.length == flags.length) return 0;
+    if ((matching.isNotEmpty || multiAudio) && !isAvi(stream)) return 1;
     return 2;
   }
 
@@ -387,9 +469,13 @@ class StreamResolver {
   /// [getAvailableStreams]): the last-played torrent when it's among them,
   /// otherwise the best copy of the recommended quality — the popup's
   /// highlighted row either way.
+  ///
+  /// With [preferTier] (the quality being watched, for the next episode),
+  /// the best copy of that quality instead when there is one.
   static TorrentStream? likelyPick(
     List<TorrentStream> streams, {
     String? lastPlayedHash,
+    int? preferTier,
   }) {
     if (streams.isEmpty) return null;
     if (lastPlayedHash != null) {
@@ -397,8 +483,14 @@ class StreamResolver {
         if (s.infoHash.toLowerCase() == lastPlayedHash.toLowerCase()) return s;
       }
     }
+    final options = qualityOptions(streams);
+    if (preferTier != null) {
+      for (final o in options) {
+        if (o.tier == preferTier) return o.best;
+      }
+    }
     final tier = tierOf(streams.first);
-    return qualityOptions(streams).firstWhere((o) => o.tier == tier).best;
+    return options.firstWhere((o) => o.tier == tier).best;
   }
 
   /// What a head start (see [warmUp]) races, from [streams]: the
@@ -409,8 +501,10 @@ class StreamResolver {
   static List<TorrentStream> headStartCandidates(
     List<TorrentStream> streams, {
     String? lastPlayedHash,
+    int? preferTier,
   }) {
-    final pick = likelyPick(streams, lastPlayedHash: lastPlayedHash);
+    final pick = likelyPick(streams,
+        lastPlayedHash: lastPlayedHash, preferTier: preferTier);
     if (pick == null) return const [];
     if (lastPlayedHash != null &&
         pick.infoHash.toLowerCase() == lastPlayedHash.toLowerCase()) {
@@ -557,11 +651,16 @@ class StreamResolver {
       ...allStreams.where((s) =>
           s.infoHash.toLowerCase() != selected.infoHash.toLowerCase()),
     ];
-    // A copy a head start already connected to (see warmUp) goes first —
-    // it starts at once, where [selected] may be the one the head start
-    // found no one sharing.
+    // The copy a head start is already downloading (see warmUp) goes
+    // first — it starts at once — then others it connected to, where
+    // [selected] may be the one the head start found no one sharing. All
+    // three of The Mentalist's had their metadata in, so "connected" put
+    // the top pick (no one sharing it) ahead of the one downloading, and
+    // playback waited two minutes.
     final candidates = [
-      ...ordered.where((s) => _engine.isReady(s.infoHash)),
+      ...ordered.where((s) => _engine.hasHeadStart(s.infoHash)),
+      ...ordered.where((s) =>
+          !_engine.hasHeadStart(s.infoHash) && _engine.isReady(s.infoHash)),
       ...ordered.where((s) => !_engine.isReady(s.infoHash)),
     ].take(maxAttempts).toList();
     bool cancelled() => isCancelled?.call() ?? false;

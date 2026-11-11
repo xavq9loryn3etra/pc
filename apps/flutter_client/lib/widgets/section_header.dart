@@ -26,7 +26,9 @@ class SectionHeader extends StatelessWidget {
                 ),
           ),
           if (onValidTap != null)
-            GestureDetector(
+            MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
               onTap: onValidTap,
               child: Text(
                 'See All',
@@ -35,6 +37,7 @@ class SectionHeader extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                 ),
               ),
+            ),
             ),
         ],
       ),

@@ -72,7 +72,9 @@ class _ModeOptionState extends State<ModeOption> {
         final modeColor = mode.accentColor;
 
         // Press feedback: shrinks slightly and brightens while held.
-        return GestureDetector(
+        return MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
           onTapDown: (_) => _setPressed(true),
           onTapUp: (_) => _setPressed(false),
           onTapCancel: () => _setPressed(false),
@@ -129,6 +131,7 @@ class _ModeOptionState extends State<ModeOption> {
               ),
             ),
           ),
+        ),
         );
       },
     );

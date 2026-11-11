@@ -105,8 +105,7 @@ class _BookDetailsScreenState extends State<BookDetailsScreen> {
         await file.writeAsBytes(response.bodyBytes);
 
         if (mounted) {
-          Navigator.push(
-            context,
+          Navigator.of(context, rootNavigator: true).push(
             PlayerRoute(
               builder: (_) => EpubPlayerScreen(file: file),
             ),

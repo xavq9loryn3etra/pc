@@ -7,15 +7,15 @@ import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import '../services/trending_service.dart';
 import '../services/visual_effects_service.dart';
-import '../theme/iridescent.dart';
 import '../widgets/glass_blur.dart';
 import '../widgets/glass_probe.dart';
+import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/mode_switch_row.dart';
 import 'main_screen.dart';
 
 /// Start screen: a full-bleed, slowly zooming slideshow of the top three
 /// trending titles for the last opened mode, with the mode buttons on a
-/// curved panel below.
+/// floating glass island below.
 class ModeSelectorScreen extends StatefulWidget {
   const ModeSelectorScreen({super.key});
 
@@ -121,8 +121,8 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
     if (pending != null) {
       // Carry on from whatever's on screen — the fresh list usually starts
       // with the same title the cached one did, which would repeat it.
-      final current = pending.indexWhere(
-          (i) => i.imageUrl == _current?.imageUrl || i.title == _current?.title);
+      final current = pending.indexWhere((i) =>
+          i.imageUrl == _current?.imageUrl || i.title == _current?.title);
       _show(pending, (current + 1) % pending.length);
     } else if (_queue.isNotEmpty) {
       _show(_queue, (_queueIndex + 1) % _queue.length);
@@ -183,14 +183,77 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
                   // a soft blur rather than visible blocks.
                   filterQuality:
                       blurred ? FilterQuality.high : FilterQuality.medium,
-                  // Vary where each slide zooms towards
-                  focus: const [
-                    Alignment(0, -0.4),
-                    Alignment(0.3, 0.1),
-                    Alignment(-0.3, -0.1),
-                  ][_slide % 3],
+                  // Vary where each slide zooms towards, on a phone's tall
+                  // poster; a wide window's backdrop zooms into its middle.
+                  focus: navBarAtTop(context)
+                      ? Alignment.center
+                      : const [
+                          Alignment(0, -0.4),
+                          Alignment(0.3, 0.1),
+                          Alignment(-0.3, -0.1),
+                        ][_slide % 3],
                   duration: _slideDuration + _fadeDuration,
                 ),
+        ),
+      ),
+    );
+  }
+
+  /// The modes on a floating glass island: inset from a phone's edges,
+  /// centred and no wider than 640 on a tablet. Its frosted glass is faked
+  /// — the slideshow's blurred copy, shifted down by the island's distance
+  /// from the bottom so it lines up with the sharp one behind — since a
+  /// live blur would re-blur the always-zooming slideshow every frame.
+  Widget _modeIsland(TrendingItem? item, Size screen, double bottomInset) {
+    final wide = navBarAtTop(context);
+    const radius = BorderRadius.all(Radius.circular(32));
+    final lift = (wide ? 40 : 16) + bottomInset;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(wide ? 0 : 16, 0, wide ? 0 : 16, lift),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 640),
+        child: ClipRRect(
+          borderRadius: radius,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: OverflowBox(
+                    alignment: Alignment.bottomCenter,
+                    minWidth: screen.width,
+                    maxWidth: screen.width,
+                    minHeight: screen.height,
+                    maxHeight: screen.height,
+                    child: Transform.translate(
+                      offset: Offset(0, lift),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          ColorFiltered(
+                            colorFilter: GlassBlur.saturate,
+                            child: _slideshow(item, blurred: true),
+                          ),
+                          _scrim,
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: kGlassTint,
+                  borderRadius: radius,
+                  border: Border.all(color: kGlassEdge),
+                ),
+                padding: wide
+                    ? const EdgeInsets.symmetric(horizontal: 24, vertical: 28)
+                    : const EdgeInsets.symmetric(horizontal: 8, vertical: 24),
+                child: ModeSwitchRow(onSelected: _selectMode),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -259,50 +322,7 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
                   ),
                 ),
                 const SizedBox(height: 14),
-                // Same frosted glass as the floating bottom nav bar's
-                // buttons (blur, colour boost, kGlassTint) — but faked:
-                // a blurred copy of the slideshow, lined up with the real
-                // one behind (the panel spans the screen's full width and
-                // sits on its bottom edge), instead of a live blur.
-                CustomPaint(
-                  foregroundPainter: _DomeEdgePainter(),
-                  child: ClipPath(
-                    clipper: _DomeClipper(),
-                    child: Stack(
-                      children: [
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: OverflowBox(
-                              alignment: Alignment.bottomCenter,
-                              minWidth: screenSize.width,
-                              maxWidth: screenSize.width,
-                              minHeight: screenSize.height,
-                              maxHeight: screenSize.height,
-                              child: Stack(
-                                fit: StackFit.expand,
-                                children: [
-                                  ColorFiltered(
-                                    colorFilter: GlassBlur.saturate,
-                                    child: _slideshow(item, blurred: true),
-                                  ),
-                                  _scrim,
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                        Container(
-                          width: double.infinity,
-                          color:
-                              kGlassTint,
-                          padding: EdgeInsets.fromLTRB(
-                              16, 40, 16, 28 + bottomInset),
-                          child: ModeSwitchRow(onSelected: _selectMode),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+                _modeIsland(item, screenSize, bottomInset),
               ],
             ),
           ),
@@ -419,44 +439,4 @@ class _Placeholder extends StatelessWidget {
       ),
     );
   }
-}
-
-/// The bottom panel's top edge: a shallow dome.
-Path _domeEdge(Size size) {
-  const rise = 32.0;
-  return Path()
-    ..moveTo(0, rise)
-    ..quadraticBezierTo(size.width / 2, -rise, size.width, rise);
-}
-
-/// Clips the bottom panel to its dome shape.
-class _DomeClipper extends CustomClipper<Path> {
-  @override
-  Path getClip(Size size) => _domeEdge(size)
-    ..lineTo(size.width, size.height)
-    ..lineTo(0, size.height)
-    ..close();
-
-  @override
-  bool shouldReclip(_DomeClipper oldClipper) => false;
-}
-
-/// The faint white edge along the dome, matching the nav bar buttons'
-/// border.
-class _DomeEdgePainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    // The glass edge catches the app's iridescent light (see
-    // AppIridescence) rather than a flat faint white.
-    canvas.drawPath(
-      _domeEdge(size),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..shader = AppIridescence.sweep(Offset.zero & size, opacity: 0.45),
-    );
-  }
-
-  @override
-  bool shouldRepaint(_DomeEdgePainter oldDelegate) => false;
 }

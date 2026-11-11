@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import '../widgets/app_message.dart';
@@ -18,7 +20,6 @@ import '../services/torrent/torrent_download_registry.dart';
 import '../services/movie_tab_service.dart';
 import '../services/torrent/download_ahead_settings.dart';
 import '../theme/app_theme.dart';
-import '../main.dart';
 
 /// Best available figure for how much of [entry] has actually downloaded:
 /// the space it really takes on disk where that can be measured (Android —
@@ -56,13 +57,26 @@ class SettingsScreen extends StatelessWidget {
             // Grouped like Apple's settings: each section's rows on one
             // card, a short note under it, ordered by how often they're
             // likely to be used.
+            // On a wide window the rows keep to a readable width in the
+            // middle, with the scroll bar still at the window's edge.
+            final side = math.max(
+                0.0, (MediaQuery.sizeOf(context).width - 720) / 2);
             return ListView(
-              padding: padding.copyWith(top: 100),
+              padding: padding.copyWith(
+                  top: ScreenScaffold.contentTop(context),
+                  left: side,
+                  right: side),
               children: [
-                const _SectionLabel('SWITCH MODE', topPadding: 8),
-                const ModeSwitchRow(),
+                // No modes in the desktop app (see AppModeService).
+                if (AppModeService.canSwitchMode) ...[
+                  const _SectionLabel('SWITCH MODE', topPadding: 8),
+                  const ModeSwitchRow(),
+                ],
                 if (showStorage) ...[
-                  const _SectionLabel('PLAYBACK'),
+                  _SectionLabel(
+                    'PLAYBACK',
+                    topPadding: AppModeService.canSwitchMode ? 24 : 8,
+                  ),
                   const _SettingsGroup(
                     footnote: 'Gets a head start of about 6 MB on what '
                         "you'll likely play, so it starts sooner. On Wi-Fi "
@@ -72,7 +86,11 @@ class SettingsScreen extends StatelessWidget {
                   const _SectionLabel('DOWNLOADS'),
                   const _StorageSection(),
                 ],
-                const _SectionLabel('BACKUP'),
+                _SectionLabel(
+                  'BACKUP',
+                  topPadding:
+                      AppModeService.canSwitchMode || showStorage ? 24 : 8,
+                ),
                 _SettingsGroup(
                   footnote: 'Your favorites and watch history, saved to a '
                       'file you can bring back later.',
@@ -89,6 +107,13 @@ class SettingsScreen extends StatelessWidget {
                     ),
                   ],
                 ),
+                // At the foot instead of the app bar's corner, where the
+                // title (and so the app bar) is left out: the side column.
+                if (ScreenScaffold.hidesTitle(context))
+                  const Padding(
+                    padding: EdgeInsets.only(top: 24, bottom: 8),
+                    child: _AppVersionLabel(),
+                  ),
               ],
             );
           },
@@ -114,7 +139,7 @@ Future<bool?> _runWithLoadingDialog(
   );
   final success = await action();
   if (!context.mounted) return null;
-  Navigator.of(context).pop(); // dismiss the loading dialog
+  Navigator.of(context, rootNavigator: true).pop(); // dismiss the loading dialog
   return success;
 }
 
@@ -141,17 +166,7 @@ Future<void> _importBackup(BuildContext context) async {
   );
   if (success == null || !context.mounted) return;
   if (success) {
-    showAppMessage(context, 'Backup imported. Reloading the app…');
-    // Restart app by navigating to main
-    Future.delayed(const Duration(seconds: 1), () {
-      if (context.mounted) {
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (_) => const MyApp()),
-          (route) => false,
-        );
-      }
-    });
+    showAppMessage(context, 'Backup imported.');
   } else {
     showAppMessage(context, "Couldn't import the backup.", error: true);
   }
@@ -323,6 +338,7 @@ class _SettingsRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
+      mouseCursor: WidgetStateMouseCursor.clickable,
       onTap: onTap,
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: 52),

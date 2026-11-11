@@ -5,6 +5,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'saved_movies_service.dart';
 import 'app_mode_service.dart';
+import 'search_history_service.dart';
+import 'torrent/download_ahead_settings.dart';
 
 class BackupService {
   static final BackupService _instance = BackupService._internal();
@@ -69,13 +71,18 @@ class BackupService {
           await prefs.setBool(key, value);
         } else if (value is List) {
           // SharedPreferences stores StringList for List types
-          await prefs.setStringList(key, List<String>.from(value));
+          await prefs.setStringList(
+            key,
+            value.map((e) => e.toString()).toList(),
+          );
         }
       }
 
       // Re-init services to reflect new data in memory
       await SavedMoviesService().init();
       await AppModeService().init();
+      await DownloadAheadSettings().init();
+      await SearchHistoryService().load(force: true);
       
       return true;
     } catch (e) {

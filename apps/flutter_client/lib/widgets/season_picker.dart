@@ -22,11 +22,28 @@ class SeasonPicker extends StatefulWidget {
   final int current;
   final ValueChanged<int> onSelected;
 
+  /// Just "Season n ⌄", without a pill of its own: for a bubble of a
+  /// GlassBubbleBar, whose glass it sits on (the player's episode
+  /// browser's header). As tall as what it's put in.
+  final bool bare;
+
+  /// A TapRegion group the menu also belongs to: the episode side panel's
+  /// (EpisodeBrowser.panelTapGroup), so picking a season in the menu —
+  /// drawn in the overlay, outside the panel — isn't a click outside the
+  /// panel, which would close it.
+  final Object? menuTapGroup;
+
+  /// See GlassPillButton.large.
+  final bool? large;
+
   const SeasonPicker({
     super.key,
     required this.seasons,
     required this.current,
     required this.onSelected,
+    this.bare = false,
+    this.menuTapGroup,
+    this.large,
   });
 
   static String nameOf(int seasonNumber) =>
@@ -46,12 +63,19 @@ class _SeasonPickerState extends State<SeasonPicker>
   static const _maxMenuHeight = 308.0;
 
   final _menu = OverlayPortalController();
-  late final _animation = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 180),
-  );
-  late final _curved =
-      CurvedAnimation(parent: _animation, curve: Curves.easeOutCubic);
+  late final AnimationController _animation;
+  late final CurvedAnimation _curved;
+
+  @override
+  void initState() {
+    super.initState();
+    _animation = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 180),
+    );
+    _curved =
+        CurvedAnimation(parent: _animation, curve: Curves.easeOutCubic);
+  }
 
   // The pill and its menu, as one region for TapRegion: a touch on the pill
   // isn't "outside" the menu (the pill's own tap closes it instead).
@@ -61,6 +85,9 @@ class _SeasonPickerState extends State<SeasonPicker>
   // edge (lined up with the pill's), and its tallest before it scrolls
   // Worked out on opening.
   double _top = 0, _right = 0, _maxHeight = 0;
+  // Or, for a pill on the screen's left half, its left edge lined up with
+  // the pill's instead (not run off the screen's left side).
+  double? _left;
 
   // The page the pill scrolls with, while the menu is open: scrolling it
   // closes the menu, which would otherwise be left behind. (A touch does
@@ -83,6 +110,9 @@ class _SeasonPickerState extends State<SeasonPicker>
     setState(() {
       _top = topLeft.dy + pill.size.height + 8;
       _right = overlay.size.width - (topLeft.dx + pill.size.width);
+      _left = topLeft.dx + pill.size.width / 2 < overlay.size.width / 2
+          ? topLeft.dx
+          : null;
       _maxHeight =
           math.min(_maxMenuHeight, overlay.size.height - _top - 16);
     });
@@ -111,10 +141,49 @@ class _SeasonPickerState extends State<SeasonPicker>
       overlayChildBuilder: _buildMenu,
       child: TapRegion(
         groupId: _region,
-        child: GlassPillButton(
-          label: SeasonPicker.nameOf(widget.current),
-          trailingIcon: Icons.keyboard_arrow_down_rounded,
-          onPressed: () => _menu.isShowing ? _close() : _open(),
+        child: widget.bare
+            ? _bareButton(context)
+            : GlassPillButton(
+                large: widget.large,
+                label: SeasonPicker.nameOf(widget.current),
+                trailingIcon: Icons.keyboard_arrow_down_rounded,
+                onPressed: () => _menu.isShowing ? _close() : _open(),
+              ),
+      ),
+    );
+  }
+
+  /// [bare]: GlassPillButton's label and arrow, sizes and spacing, on no
+  /// glass of its own.
+  Widget _bareButton(BuildContext context) {
+    final wide = widget.large ?? MediaQuery.sizeOf(context).width >= 900;
+    return Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        mouseCursor: WidgetStateMouseCursor.clickable,
+        customBorder: const StadiumBorder(),
+        onTap: () => _menu.isShowing ? _close() : _open(),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: wide ? 16 : 14),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                SeasonPicker.nameOf(widget.current),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: wide ? 14.5 : 12.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              SizedBox(width: wide ? 6 : 4),
+              Icon(
+                Icons.keyboard_arrow_down_rounded,
+                color: Colors.white70,
+                size: wide ? 20 : 16,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -125,9 +194,12 @@ class _SeasonPickerState extends State<SeasonPicker>
       children: [
         Positioned(
           top: _top,
-          right: _right,
+          left: _left,
+          right: _left == null ? _right : null,
           width: _width,
           child: TapRegion(
+            groupId: widget.menuTapGroup,
+            child: TapRegion(
             groupId: _region,
             // Fires on a touch going down anywhere else, without taking it
             // from what's there — a scroll carries on after closing this.
@@ -136,13 +208,15 @@ class _SeasonPickerState extends State<SeasonPicker>
               opacity: _curved,
               child: ScaleTransition(
                 scale: Tween(begin: 0.94, end: 1.0).animate(_curved),
-                alignment: Alignment.topRight,
+                alignment:
+                    _left == null ? Alignment.topRight : Alignment.topLeft,
                 child: ConstrainedBox(
                   constraints: BoxConstraints(maxHeight: _maxHeight),
                   child: _buildPanel(),
                 ),
               ),
             ),
+          ),
           ),
         ),
       ],
@@ -189,6 +263,7 @@ class _SeasonPickerState extends State<SeasonPicker>
     final isCurrent = season.seasonNumber == widget.current;
     final count = season.episodeCount;
     return InkWell(
+      mouseCursor: WidgetStateMouseCursor.clickable,
       onTap: () => _pick(season.seasonNumber),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),

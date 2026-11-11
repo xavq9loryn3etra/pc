@@ -26,6 +26,33 @@ class _Shimmering extends StatelessWidget {
   }
 }
 
+/// One shimmering block, standing in for a single picture still loading on
+/// a page that's otherwise shown (e.g. a details page's header picture or
+/// logo). Fills its box unless given a [width] / [height].
+class SkeletonBlock extends StatelessWidget {
+  final double? width;
+  final double? height;
+  final double radius;
+
+  const SkeletonBlock({super.key, this.width, this.height, this.radius = 0});
+
+  @override
+  Widget build(BuildContext context) {
+    return _Shimmering(
+      animate: true,
+      builder: (color) => Container(
+        width: width ?? double.infinity,
+        height: height ?? double.infinity,
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius:
+              radius == 0 ? null : BorderRadius.circular(radius),
+        ),
+      ),
+    );
+  }
+}
+
 class SkeletonHero extends StatelessWidget {
   final bool animate;
 

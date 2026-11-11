@@ -115,10 +115,18 @@ class _AskScreenState extends State<AskScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) => _onTab());
   }
 
+  bool get _autoFocusField =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.macOS);
+
   void _onTab() {
-    if (!mounted || MovieTabService().currentTab.value != BottomNavTab.ai) {
+    if (!mounted) return;
+    if (MovieTabService().currentTab.value != BottomNavTab.ai) {
+      if (_autoFocusField) _focus.unfocus();
       return;
     }
+    if (_autoFocusField) _focus.requestFocus();
     final first = !_presented;
     if (first) setState(() => _presented = true);
     // The trace round the field, once it's in place: after its entrance
@@ -141,7 +149,9 @@ class _AskScreenState extends State<AskScreen>
   Timer? _traceTimer;
 
   // How far down the screen the content starts, under the title.
-  static const _top = 100.0;
+  // Where the conversation starts: below the app bar, or near the top in
+  // the side column, where the title's left out (ScreenScaffold).
+  double get _top => ScreenScaffold.contentTop(context);
 
   // The newest question, held just under the title while it's answered:
   // its answer then comes in below it. And the room left under the
@@ -437,8 +447,16 @@ class _AskScreenState extends State<AskScreen>
       body: (context, isDesktop, padding) {
         final side = isDesktop ? 60.0 : 16.0;
         // Just above the bottom nav bar's buttons: padding.bottom keeps clear
-        // of its whole fade, taller than the buttons themselves.
-        final fieldBottom = keyboardOpen ? 8.0 : padding.bottom - 34;
+        // of its whole fade, taller than the buttons themselves. With no bar
+        // at the foot (a wide window's, at the top; the side column),
+        // padding.bottom is just the safe area, and the field sits above it.
+        final barAtFoot =
+            !navBarAtTop(context) && !SideColumnScope.inColumn(context);
+        final fieldBottom = keyboardOpen
+            ? 8.0
+            : barAtFoot
+                ? padding.bottom - 34
+                : padding.bottom + 16;
         // Room for the field, and a gap so a poster's title isn't right
         // against it.
         final contentBottom = fieldBottom + _fieldHeight + 24;
@@ -548,7 +566,7 @@ class _AskScreenState extends State<AskScreen>
             // looked back over while typing.
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
             slivers: [
-              const SliverToBoxAdapter(child: SizedBox(height: _top)),
+              SliverToBoxAdapter(child: SizedBox(height: _top)),
               if (_turns.isEmpty)
                 SliverPadding(
                   padding: EdgeInsets.symmetric(horizontal: side),
@@ -746,7 +764,7 @@ class _AskScreenState extends State<AskScreen>
   // it as they scroll under. Grouped with the nav bar's glass, which it
   // never overlaps.
   Widget _field() {
-    final d = _lineHeight ?? 52;
+    final d = math.max(52.0, _lineHeight ?? 52.0);
     final gap = d * 0.15;
     final shape = _JoinedShape(diameter: d, gap: gap);
     final enabled = _turns.isNotEmpty;
@@ -779,6 +797,7 @@ class _AskScreenState extends State<AskScreen>
               child: Material(
                 type: MaterialType.transparency,
                 child: InkWell(
+                  mouseCursor: WidgetStateMouseCursor.clickable,
                   customBorder: const CircleBorder(),
                   onTap: enabled ? _newChat : null,
                   child: SizedBox.square(
@@ -800,7 +819,7 @@ class _AskScreenState extends State<AskScreen>
             Expanded(
               child: Padding(
                 key: _boxKey,
-                padding: const EdgeInsets.fromLTRB(16, 5, 5, 5),
+                padding: const EdgeInsets.fromLTRB(18, 7, 7, 7),
                 child: _fieldRow(),
               ),
             ),
@@ -894,14 +913,14 @@ class _AskScreenState extends State<AskScreen>
         // Centred in a box one line tall: in the middle of the field at
         // one line, by its last line as it grows.
         SizedBox(
-          height: math.max(36, (_lineHeight ?? 0) - 10),
+          height: math.max(38, (_lineHeight ?? 0) - 14),
           child: Center(
             child: IconButton(
               onPressed: _locked ? null : _ask,
               icon: const Icon(Icons.arrow_upward_rounded, size: 20),
               style: IconButton.styleFrom(
-                fixedSize: const Size(36, 36),
-                minimumSize: const Size(36, 36),
+                fixedSize: const Size(38, 38),
+                minimumSize: const Size(38, 38),
                 padding: EdgeInsets.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 backgroundColor: Colors.white,
@@ -1534,6 +1553,7 @@ class _ExamplePill extends StatelessWidget {
           color: kGlassTint,
           shape: shape.copyWith(side: BorderSide(color: kGlassEdge)),
           child: InkWell(
+            mouseCursor: WidgetStateMouseCursor.clickable,
             onTap: onTap,
             customBorder: shape,
             child: Padding(

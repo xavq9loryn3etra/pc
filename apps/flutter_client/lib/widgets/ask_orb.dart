@@ -87,12 +87,30 @@ class AskClockSubscription with WidgetsBindingObserver {
 /// app's icon) over them. [colour] from 0, dim greys, to 1, full colour — and
 /// then a little glow spilling past its edge. Drawn as plain radial
 /// gradients: no blur, blend modes or layers.
+///
+/// Given a [width], it's a pill [size] high instead (as Ask's named button
+/// on a wide window), the blobs drifting along its length.
+///
+/// [spill] false leaves out the glow past its edge, [body] false all but
+/// it — for drawing them apart, the orb inside something that clips it and
+/// the glow behind (as GlassPillButton.busy does).
 class AskOrb extends StatefulWidget {
   final double size;
+  final double? width;
   final double colour;
+  final bool spill;
+  final bool body;
   final Widget? child;
 
-  const AskOrb({super.key, required this.size, this.colour = 1, this.child});
+  const AskOrb({
+    super.key,
+    required this.size,
+    this.width,
+    this.colour = 1,
+    this.spill = true,
+    this.body = true,
+    this.child,
+  });
 
   @override
   State<AskOrb> createState() => _AskOrbState();
@@ -116,8 +134,12 @@ class _AskOrbState extends State<AskOrb> {
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
-      painter: _OrbPainter(AskClock.time, widget.colour),
-      child: SizedBox.square(dimension: widget.size, child: widget.child),
+      painter: _OrbPainter(AskClock.time, widget.colour,
+          spill: widget.spill, body: widget.body),
+      child: SizedBox(
+          width: widget.width ?? widget.size,
+          height: widget.size,
+          child: widget.child),
     );
   }
 }
@@ -128,7 +150,12 @@ class _OrbPainter extends CustomPainter {
   /// How much of the blobs' colour shows: 1 full colour, 0 greys.
   final double colour;
 
-  _OrbPainter(this.time, this.colour) : super(repaint: time);
+  /// Whether its glow past the edge is drawn, and the orb itself.
+  final bool spill;
+  final bool body;
+
+  _OrbPainter(this.time, this.colour, {this.spill = true, this.body = true})
+      : super(repaint: time);
 
   // [color] as a dim grey of about the same brightness: on the other tabs
   // it's a quiet button among the rest, not lit up like the open one.
@@ -152,40 +179,63 @@ class _OrbPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
     final r = size.shortestSide / 2;
+    // How far past a circle the shape runs each way: 0 for a circle; along
+    // its length, in a pill.
+    final reach = size.width / 2 - r;
+    final pill = reach > 0.5;
+    // In a pill, the blobs are spread from one end to the other, each
+    // roaming a little about its own place, so no end is ever left dark
+    // (were they all free to roam the whole length, at times they'd all be
+    // at the other end) — and a long pill has more of them, the colours
+    // over again. In a circle they all roam about its centre.
+    final count = math.max(_blobs.length, (2 * reach / (r * 1.2)).ceil() + 1);
+    final ends = pill ? reach + r * 0.3 : 0.0;
+    final stretch = 2 * ends / (count - 1);
+    final roam = pill ? r * 0.25 + stretch * 0.25 : r * 0.5;
     final centre = size.center(Offset.zero);
     final t = time.value;
     final blobs = [
-      for (final (hue, speed, phase) in _blobs)
-        (
-          Color.lerp(_grey(hue), hue, colour)!,
-          // Where it's drifted to, and how big it's swelled.
-          () {
-            final a = t * speed * 2 * math.pi + phase;
-            return (
-              centre +
-                  Offset(math.cos(a) * r * 0.5,
-                      math.sin(a * 1.3 + phase) * r * 0.5),
+      for (var i = 0; i < count; i++)
+        () {
+          final (hue, speed, phase) = _blobs[i % _blobs.length];
+          // The colours' second round on a long pill, out of step with
+          // the first.
+          final a =
+              t * speed * 2 * math.pi + phase + (i ~/ _blobs.length) * 2.4;
+          final home = centre.dx - ends + stretch * i;
+          return (
+            Color.lerp(_grey(hue), hue, colour)!,
+            // Where it's drifted to, and how big it's swelled.
+            (
+              Offset(home + math.cos(a) * roam,
+                  centre.dy + math.sin(a * 1.3 + phase) * r * 0.5),
               // Small enough that each keeps its own colour where they
-              // overlap less.
-              r * (0.8 + 0.12 * math.sin(a * 0.7)),
-            );
-          }(),
-        ),
+              // overlap less; in a pill, big enough to meet the next.
+              (pill ? r * 1.15 + stretch * 0.6 : r) *
+                  (0.8 + 0.12 * math.sin(a * 0.7)),
+            ),
+          );
+        }(),
     ];
 
     // The glow spilling past the edge: the blobs again, bigger and fainter,
     // unclipped — only in colour.
     final glow = 0.18 * colour;
-    for (final (color, (at, radius)) in blobs) {
-      _blob(canvas, color.withValues(alpha: glow), at, radius * 1.12);
+    if (spill) {
+      for (final (color, (at, radius)) in blobs) {
+        _blob(canvas, color.withValues(alpha: glow), at, radius * 1.12);
+      }
     }
+    if (!body) return;
 
     // The orb itself.
     canvas.save();
-    canvas
-        .clipPath(Path()..addOval(Rect.fromCircle(center: centre, radius: r)));
-    canvas.drawCircle(centre, r, Paint()..color = const Color(0xFF17140F));
+    final shape = RRect.fromRectAndRadius(
+        Offset.zero & size, Radius.circular(r)); // A circle, or a pill.
+    canvas.clipRRect(shape);
+    canvas.drawRRect(shape, Paint()..color = const Color(0xFF17140F));
     for (final (color, (at, radius)) in blobs) {
       _blob(canvas, color.withValues(alpha: 0.6 + 0.35 * colour), at, radius);
     }
@@ -206,5 +256,8 @@ class _OrbPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_OrbPainter old) =>
-      old.time != time || old.colour != colour;
+      old.time != time ||
+      old.colour != colour ||
+      old.spill != spill ||
+      old.body != body;
 }

@@ -14,12 +14,13 @@ class UpdateOverlay extends StatelessWidget {
     return StatusScreen(
       title: 'A New Version',
       highlight: 'Is Ready.',
-      // The remote message and download link are for Android builds;
-      // iPhones update through TestFlight.
+      // The remote message and download link are Android's, or Windows'
+      // own (its section in flags.json); iPhones update through
+      // TestFlight. No link given: no button, rather than a dead one.
       message: Platform.isIOS
           ? 'A new update is available. Please update the app from TestFlight.'
           : message,
-      footer: Platform.isIOS
+      footer: Platform.isIOS || url.trim().isEmpty
           ? null
           : StatusPrimaryButton(
               label: 'Download Update',

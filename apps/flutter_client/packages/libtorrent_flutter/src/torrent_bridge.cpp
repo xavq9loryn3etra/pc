@@ -90,12 +90,20 @@ namespace lt  = libtorrent;
 namespace chr = std::chrono;
 
 // ── debug logging ───────────────────────────────────────────────────────────────
+// Off in shipped builds. Define TB_DEBUG_LOG (and optionally TB_DEBUG_LOG_PATH)
+// at compile time to write a trace file while debugging the engine.
+#ifdef TB_DEBUG_LOG
+#ifndef TB_DEBUG_LOG_PATH
+#define TB_DEBUG_LOG_PATH "torrent_debug.log"
+#endif
 static FILE* g_logfile = nullptr;
+static bool g_log_tried = false;
 static std::mutex g_log_mu;
 
 static void tb_log_init() {
-    if (!g_logfile) {
-        g_logfile = fopen("C:\\Users\\Ayman\\Desktop\\torrent_debug.log", "w");
+    if (!g_logfile && !g_log_tried) {
+        g_log_tried = true;
+        g_logfile = fopen(TB_DEBUG_LOG_PATH, "w");
         if (g_logfile) {
             setvbuf(g_logfile, nullptr, _IONBF, 0); // unbuffered
         }
@@ -111,6 +119,9 @@ static void tb_log_init() {
         fprintf(g_logfile, "[%05lld] " fmt "\n", (long long)_ms, ##__VA_ARGS__); \
     } \
 } while(0)
+#else
+#define TB_LOG(...) ((void)0)
+#endif
 
 // ── error handling ──────────────────────────────────────────────────────────────
 static thread_local std::string g_last_error;

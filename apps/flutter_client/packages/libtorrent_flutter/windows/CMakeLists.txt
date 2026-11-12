@@ -20,7 +20,11 @@ else()
   set(LTF_WINDOWS_ARCH "x64")
 endif()
 
-set(PREBUILT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../prebuilt/windows")
+# The package's real folder: Flutter reaches it through a symlink
+# (flutter/ephemeral/.plugin_symlinks), and newer CMake refuses to extract
+# the prebuilt zip "through symlink" there (it failed on GitHub's runners).
+get_filename_component(_LTF_PKG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." REALPATH)
+set(PREBUILT_DIR "${_LTF_PKG_DIR}/prebuilt/windows")
 set(PREBUILT_DLL "${PREBUILT_DIR}/${LTF_WINDOWS_ARCH}/libtorrent_flutter.dll")
 
 option(LIBTORRENT_FLUTTER_SKIP_DOWNLOAD "Skip downloading prebuilt native lib" OFF)

@@ -8,6 +8,7 @@ import 'download_ahead_settings.dart';
 import 'free_space.dart';
 import 'torrent_download_registry.dart';
 import 'torrent_paths.dart';
+import 'torrent_storage_service.dart';
 import 'warm_owners.dart';
 
 class TorrentEngineService {
@@ -309,6 +310,10 @@ class TorrentEngineService {
   /// download budget.
   Future<StreamResult> startStream(int id, {int? fileIndex}) async {
     _streaming.add(id);
+    // Playing it again: a trim put off when it was last closed no longer
+    // applies (a new one is worked out when this player closes).
+    final playingKey = _keyOf(id);
+    if (playingKey != null) _pendingTrims.remove(playingKey);
     _held.remove(id); // Resumed below.
     _liftCap(); // Playback gets the full speed, whichever head start held it.
     _watchDisk();
@@ -712,7 +717,16 @@ class TorrentEngineService {
           engine.pauseTorrent(id);
         } catch (_) {}
       } else if (known.containsKey(key)) {
-        engine.pauseTorrent(id);
+        final trim = _pendingTrims.remove(key);
+        if (trim != null) {
+          // The trim its player's close had to put off (see releaseAndTrim),
+          // then the downloads limit.
+          unawaited(releaseAndTrim(id,
+                  fileIndex: trim.fileIndex, keepFrom: trim.keepFrom)
+              .then((_) => TorrentStorageService.enforceLimit()));
+        } else {
+          engine.pauseTorrent(id);
+        }
       } else {
         cleanup(id);
       }
@@ -864,6 +878,11 @@ class TorrentEngineService {
   // same torrent waits for it first (see connect).
   final Map<String, Future<void>> _trimming = {};
 
+  // Trims put off at a player's close because a head start still held the
+  // torrent, by lowercase info hash: done when the last one lets go (see
+  // coolDown), dropped if it's played again (see startStream).
+  final Map<String, ({int fileIndex, int keepFrom})> _pendingTrims = {};
+
   /// Like [pause] for a normal player close, but also takes the torrent out
   /// of the session and shrinks what it keeps on disk: from [keepFrom]
   /// (a byte offset in file [fileIndex]; negative: no trimming, just
@@ -888,6 +907,18 @@ class TorrentEngineService {
         _connecting.containsKey(key) ||
         _trimming.containsKey(key);
     if (stillWanted || !_initialized || !engine.canReleaseAndTrim) {
+      // Wanted by a head start — the details page still open under the
+      // player, or the next episode of the same season pack: trimmed when
+      // that ends instead (see coolDown), or a pack's other episodes would
+      // stay whole on disk.
+      if (key != null &&
+          keepFrom >= 0 &&
+          _initialized &&
+          engine.canReleaseAndTrim &&
+          (_warmOwners.owns(key) || _warmStreams.containsKey(torrentId))) {
+        _pendingTrims[key] = (fileIndex: fileIndex, keepFrom: keepFrom);
+        print('[trim] $key: put off while a head start holds it');
+      }
       pause(torrentId);
       return;
     }
@@ -915,6 +946,7 @@ class TorrentEngineService {
         } catch (_) {}
         return;
       }
+      print('[trim] $key: ${kept < 0 ? 'released, not trimmed' : '${kept ~/ (1 << 20)} MB kept'}');
       // Out of the session but not trimmed (-1): its files and resume data
       // are as a pause leaves them; playing it again adds it afresh.
       if (kept < 0) return;

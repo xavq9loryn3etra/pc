@@ -384,17 +384,31 @@ abstract final class SubtitleSync {
   /// takes it — decoded by a second, silent player as fast as it can
   /// (mpv: no picture, sound written to a file rather than played, not in
   /// real time) — [audioTrack]'s (mpv's id), the one being heard, when
-  /// there's a choice. Null if it couldn't be.
+  /// there's a choice. Null if it couldn't be, or when [isCancelled] turns
+  /// true (checked twice a second): the player closed or moved to another
+  /// video, so there's no reason to go on reading the stream.
   static Future<Int16List?> decodeSound(
     String url, {
     required double start,
     required double end,
     String? audioTrack,
     Duration timeout = const Duration(minutes: 3),
+    bool Function()? isCancelled,
   }) async {
+    if (isCancelled?.call() ?? false) return null;
     final file = File('${Directory.systemTemp.path}${Platform.pathSeparator}'
         'popcorn_sync_${DateTime.now().microsecondsSinceEpoch}.pcm');
     final player = Player();
+    final cancelled = Completer<void>();
+    var failed = false; // Nothing will read the file: delete it.
+    Timer? cancelPoll;
+    if (isCancelled != null) {
+      cancelPoll = Timer.periodic(const Duration(milliseconds: 500), (t) {
+        if (!isCancelled()) return;
+        t.cancel();
+        cancelled.complete();
+      });
+    }
     try {
       final mpv = player.platform as NativePlayer;
       for (final p in {
@@ -411,22 +425,31 @@ abstract final class SubtitleSync {
       }.entries) {
         await mpv.setProperty(p.key, p.value);
       }
-      final done = player.stream.completed.firstWhere((c) => c);
+      // orElse: closing the player ends the stream; that mustn't throw.
+      final done =
+          player.stream.completed.firstWhere((c) => c, orElse: () => false);
       Duration at(double seconds) =>
           Duration(milliseconds: (seconds * 1000).round());
       await player.open(Media(url, start: at(start), end: at(end)));
       try {
-        await done.timeout(timeout);
+        await Future.any([done.timeout(timeout), cancelled.future]);
       } on TimeoutException {
         // The rest isn't downloaded yet: what's been heard so far.
         print('[sync] stopped listening after ${timeout.inSeconds} s');
       }
+      if (cancelled.isCompleted) {
+        failed = true;
+        return null;
+      }
     } catch (e) {
       print('[sync] couldn\'t get the sound: $e');
+      failed = true;
       return null;
     } finally {
+      cancelPoll?.cancel();
       // Closing it finishes the file.
       await player.dispose();
+      if (failed) file.delete().ignore();
     }
     try {
       final bytes = await file.readAsBytes();

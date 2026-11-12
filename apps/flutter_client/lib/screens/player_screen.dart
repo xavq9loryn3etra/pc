@@ -3521,8 +3521,16 @@ class _PlayerScreenState extends State<PlayerScreen>
       from = after;
       to = after + _autoSyncShortest;
     }
+    // Listening reads the stream as fast as it can: only once the player
+    // has a good lead on the video, so it never competes with playback
+    // for a slow stream. (Tried again on the next tick.)
+    if (player.state.buffer - pos < _autoSyncMinLead) return;
     _autoSync(track, from: from, to: to > _duration ? _duration : to);
   }
+
+  /// The buffered video ahead of the position that auto sync waits for
+  /// before starting its second player (see _maybeAutoSync).
+  static const Duration _autoSyncMinLead = Duration(seconds: 30);
 
   /// Sets [track]'s timing by when people talk — in the sound from [from]
   /// to [to], heard by a second, silent player, or the sound [heard]
@@ -3563,6 +3571,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           start: start,
           end: to!.inMilliseconds / 1000,
           audioTrack: audio == 'auto' || audio == 'no' ? null : audio,
+          // The second player reads the same stream as fast as it can:
+          // stop it as soon as the player closes or the video changes.
+          isCancelled: () => !mounted || _streamUrl != url,
         );
       }
       // Another episode or copy meanwhile: not this one's sound.

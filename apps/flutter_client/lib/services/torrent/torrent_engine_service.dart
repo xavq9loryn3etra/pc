@@ -147,7 +147,7 @@ class TorrentEngineService {
   }) async {
     final id = await connect(infoHash, trackers: trackers);
     try {
-      return startStream(id, fileIndex: fileIndex);
+      return await startStream(id, fileIndex: fileIndex);
     } catch (e) {
       discardFailedStart(id);
       rethrow;
@@ -272,7 +272,7 @@ class TorrentEngineService {
   /// Starts streaming torrent [id], already [connect]ed, and returns its
   /// local URL. Pauses every other torrent so this one gets the full
   /// download budget.
-  StreamResult startStream(int id, {int? fileIndex}) {
+  Future<StreamResult> startStream(int id, {int? fileIndex}) async {
     _streaming.add(id);
     _held.remove(id); // Resumed below.
     _liftCap(); // Playback gets the full speed, whichever head start held it.
@@ -324,9 +324,15 @@ class TorrentEngineService {
       // torrent its pieces have arrived, so a second one waited forever
       // for pieces already downloaded: the next episode never started.
       try {
-        engine.stopAllStreamsForTorrent(id);
+        // Waits for the native stop (which runs off the UI thread): the
+        // new stream must not open while the old one is still closing.
+        await engine.stopAllStreamsForTorrent(id);
       } catch (e) {
         print('Error stopping streams of torrent $id: $e');
+      }
+      if (!_streaming.contains(id)) {
+        // The player closed (pause) while the old stream was closing.
+        throw StateError('Stopped while the previous stream was closing');
       }
       stream = _openStream(id, videoIdx);
     }
@@ -365,7 +371,7 @@ class TorrentEngineService {
 
   void _stopStream(int streamId) {
     try {
-      engine.stopStream(streamId);
+      unawaited(engine.stopStream(streamId));
     } catch (e) {
       print('Error stopping stream $streamId: $e');
     }
@@ -812,7 +818,7 @@ class TorrentEngineService {
     _warmStreams.remove(torrentId); // Stopped below.
     _cancelReadAhead(torrentId);
     try {
-      engine.stopAllStreamsForTorrent(torrentId);
+      unawaited(engine.stopAllStreamsForTorrent(torrentId));
       engine.pauseTorrent(torrentId);
     } catch (e) {
       print('Error pausing torrent $torrentId: $e');

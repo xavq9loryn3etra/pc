@@ -5,7 +5,7 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
-import 'dart:math';
+import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
@@ -31,7 +31,10 @@ class TrackerManager {
         final list = body
             .split('\n')
             .map((s) => s.trim())
-            .where((s) => s.isNotEmpty)
+            // This build has no HTTPS tracker support, and the list comes
+            // from a third party: keep only UDP trackers, and only a few.
+            .where((s) => s.startsWith('udp://'))
+            .take(8)
             .toList();
         _extraTrackers.clear();
         _extraTrackers.addAll(list);
@@ -98,6 +101,26 @@ StreamInfo _toStreamInfo(LtStreamStatus s) => StreamInfo(
   downloadRate:    s.downloadRate,
 );
 
+// ─── Off-UI-thread native calls ─────────────────────────────────────────────
+// These run in a short-lived isolate: they re-open the native library there
+// (already loaded in the process, so cheap) and take the session as an
+// address, since pointers can't be captured by an isolate closure.
+
+void _nativeStopStreams(int sessionAddress, List<int> streamIds) {
+  final b = TorrentBridgeBindings.open();
+  final session = Pointer<LtSessionOpaque>.fromAddress(sessionAddress);
+  for (final id in streamIds) {
+    try {
+      b.stopStream(session, id);
+    } catch (_) {}
+  }
+}
+
+void _nativeDestroySession(int sessionAddress) {
+  final b = TorrentBridgeBindings.open();
+  b.destroySession(Pointer<LtSessionOpaque>.fromAddress(sessionAddress));
+}
+
 // ─── LibtorrentFlutter ──────────────────────────────────────────────────────
 
 /// The main libtorrent engine for Flutter.
@@ -126,7 +149,6 @@ class LibtorrentFlutter {
   final _streamsCtrl = StreamController<Map<int, StreamInfo>>.broadcast();
   final Map<int, StreamInfo> _streams = {};
 
-  static const _maxTorrents = 1024;
   static const _maxStreams  = 64;
 
   LibtorrentFlutter._();
@@ -259,10 +281,22 @@ class LibtorrentFlutter {
   }
 
   /// Remove a torrent. Optionally delete downloaded files.
+  ///
+  /// Its streams are stopped first. The torrent leaves [torrents] at once;
+  /// when streams had to be stopped, the native removal follows once those
+  /// stops (which run off the UI thread) have finished.
   void removeTorrent(int id, {bool deleteFiles = false}) {
-    _b.removeTorrent(_session, id, deleteFiles ? 1 : 0);
+    final hadStreams = _streams.values.any((s) => s.torrentId == id);
+    stopAllStreamsForTorrent(id);
     _torrents.remove(id);
     _torrentsCtrl.add(Map.unmodifiable(_torrents));
+    final session = _session;
+    void nativeRemove() => _b.removeTorrent(session, id, deleteFiles ? 1 : 0);
+    if (!hadStreams && _pendingStops.isEmpty) {
+      nativeRemove();
+    } else {
+      Future.wait(_pendingStops.toList()).then((_) => nativeRemove());
+    }
   }
 
   /// Pause a torrent.
@@ -329,21 +363,45 @@ class LibtorrentFlutter {
   }
 
   /// Stop a stream.
-  void stopStream(int streamId) {
-    _b.stopStream(_session, streamId);
-    _streams.remove(streamId);
-    _streamsCtrl.add(Map.unmodifiable(_streams));
-  }
+  ///
+  /// The stream disappears from [streams] at once; the native stop (which
+  /// can block for a few hundred ms) runs off the UI thread. The returned
+  /// future completes when it has finished — await it before starting
+  /// another stream of the same torrent.
+  Future<void> stopStream(int streamId) => _stopStreams([streamId]);
 
-  /// Stop all streams for a specific torrent.
-  void stopAllStreamsForTorrent(int torrentId) {
+  /// Stop all streams for a specific torrent. See [stopStream] for the
+  /// returned future.
+  Future<void> stopAllStreamsForTorrent(int torrentId) {
     final toStop = _streams.entries
         .where((e) => e.value.torrentId == torrentId)
         .map((e) => e.key)
         .toList();
-    for (final sid in toStop) {
-      stopStream(sid);
+    return _stopStreams(toStop);
+  }
+
+  // Stream ids whose native stop is still running: the status poll must not
+  // bring them back into [streams].
+  final Set<int> _stopping = {};
+  // Native stops in flight, so dispose can wait for them.
+  final Set<Future<void>> _pendingStops = {};
+
+  Future<void> _stopStreams(List<int> ids) {
+    if (ids.isEmpty) return Future.value();
+    for (final id in ids) {
+      _streams.remove(id);
+      _stopping.add(id);
     }
+    _streamsCtrl.add(Map.unmodifiable(_streams));
+    final addr = _session.address;
+    late final Future<void> done;
+    done = Isolate.run(() => _nativeStopStreams(addr, ids)).catchError((_) {})
+        .whenComplete(() {
+      _stopping.removeAll(ids);
+      _pendingStops.remove(done);
+    });
+    _pendingStops.add(done);
+    return done;
   }
 
   /// Get the current info for a specific stream, or null if not found.
@@ -457,30 +515,31 @@ class LibtorrentFlutter {
   void _poll() {
     _pollTorrents();
     _pollStreams();
-    _pollAlerts();
   }
 
-  void _pollAlerts() {
-    final callback = NativeCallable<LtAlertCallbackNative>.isolateLocal(_onAlert);
-    try {
-      _b.pollAlerts(_session, callback.nativeFunction, nullptr);
-    } finally {
-      callback.close();
-    }
-  }
-
-  static void _onAlert(int type, int torrentId, Pointer<Utf8> message, Pointer<Void> userData) {
-    // Silently consume alerts — users can listen to torrentUpdates for state changes.
-    // Uncomment for debugging:
-    // final msg = message.toDartString();
-    // print('LibtorrentFlutter Alert: [T$torrentId] $msg');
-  }
+  // One status buffer kept between polls (it was ~1.9 MB calloc'd every
+  // 600 ms); grown when there are more torrents, freed on dispose.
+  Pointer<LtTorrentStatus> _statusBuf = nullptr;
+  int _statusCap = 0;
 
   void _pollTorrents() {
     final count = _b.getTorrentCount(_session);
-    final buf   = calloc<LtTorrentStatus>(max(count, _maxTorrents));
-    try {
-      final n = _b.getAllStatuses(_session, buf, max(count, _maxTorrents));
+    if (count > _statusCap) {
+      if (_statusBuf != nullptr) calloc.free(_statusBuf);
+      _statusCap = count + 8;
+      _statusBuf = calloc<LtTorrentStatus>(_statusCap);
+    }
+    final buf = _statusBuf;
+    if (buf == nullptr) {
+      // No torrents (yet): everything known is stale.
+      if (_torrents.isNotEmpty) {
+        _torrents.clear();
+        _torrentsCtrl.add(Map.unmodifiable(_torrents));
+      }
+      return;
+    }
+    {
+      final n = _b.getAllStatuses(_session, buf, _statusCap);
       bool changed = false;
       final seen = <int>{};
 
@@ -499,7 +558,7 @@ class LibtorrentFlutter {
         changed = true;
       }
       if (changed) _torrentsCtrl.add(Map.unmodifiable(_torrents));
-    } finally { calloc.free(buf); }
+    }
   }
 
   void _pollStreams() {
@@ -510,6 +569,7 @@ class LibtorrentFlutter {
       bool changed = false;
       for (var i = 0; i < n; i++) {
         final info = _toStreamInfo(buf[i]);
+        if (_stopping.contains(info.id)) continue;
         final old  = _streams[info.id];
         if (old == null ||
             old.streamState != info.streamState ||
@@ -584,7 +644,16 @@ class LibtorrentFlutter {
       }
     }
     _pollTimer?.cancel();
-    _b.destroySession(_session);
+    // Let the stops in flight finish, then tear the session down off the UI
+    // thread (it can block for seconds).
+    await Future.wait(_pendingStops.toList());
+    final addr = _session.address;
+    await Isolate.run(() => _nativeDestroySession(addr));
+    if (_statusBuf != nullptr) {
+      calloc.free(_statusBuf);
+      _statusBuf = nullptr;
+      _statusCap = 0;
+    }
     await _torrentsCtrl.close();
     await _streamsCtrl.close();
     _instance = null;

@@ -83,29 +83,33 @@ typedef struct {
     int32_t       download_rate;     /* bytes/s for this stream */
 } lt_stream_status;
 
-/* ── port of settings/btsets.go BTSets struct ── */
+/* ── port of settings/btsets.go BTSets struct ──
+   Fields marked IGNORED are kept only so the layout matches the Dart FFI
+   mirror; the engine doesn't read them. */
 typedef struct {
     /* Cache */
-    int64_t cache_size;              /* bytes, default 64MB */
-    int32_t reader_read_ahead;       /* percent 5-100, default 95 */
-    int32_t preload_cache;           /* percent 0-100, default 50 */
+    int64_t cache_size;              /* bytes, default 64MB: a new stream's
+                                        read-ahead (see lt_set_cache_settings)
+                                        when lt_start_stream gets none */
+    int32_t reader_read_ahead;       /* IGNORED (was percent 5-100) */
+    int32_t preload_cache;           /* IGNORED (was percent 0-100) */
 
     /* Torrent engine */
     int32_t connections_limit;       /* default 25 */
-    int32_t torrent_disconnect_timeout; /* seconds, default 30 */
+    int32_t torrent_disconnect_timeout; /* IGNORED (was seconds) */
     int32_t force_encrypt;           /* 0=enabled, 1=forced */
-    int32_t disable_tcp;             /* 0=enabled (default), 1=disabled */
+    int32_t disable_tcp;             /* IGNORED */
     int32_t disable_utp;             /* 0=enabled (default), 1=disabled */
     int32_t disable_upload;          /* 0=enabled (default), 1=disabled */
     int32_t disable_dht;             /* 0=enabled (default), 1=disabled */
     int32_t disable_upnp;            /* 0=enabled (default), 1=disabled */
-    int32_t enable_ipv6;             /* 0=disabled (default), 1=enabled */
+    int32_t enable_ipv6;             /* IGNORED: IPv4 and IPv6 are both listened on */
     int32_t download_rate_limit;     /* KB/s, 0=unlimited */
     int32_t upload_rate_limit;       /* KB/s, 0=unlimited */
-    int32_t peers_listen_port;       /* 0=random (default) */
+    int32_t peers_listen_port;       /* 0 = 6881 (default) */
 
     /* Reader */
-    int32_t responsive_mode;         /* 1=enabled (default), 0=disabled */
+    int32_t responsive_mode;         /* IGNORED */
 } lt_bt_config;
 
 typedef void (*lt_alert_callback)(int alert_type, lt_torrent_id id,
@@ -131,7 +135,10 @@ TORRENT_API void lt_configure_session(lt_session_t session,
                                       const lt_bt_config* config);
 TORRENT_API void lt_get_default_config(lt_bt_config* out);
 
-/* alerts */
+/* alerts. The engine formats and queues alerts for lt_poll_alerts only
+   while someone polls (a call in the last 10 s; the first poll after a
+   quiet spell returns only what came in since), and calls the callback
+   only while one is set. */
 TORRENT_API void lt_set_alert_callback(lt_session_t session,
                                        lt_alert_callback cb, void* user_data);
 TORRENT_API void lt_poll_alerts(lt_session_t session,
@@ -183,7 +190,10 @@ TORRENT_API int          lt_get_all_stream_statuses(lt_session_t session,
 TORRENT_API int  lt_preload_stream(lt_session_t session, lt_stream_id id,
                                    int64_t preload_bytes);
 
-/* cache settings — port of settings/btsets.go */
+/* cache settings. capacity (bytes, > 0 to change): how far ahead of
+   playback stream id downloads — capacity / piece length pieces, 4 to 64.
+   read_ahead_pct is ignored; connections_limit > 0 caps the torrent's
+   peers. */
 TORRENT_API void lt_set_cache_settings(lt_session_t session, lt_stream_id id,
                                        int64_t capacity,
                                        int read_ahead_pct,
@@ -192,6 +202,41 @@ TORRENT_API void lt_set_cache_settings(lt_session_t session, lt_stream_id id,
 /* speed limits */
 TORRENT_API void lt_set_download_limit(lt_session_t session, int bytes_per_sec);
 TORRENT_API void lt_set_upload_limit(lt_session_t session, int bytes_per_sec);
+
+// 1 = on mobile data: few unchoke slots (4) and a low upload cap (~64 KB/s);
+// 0 = back to the normal settings.
+TORRENT_API void lt_set_metered(lt_session_t session, int metered);
+
+// Stops torrent `id`'s streams, pauses it, writes its resume data, and removes
+// it from the session WITHOUT deleting its files. Then shrinks what's kept on
+// disk: in file `file_index`, only bytes [keep_from, end of file) are kept;
+// in every file (including file_index) its head and tail — the same regions
+// the stream engine protects for container headers/indexes, at least one
+// piece each — are kept too. Every other piece is dropped: cleared from the
+// saved resume data so libtorrent will download it again if needed, and its
+// bytes are released from the disk (hole punched). keep_from < 0 means
+// "don't trim, just release". Blocking — up to about timeout_ms in total;
+// the caller runs it off the UI thread.
+//
+// Returns:
+//   >= 0  released (removed from the session) and trimmed: the bytes of
+//         downloaded pieces still kept on disk. With keep_from < 0: released
+//         only, and the bytes of the pieces had on disk, or 0 if unknown.
+//         (lt_last_error may still note files whose space couldn't be
+//         released; that isn't an error — their pieces are no longer
+//         trusted either way.)
+//   -1    released (removed from the session and forgotten by the engine),
+//         but nothing trimmed: the resume data couldn't be saved or read,
+//         libtorrent didn't let go of the files in time, etc. Nothing was
+//         punched. lt_last_error says why.
+//   -2    NOT released: the torrent is still in the session exactly as
+//         before (unknown id, null session, invalid file_index, or a failure
+//         before anything was changed). lt_last_error says why.
+// While it runs, lt_add_magnet / lt_add_torrent_file of the same torrent
+// wait for it (up to 15 s, then fail).
+TORRENT_API int64_t lt_release_and_trim(lt_session_t session, lt_torrent_id id,
+                                        int file_index, int64_t keep_from,
+                                        int timeout_ms);
 
 /* utility */
 TORRENT_API const char* lt_last_error(void);

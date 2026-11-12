@@ -1103,7 +1103,8 @@ struct StreamEngine {
     std::atomic<int64_t> preload_size{0};
     std::atomic<int64_t> preloaded_bytes{0};
     std::atomic<bool>    preloading{false};
-    std::thread          preload_thread;
+    std::thread          preload_thread;   // started and joined under preload_mu
+    std::mutex           preload_mu;
 
     // speed tracking — port of torrent.go progressEvent
     std::atomic<double> download_speed{0};
@@ -1524,7 +1525,12 @@ static void begin_shutdown(StreamEngine* s) {
 // frees its cache. Blocks — never on the UI thread.
 static void finish_shutdown(StreamEngine* s) {
     s->wake_server();
-    if (s->preload_thread.joinable()) s->preload_thread.join();
+    {
+        // (lt_preload_stream starts the thread under preload_mu, and only
+        // while active: none can start after this.)
+        std::lock_guard<std::mutex> lk(s->preload_mu);
+        if (s->preload_thread.joinable()) s->preload_thread.join();
+    }
     // server_thread joins all client threads before returning, and must
     // finish before cache->close(): client threads use TorrReader objects
     // owned by the cache.
@@ -2387,9 +2393,10 @@ static void run_http_server(StreamEngine* stream) {
 // ── preload — port of torr/preload.go Preload() ─────────────────────────────
 // Preloads head and tail of file in parallel before streaming
 static void preload_stream(StreamEngine* s, int64_t preload_bytes) {
-    if (preload_bytes <= 0) return;
+    // (preloading was set by lt_preload_stream, which owns the flag until
+    // this thread clears it at the end.)
+    if (preload_bytes <= 0) { s->preloading.store(false); return; }
     s->preload_size.store(preload_bytes);
-    s->preloading.store(true);
 
     if (preload_bytes > s->file_size)
         preload_bytes = s->file_size;
@@ -2413,12 +2420,6 @@ static void preload_stream(StreamEngine* s, int64_t preload_bytes) {
     for (int p = head_piece; p <= head_end_piece && s->active.load() && s->preloading.load(); ++p) {
         // wait for piece data in cache (alert thread eagerly pre-fetches)
         if (!wait_for_piece(s, p, 30000)) break;
-        // small extra wait for cache buffer if needed
-        for (int w = 0; w < 50 && s->active.load(); ++w) {
-            auto* cp = s->cache ? s->cache->get_piece(p) : nullptr;
-            if (cp && !cp->buffer.empty()) break;
-            std::this_thread::sleep_for(chr::milliseconds(100));
-        }
         s->preloaded_bytes.fetch_add(s->piece_length);
     }
 
@@ -2429,11 +2430,6 @@ static void preload_stream(StreamEngine* s, int64_t preload_bytes) {
 
         for (int p = tail_piece; p <= s->end_piece && s->active.load() && s->preloading.load(); ++p) {
             if (!wait_for_piece(s, p, 30000)) break;
-            for (int w = 0; w < 50 && s->active.load(); ++w) {
-                auto* cp = s->cache ? s->cache->get_piece(p) : nullptr;
-                if (cp && !cp->buffer.empty()) break;
-                std::this_thread::sleep_for(chr::milliseconds(100));
-            }
             s->preloaded_bytes.fetch_add(s->piece_length);
         }
     }
@@ -3392,19 +3388,40 @@ TORRENT_API int lt_preload_stream(lt_session_t session, lt_stream_id sid,
                                   int64_t preload_bytes) {
     if (!session) return 0;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->streams_mu);
-    auto it = sw->streams.find(sid);
-    if (it == sw->streams.end()) return 0;
+    std::shared_ptr<StreamEngine> sp;
+    {
+        std::lock_guard<std::mutex> lk(sw->streams_mu);
+        auto it = sw->streams.find(sid);
+        if (it == sw->streams.end()) return 0;
+        sp = it->second;
+    }
+    StreamEngine* s = sp.get();
 
-    auto* s = it->second.get();
-    if (s->preloading.load() || !s->active.load()) return 0;
+    // Under preload_mu (not streams_mu, which the alert thread needs):
+    // the stop path joins the thread under it too, and only starts no new
+    // one once inactive.
+    std::lock_guard<std::mutex> pl(s->preload_mu);
+    if (!s->active.load()) return 0;
+    // Claims the flag: a second call while one runs returns 0, instead
+    // of move-assigning onto a joinable std::thread (std::terminate).
+    bool expected = false;
+    if (!s->preloading.compare_exchange_strong(expected, true)) return 0;
+    // A previous preload that finished (or was stopped by a seek): join
+    // it, then take the flag back — its last act was clearing it.
+    if (s->preload_thread.joinable()) s->preload_thread.join();
+    s->preloading.store(true);
 
     // default preload 16MB — port of preload.go startend
     if (preload_bytes <= 0) preload_bytes = 16 * 1024 * 1024;
 
-    s->preload_thread = std::thread([s, preload_bytes]() {
-        preload_stream(s, preload_bytes);
-    });
+    try {
+        s->preload_thread = std::thread([s, preload_bytes]() {
+            preload_stream(s, preload_bytes);
+        });
+    } catch (...) {
+        s->preloading.store(false);
+        return 0;
+    }
     return 1;
 }
 

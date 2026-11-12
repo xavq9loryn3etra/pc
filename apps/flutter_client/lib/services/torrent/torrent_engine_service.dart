@@ -712,6 +712,18 @@ class TorrentEngineService {
     }
   }
 
+  /// Removes torrent [infoHash], with its files, if it was added this
+  /// session — for deleting a cached download (Settings > Storage, a wipe
+  /// after a stall). Returns whether it was there; does nothing otherwise.
+  Future<bool> forget(String infoHash) async {
+    final key = infoHash.toLowerCase();
+    _warming.remove(key);
+    final id = _idsByHash[key];
+    if (id == null) return false;
+    cleanup(id);
+    return true;
+  }
+
   /// Stop a torrent entirely — its stream and its downloading — but keep
   /// what it downloaded on disk, so resuming later only fetches the rest.
   /// For a normal player close, and a start the user abandoned (closed the

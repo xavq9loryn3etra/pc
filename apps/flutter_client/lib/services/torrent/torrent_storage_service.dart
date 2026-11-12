@@ -150,31 +150,25 @@ class TorrentStorageService {
   /// same deterministic per-infoHash path [TorrentEngineService] streams
   /// into (see torrent_paths.dart) and wipes it the same way.
   static Future<void> deleteByInfoHash(String infoHash) async {
-    final path = await TorrentPaths.savePathFor(infoHash);
-    await _deleteByPath(infoHash, path);
+    final key = infoHash.toLowerCase(); // The folder is named in lowercase.
+    final path = await TorrentPaths.savePathFor(key);
+    await _deleteByPath(key, path);
   }
 
   static Future<void> _deleteByPath(String infoHash, String path) async {
-    int? liveId;
+    // Through the engine service, so its own records of the torrent (its
+    // streams, head start, id) go with it; matched by info hash, as paths
+    // can differ in separators on Windows.
+    final wasLive = await TorrentEngineService.instance.forget(infoHash);
+    // Whatever it left behind, or everything when it wasn't live.
     try {
-      for (final t in TorrentEngineService.instance.engine.torrents.entries) {
-        if (t.value.savePath == path) {
-          liveId = t.key;
-          break;
-        }
-      }
-    } catch (_) {
-      // The engine never started: nothing of it is live.
-    }
-
-    if (liveId != null) {
-      TorrentEngineService.instance.engine
-          .removeTorrent(liveId, deleteFiles: true);
-    } else {
       final dir = Directory(path);
       if (await dir.exists()) {
         await dir.delete(recursive: true);
       }
+    } on FileSystemException {
+      // A live torrent's files may still be closing; the engine deletes them.
+      if (!wasLive) rethrow;
     }
 
     await TorrentDownloadRegistry.remove(infoHash);

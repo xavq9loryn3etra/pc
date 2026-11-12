@@ -2618,11 +2618,20 @@ static void preload_stream(StreamEngine* s, int64_t preload_bytes) {
 }
 
 // ── C API ───────────────────────────────────────────────────────────────────────
-
+// Every exported function catches everything at its edge: an exception
+// crossing extern "C" into Dart terminates the app.
+#define LT_CATCH(ret) \
+    catch (const std::exception& e) { set_err(e.what()); return ret; } \
+    catch (...) { set_err("unexpected error"); return ret; }
+#define LT_CATCH_VOID \
+    catch (const std::exception& e) { set_err(e.what()); return; } \
+    catch (...) { set_err("unexpected error"); return; }
 extern "C" {
 
 TORRENT_API lt_session_t lt_create_session(const char* iface, int dl, int ul) {
-    return lt_create_session_with_state(iface, dl, ul, nullptr);
+    try {
+        return lt_create_session_with_state(iface, dl, ul, nullptr);
+    } LT_CATCH(nullptr)
 }
 
 // The DHT routing table saved by lt_save_session_state, read back so a new
@@ -2818,7 +2827,7 @@ TORRENT_API lt_session_t lt_create_session_with_state(const char* iface,
         sw->start_alert_thread();
         set_err("");
         return reinterpret_cast<lt_session_t>(sw);
-    } catch (const std::exception& e) { set_err(e.what()); return nullptr; }
+    } LT_CATCH(nullptr)
 }
 
 TORRENT_API int lt_save_session_state(lt_session_t session,
@@ -2848,14 +2857,14 @@ TORRENT_API int lt_save_session_state(lt_session_t session,
         std::filesystem::rename(tmp, dest, ec);
         if (ec) { set_err(ec.message()); return 0; }
         return 1;
-    } catch (const std::exception& e) { set_err(e.what()); return 0; }
+    } LT_CATCH(0)
 }
 
 TORRENT_API void lt_destroy_session(lt_session_t session) {
     if (!session) return;
     auto* sw = to_sw(session);
 
-    // Every torrent's resume data, written (by the alert thread, still
+    // Every torrent's resume data, written (by the resume thread, still
     // running) before anything stops — up to 3 s.
     try {
         sw->request_resume_saves(true);
@@ -2903,9 +2912,11 @@ TORRENT_API void lt_set_alert_callback(lt_session_t session,
                                        lt_alert_callback cb, void* ud) {
     if (!session) return;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->cb_mu);
-    sw->dart_callback  = cb;
-    sw->dart_user_data = ud;
+    try {
+        std::lock_guard<std::mutex> lk(sw->cb_mu);
+        sw->dart_callback  = cb;
+        sw->dart_user_data = ud;
+    } LT_CATCH_VOID
 }
 
 TORRENT_API void lt_poll_alerts(lt_session_t session,
@@ -2915,13 +2926,15 @@ TORRENT_API void lt_poll_alerts(lt_session_t session,
     // Alerts are queued from now on (for 10 s past each call): the first
     // poll after a quiet spell returns only what came in since.
     sw->last_poll_ms.store(SessionWrapper::steady_ms());
-    std::deque<AlertRecord> local;
-    {
-        std::lock_guard<std::mutex> lk(sw->dart_queue_mu);
-        local.swap(sw->dart_queue);
-    }
-    for (auto& r : local)
-        cb(r.type, r.torrent_id, r.message.c_str(), ud);
+    try {
+        std::deque<AlertRecord> local;
+        {
+            std::lock_guard<std::mutex> lk(sw->dart_queue_mu);
+            local.swap(sw->dart_queue);
+        }
+        for (auto& r : local)
+            cb(r.type, r.torrent_id, r.message.c_str(), ud);
+    } LT_CATCH_VOID
 }
 
 // ── torrent management ──────────────────────────────────────────────────────────
@@ -2981,7 +2994,7 @@ TORRENT_API lt_torrent_id lt_add_magnet(lt_session_t session,
             if (stream_only) sw->ephemeral_torrents.insert(id);
         }
         set_err(""); return id;
-    } catch (const std::exception& e) { set_err(e.what()); return -1; }
+    } LT_CATCH(-1)
 }
 
 TORRENT_API lt_torrent_id lt_add_torrent_file(lt_session_t session,
@@ -3021,66 +3034,75 @@ TORRENT_API lt_torrent_id lt_add_torrent_file(lt_session_t session,
             if (stream_only) sw->ephemeral_torrents.insert(id);
         }
         set_err(""); return id;
-    } catch (const std::exception& e) { set_err(e.what()); return -1; }
+    } LT_CATCH(-1)
 }
 
 TORRENT_API void lt_remove_torrent(lt_session_t session,
                                    lt_torrent_id id, int del) {
     if (!session) return;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->mu);
-    auto it = sw->handles.find(id);
-    if (it == sw->handles.end()) return;
-    if (del) {
-        try {
-            const auto st = it->second.status(lt::torrent_handle::query_save_path);
-            std::error_code fec;
-            std::filesystem::remove(
-                resume_file(st.save_path, it->second.info_hashes()), fec);
-        } catch (...) {}
-    }
-    sw->session.remove_torrent(it->second,
-        del ? lt::session::delete_files : lt::remove_flags_t{});
-    sw->handles.erase(it);
-    sw->ephemeral_torrents.erase(id);
+    try {
+        std::lock_guard<std::mutex> lk(sw->mu);
+        auto it = sw->handles.find(id);
+        if (it == sw->handles.end()) return;
+        if (del) {
+            try {
+                const auto st = it->second.status(lt::torrent_handle::query_save_path);
+                std::error_code fec;
+                std::filesystem::remove(
+                    resume_file(st.save_path, it->second.info_hashes()), fec);
+            } catch (...) {}
+        }
+        lt::torrent_handle h = it->second;
+        sw->handles.erase(it);
+        sw->ephemeral_torrents.erase(id);
+        sw->session.remove_torrent(h,
+            del ? lt::session::delete_files : lt::remove_flags_t{});
+    } LT_CATCH_VOID
 }
 
 TORRENT_API void lt_pause_torrent(lt_session_t session, lt_torrent_id id) {
     if (!session) return;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->mu);
-    auto it = sw->handles.find(id);
-    if (it != sw->handles.end() && it->second.is_valid()) {
-        try { it->second.pause(); } catch (...) {}
-        // What it got, kept now: a paused torrent is one left (a player
-        // closed, a head start not taken).
-        if (!sw->ephemeral_torrents.count(id)) {
-            try {
-                if (it->second.torrent_file()) {
-                    sw->resume_outstanding.fetch_add(1);
-                    it->second.save_resume_data(lt::torrent_handle::save_info_dict);
-                }
-            } catch (...) {}
+    try {
+        std::lock_guard<std::mutex> lk(sw->mu);
+        auto it = sw->handles.find(id);
+        if (it != sw->handles.end() && it->second.is_valid()) {
+            try { it->second.pause(); } catch (...) {}
+            // What it got, kept now: a paused torrent is one left (a player
+            // closed, a head start not taken).
+            if (!sw->ephemeral_torrents.count(id)) {
+                try {
+                    if (it->second.torrent_file()) {
+                        sw->resume_outstanding.fetch_add(1);
+                        it->second.save_resume_data(lt::torrent_handle::save_info_dict);
+                    }
+                } catch (...) {}
+            }
         }
-    }
+    } LT_CATCH_VOID
 }
 
 TORRENT_API void lt_resume_torrent(lt_session_t session, lt_torrent_id id) {
     if (!session) return;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->mu);
-    auto it = sw->handles.find(id);
-    if (it != sw->handles.end() && it->second.is_valid())
-        try { it->second.resume(); } catch (...) {}
+    try {
+        std::lock_guard<std::mutex> lk(sw->mu);
+        auto it = sw->handles.find(id);
+        if (it != sw->handles.end() && it->second.is_valid())
+            it->second.resume();
+    } LT_CATCH_VOID
 }
 
 TORRENT_API void lt_recheck_torrent(lt_session_t session, lt_torrent_id id) {
     if (!session) return;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->mu);
-    auto it = sw->handles.find(id);
-    if (it != sw->handles.end() && it->second.is_valid())
-        try { it->second.force_recheck(); } catch (...) {}
+    try {
+        std::lock_guard<std::mutex> lk(sw->mu);
+        auto it = sw->handles.find(id);
+        if (it != sw->handles.end() && it->second.is_valid())
+            it->second.force_recheck();
+    } LT_CATCH_VOID
 }
 
 // ── status queries ──────────────────────────────────────────────────────────────
@@ -3088,8 +3110,10 @@ TORRENT_API void lt_recheck_torrent(lt_session_t session, lt_torrent_id id) {
 TORRENT_API int lt_get_torrent_count(lt_session_t session) {
     if (!session) return 0;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->mu);
-    return (int)sw->handles.size();
+    try {
+        std::lock_guard<std::mutex> lk(sw->mu);
+        return (int)sw->handles.size();
+    } LT_CATCH(0)
 }
 
 TORRENT_API int lt_get_all_statuses(lt_session_t session,
@@ -3098,37 +3122,42 @@ TORRENT_API int lt_get_all_statuses(lt_session_t session,
     auto* sw = to_sw(session);
     // Handles copied out, then queried without holding mu: each status()
     // is a round trip to the network thread, and the alert thread needs mu.
-    std::vector<std::pair<int64_t, lt::torrent_handle>> hs;
-    {
-        std::lock_guard<std::mutex> lk(sw->mu);
-        hs.reserve(sw->handles.size());
-        for (auto& kv : sw->handles) hs.emplace_back(kv.first, kv.second);
-    }
-    int n = 0;
-    for (auto& kv : hs) {
-        if (n >= max) break;
-        if (!kv.second.is_valid()) continue;
-        try {
-            fill_status(out[n], kv.first, kv.second.status(kStatusFlags));
-            ++n;
-        } catch (...) {}
-    }
-    return n;
+    try {
+        std::vector<std::pair<int64_t, lt::torrent_handle>> hs;
+        {
+            std::lock_guard<std::mutex> lk(sw->mu);
+            hs.reserve(sw->handles.size());
+            for (auto& kv : sw->handles) hs.emplace_back(kv.first, kv.second);
+        }
+        int n = 0;
+        for (auto& kv : hs) {
+            if (n >= max) break;
+            if (!kv.second.is_valid()) continue;
+            try {
+                fill_status(out[n], kv.first, kv.second.status(kStatusFlags));
+                ++n;
+            } catch (...) {}
+        }
+        return n;
+    } LT_CATCH(0)
 }
 
 TORRENT_API int lt_get_status(lt_session_t session, lt_torrent_id id,
                               lt_torrent_status* out) {
     if (!session || !out) return 0;
     auto* sw = to_sw(session);
-    lt::torrent_handle h;
-    {
-        std::lock_guard<std::mutex> lk(sw->mu);
-        auto it = sw->handles.find(id);
-        if (it == sw->handles.end()) return 0;
-        h = it->second;
-    }
-    if (!h.is_valid()) return 0;
-    try { fill_status(*out, id, h.status(kStatusFlags)); return 1; } catch (...) { return 0; }
+    try {
+        lt::torrent_handle h;
+        {
+            std::lock_guard<std::mutex> lk(sw->mu);
+            auto it = sw->handles.find(id);
+            if (it == sw->handles.end()) return 0;
+            h = it->second;
+        }
+        if (!h.is_valid()) return 0;
+        fill_status(*out, id, h.status(kStatusFlags));
+        return 1;
+    } LT_CATCH(0)
 }
 
 // ── file queries ────────────────────────────────────────────────────────────────
@@ -3136,21 +3165,23 @@ TORRENT_API int lt_get_status(lt_session_t session, lt_torrent_id id,
 TORRENT_API int lt_get_file_count(lt_session_t session, lt_torrent_id id) {
     if (!session) return 0;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->mu);
-    auto it = sw->handles.find(id);
-    if (it == sw->handles.end() || !it->second.is_valid()) return 0;
-    try { auto ti = it->second.torrent_file(); return ti ? ti->num_files() : 0; }
-    catch (...) { return 0; }
+    try {
+        std::lock_guard<std::mutex> lk(sw->mu);
+        auto it = sw->handles.find(id);
+        if (it == sw->handles.end() || !it->second.is_valid()) return 0;
+        auto ti = it->second.torrent_file();
+        return ti ? ti->num_files() : 0;
+    } LT_CATCH(0)
 }
 
 TORRENT_API int lt_get_files(lt_session_t session, lt_torrent_id id,
                              lt_file_info* out, int max) {
     if (!session || !out || max <= 0) return 0;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->mu);
-    auto it = sw->handles.find(id);
-    if (it == sw->handles.end() || !it->second.is_valid()) return 0;
     try {
+        std::lock_guard<std::mutex> lk(sw->mu);
+        auto it = sw->handles.find(id);
+        if (it == sw->handles.end() || !it->second.is_valid()) return 0;
         auto ti = it->second.torrent_file();
         if (!ti) return 0;
         const lt::file_storage& fs = ti->files();
@@ -3168,17 +3199,17 @@ TORRENT_API int lt_get_files(lt_session_t session, lt_torrent_id id,
             out[n].path[sizeof(out[n].path) - 1] = 0;
         }
         return n;
-    } catch (...) { return 0; }
+    } LT_CATCH(0)
 }
 
 TORRENT_API void lt_set_file_priorities(lt_session_t session, lt_torrent_id id,
                                         const int32_t* priorities, int count) {
     if (!session || !priorities || count <= 0) return;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->mu);
-    auto it = sw->handles.find(id);
-    if (it == sw->handles.end() || !it->second.is_valid()) return;
     try {
+        std::lock_guard<std::mutex> lk(sw->mu);
+        auto it = sw->handles.find(id);
+        if (it == sw->handles.end() || !it->second.is_valid()) return;
         auto ti = it->second.torrent_file();
         if (!ti) return;
         int nf = ti->files().num_files();
@@ -3189,17 +3220,15 @@ TORRENT_API void lt_set_file_priorities(lt_session_t session, lt_torrent_id id,
         it->second.prioritize_files(p);
         it->second.unset_flags(lt::torrent_flags::stop_when_ready);
         it->second.resume();
-    } catch (...) {}
+    } LT_CATCH_VOID
 }
 
 // ── streaming ───────────────────────────────────────────────────────────────────
 
-TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
-                                         lt_torrent_id torrent_id,
-                                         int file_index,
-                                         int64_t max_cache_bytes) {
-    if (!session) { set_err("null session"); return -1; }
-    auto* sw = to_sw(session);
+static lt_stream_id start_stream_impl(SessionWrapper* sw,
+                                      lt_torrent_id torrent_id,
+                                      int file_index,
+                                      int64_t max_cache_bytes) {
 
     lt::torrent_handle handle;
     {
@@ -3351,9 +3380,13 @@ TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
     // In sw->streams before the snapshot of pieces had below, so a
     // piece_finished_alert from here on reaches it: none can fall between
     // the snapshot and the registration.
-    {
+    try {
         std::lock_guard<std::mutex> lk(sw->streams_mu);
         sw->streams[sid] = s;
+    } catch (...) {
+        begin_shutdown(raw);
+        finish_shutdown(raw);
+        throw;
     }
 
     try {
@@ -3435,6 +3468,17 @@ TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
     } catch (...) {}
 
     set_err(""); return sid;
+}
+
+TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
+                                         lt_torrent_id torrent_id,
+                                         int file_index,
+                                         int64_t max_cache_bytes) {
+    if (!session) { set_err("null session"); return -1; }
+    try {
+        return start_stream_impl(to_sw(session), torrent_id, file_index,
+                                 max_cache_bytes);
+    } LT_CATCH(-1)
 }
 
 // Joins and frees a stopped stream (see lt_stop_stream), then removes its
@@ -3543,63 +3587,73 @@ TORRENT_API int lt_get_stream_status(lt_session_t session,
                                      lt_stream_id sid, lt_stream_status* out) {
     if (!session || !out) return 0;
     auto* sw = to_sw(session);
-    // Filled outside streams_mu (the alert thread needs it); the
-    // shared_ptr keeps the stream alive even if it's stopped meanwhile.
-    std::shared_ptr<StreamEngine> s;
-    {
-        std::lock_guard<std::mutex> lk(sw->streams_mu);
-        auto it = sw->streams.find(sid);
-        if (it == sw->streams.end()) return 0;
-        s = it->second;
-    }
-    fill_stream_status(out, s.get());
-    return 1;
+    try {
+        // Filled outside streams_mu (the alert thread needs it); the
+        // shared_ptr keeps the stream alive even if it's stopped meanwhile.
+        std::shared_ptr<StreamEngine> s;
+        {
+            std::lock_guard<std::mutex> lk(sw->streams_mu);
+            auto it = sw->streams.find(sid);
+            if (it == sw->streams.end()) return 0;
+            s = it->second;
+        }
+        fill_stream_status(out, s.get());
+        return 1;
+    } LT_CATCH(0)
 }
 
 TORRENT_API int lt_get_all_stream_statuses(lt_session_t session,
                                            lt_stream_status* out, int max) {
     if (!session || !out || max <= 0) return 0;
     auto* sw = to_sw(session);
-    std::vector<std::shared_ptr<StreamEngine>> ss;
-    {
-        std::lock_guard<std::mutex> lk(sw->streams_mu);
-        for (auto& kv : sw->streams) {
-            if ((int)ss.size() >= max) break;
-            ss.push_back(kv.second);
+    try {
+        std::vector<std::shared_ptr<StreamEngine>> ss;
+        {
+            std::lock_guard<std::mutex> lk(sw->streams_mu);
+            for (auto& kv : sw->streams) {
+                if ((int)ss.size() >= max) break;
+                ss.push_back(kv.second);
+            }
         }
-    }
-    int n = 0;
-    for (auto& s : ss) fill_stream_status(&out[n++], s.get());
-    return n;
+        int n = 0;
+        for (auto& s : ss) fill_stream_status(&out[n++], s.get());
+        return n;
+    } LT_CATCH(0)
 }
 
 // ── speed limits ────────────────────────────────────────────────────────────────
 
 TORRENT_API void lt_set_download_limit(lt_session_t session, int bps) {
     if (!session) return;
-    lt::settings_pack sp;
-    sp.set_int(lt::settings_pack::download_rate_limit, bps);
-    to_sw(session)->session.apply_settings(sp);
+    try {
+        lt::settings_pack sp;
+        sp.set_int(lt::settings_pack::download_rate_limit, bps);
+        to_sw(session)->session.apply_settings(sp);
+    } LT_CATCH_VOID
 }
 
 TORRENT_API void lt_set_upload_limit(lt_session_t session, int bps) {
     if (!session) return;
     auto* sw = to_sw(session);
-    {
-        std::lock_guard<std::mutex> lk(sw->cfg_mu);
-        sw->normal_upload_limit = (bps > 0) ? bps : 0;
-    }
-    sw->apply_upload_policy();  // (capped further while metered)
+    try {
+        {
+            std::lock_guard<std::mutex> lk(sw->cfg_mu);
+            sw->normal_upload_limit = (bps > 0) ? bps : 0;
+        }
+        sw->apply_upload_policy();  // (capped further while metered)
+    } LT_CATCH_VOID
 }
 
 TORRENT_API void lt_set_metered(lt_session_t session, int metered) {
     if (!session) return;
     auto* sw = to_sw(session);
-    {
-        std::lock_guard<std::mutex> lk(sw->cfg_mu);
-        sw->metered = metered != 0;
-    }
-    sw->apply_upload_policy();
+    try {
+        {
+            std::lock_guard<std::mutex> lk(sw->cfg_mu);
+            sw->metered = metered != 0;
+        }
+        sw->apply_upload_policy();
+    } LT_CATCH_VOID
 }
 
 // ── utility ─────────────────────────────────────────────────────────────────────
@@ -3609,10 +3663,8 @@ TORRENT_API const char* lt_version(void)    { return LIBTORRENT_VERSION; }
 
 // ── preload — port of torr/preload.go ───────────────────────────────────────────
 
-TORRENT_API int lt_preload_stream(lt_session_t session, lt_stream_id sid,
-                                  int64_t preload_bytes) {
-    if (!session) return 0;
-    auto* sw = to_sw(session);
+static int preload_stream_impl(SessionWrapper* sw, lt_stream_id sid,
+                               int64_t preload_bytes) {
     std::shared_ptr<StreamEngine> sp;
     {
         std::lock_guard<std::mutex> lk(sw->streams_mu);
@@ -3650,6 +3702,14 @@ TORRENT_API int lt_preload_stream(lt_session_t session, lt_stream_id sid,
     return 1;
 }
 
+TORRENT_API int lt_preload_stream(lt_session_t session, lt_stream_id sid,
+                                  int64_t preload_bytes) {
+    if (!session) return 0;
+    try {
+        return preload_stream_impl(to_sw(session), sid, preload_bytes);
+    } LT_CATCH(0)
+}
+
 // ── cache settings — port of settings/btsets.go ─────────────────────────────────
 
 TORRENT_API void lt_set_cache_settings(lt_session_t session, lt_stream_id sid,
@@ -3659,12 +3719,12 @@ TORRENT_API void lt_set_cache_settings(lt_session_t session, lt_stream_id sid,
     if (!session) return;
     auto* sw = to_sw(session);
     std::shared_ptr<StreamEngine> s;
-    {
+    try {
         std::lock_guard<std::mutex> lk(sw->streams_mu);
         auto it = sw->streams.find(sid);
         if (it == sw->streams.end()) return;
         s = it->second;
-    }
+    } LT_CATCH_VOID
 
     // [capacity] sets how far ahead of playback the stream downloads
     // (readahead_pieces: capacity / piece length, 4 to 64 pieces); the
@@ -3684,10 +3744,8 @@ TORRENT_API void lt_set_cache_settings(lt_session_t session, lt_stream_id sid,
 // Maps BTSets fields → libtorrent settings_pack values, matching the
 // exact behavior of btserver.go configure().
 
-TORRENT_API void lt_configure_session(lt_session_t session,
-                                      const lt_bt_config* config) {
-    if (!session || !config) return;
-    auto* sw = to_sw(session);
+static void configure_session_impl(SessionWrapper* sw,
+                                   const lt_bt_config* config) {
 
     // validate + store — port of settings.SetBTSets failsafe checks
     lt_bt_config cfg = *config;
@@ -3803,6 +3861,14 @@ TORRENT_API void lt_configure_session(lt_session_t session,
             }
         }
     }
+}
+
+TORRENT_API void lt_configure_session(lt_session_t session,
+                                      const lt_bt_config* config) {
+    if (!session || !config) return;
+    try {
+        configure_session_impl(to_sw(session), config);
+    } LT_CATCH_VOID
 }
 
 TORRENT_API void lt_get_default_config(lt_bt_config* out) {

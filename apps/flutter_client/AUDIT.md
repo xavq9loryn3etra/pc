@@ -12,6 +12,8 @@ All paths are relative to `apps/flutter_client/`. Line numbers were correct on 2
 | 3. Dart torrent services (`lib/services/torrent`) | Complete. Items marked ✔ were re-checked. |
 | 4. App shell, web player, secrets, build | Complete. Items marked ✔ were re-checked. |
 
+**Progress (2026-11-12): sections 1, 3 and 4 are implemented and merged to `main`.** All their items are done except: A-H1 (signing key, owner declined), A-H3 (only the unused OMDB key was removed; TMDB key still needs rotating by the owner), A-M6 and A-L8 (done under section 3), S-H2 (fixed by the native change in N-M7). **Section 2 (native engine) is NOT done**, apart from N-L1 (debug log), which sits on branch `worktree-agent-a34339a533e31c78d` along with an uncommitted half-edit of `torrent_bridge.cpp`; discard that edit and start section 2 afresh. Do all of section 2 in one rebuild: new tag `libtorrent-native-v4`, then bump `native/PREBUILT_RELEASE_URL` (the owner approved publishing the rebuilt engine). Nothing has been run on a device yet; the Windows free-space and iOS channel code is also untested on those platforms.
+
 Unmarked items come from a single read of the code and were not re-checked. Confirm each against the code before changing it; if the code does not match the description, skip the item and report it.
 
 **Suggested order of work**

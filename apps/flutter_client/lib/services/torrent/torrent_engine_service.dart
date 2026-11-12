@@ -28,8 +28,16 @@ class TorrentEngineService {
   /// stream is allowed to buffer. See [setStreamCacheCapacity].
   static const int defaultStreamCacheBytes = 500 * 1024 * 1024; // 500 MB
 
-  Future<void> init() async {
-    if (_initialized) return;
+  // The start in progress, so callers arriving meanwhile wait for it
+  // instead of starting the engine a second time.
+  Future<void>? _initializing;
+
+  Future<void> init() {
+    if (_initialized) return Future.value();
+    return _initializing ??= _init().whenComplete(() => _initializing = null);
+  }
+
+  Future<void> _init() async {
     try {
       // Application-support dir, not the OS temp dir — see TorrentPaths for
       // why: temp can be purged by the OS independently of app logic, which
@@ -858,6 +866,7 @@ class TorrentEngineService {
   Future<void> dispose() async {
     _stateSaveTimer?.cancel();
     _lifecycle?.dispose();
+    _stopWatchingDisk();
     try {
       engine.saveSessionState();
     } catch (_) {}
@@ -868,6 +877,20 @@ class TorrentEngineService {
     } catch (e) {
       print('Error disposing Torrent Engine: $e');
     }
+    // Nothing of this session survives: a later init() starts afresh.
+    _initialized = false;
+    _idsByHash.clear();
+    _streaming.clear();
+    _warmStreams.clear();
+    for (final read in _warmReads.values) {
+      read.close(force: true);
+    }
+    _warmReads.clear();
+    _connecting.clear();
+    _warming.clear();
+    _held.clear();
+    _hadData.clear();
+    _warmOwners.clearAll();
   }
 }
 

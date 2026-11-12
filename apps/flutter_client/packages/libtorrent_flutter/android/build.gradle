@@ -45,32 +45,68 @@ android {
     def requestedAbis = (project.findProperty('libtorrentFlutterAbis') ?: 'arm64-v8a,armeabi-v7a,x86_64')
         .toString().split(',').collect { it.trim() }.findAll { it }
     def releaseBase = file("${projectDir}/../native/PREBUILT_RELEASE_URL").text.trim()
+    // The zips' expected SHA-256 hashes (sha256sum format, one line per zip),
+    // committed so a changed or tampered download is refused.
+    def hashFile = file("${projectDir}/../native/PREBUILT_SHA256")
+    def expectedHashes = [:]
+    if (hashFile.exists()) {
+        hashFile.eachLine { line ->
+            def parts = line.trim().split(/\s+/)
+            if (parts.length == 2) expectedHashes[parts[1].replaceFirst(/^\*/, '')] = parts[0].toLowerCase()
+        }
+    }
 
     if (!skipDownload) {
         requestedAbis.each { abi ->
             def soFile = file("${prebuiltDir}/${abi}/liblibtorrent_flutter.so")
-            // Records which release the .so came from, so bumping
-            // PREBUILT_RELEASE_URL replaces a previously downloaded copy.
+            def zipName = "android-native-lib-${abi}.zip"
+            def expectedHash = expectedHashes[zipName]
+            if (expectedHash == null) {
+                throw new GradleException(
+                    "libtorrent_flutter: native/PREBUILT_SHA256 has no line for ${zipName}. " +
+                    "Add the hash from the release's SHA256SUMS (or run the 'Build libtorrent native libs' workflow and copy its output).")
+            }
+            // Records which release (and which hash) the .so came from, so
+            // bumping PREBUILT_RELEASE_URL or the hash replaces a previously
+            // downloaded copy.
+            def marker = "${releaseBase} ${expectedHash}".toString()
             def sourceFile = file("${prebuiltDir}/${abi}/.source")
-            if (soFile.exists() && sourceFile.exists() && sourceFile.text.trim() == releaseBase) return
-            def zipUrl  = "${releaseBase}/android-native-lib-${abi}.zip"
-            def zipFile = file("${buildDir}/libtorrent-flutter-cache/android-native-lib-${abi}.zip")
+            if (soFile.exists() && sourceFile.exists() && sourceFile.text.trim() == marker) return
+            def zipUrl  = "${releaseBase}/${zipName}"
+            def zipFile = file("${buildDir}/libtorrent-flutter-cache/${zipName}")
             zipFile.parentFile.mkdirs()
             soFile.parentFile.mkdirs()
             println "libtorrent_flutter: downloading prebuilt ${abi} from ${zipUrl}"
+            def downloaded = false
             try {
                 new java.net.URL(zipUrl).withInputStream { input ->
                     zipFile.withOutputStream { out -> out << input }
                 }
-                // The .so sits at the zip root, so unzip into the per-abi directory.
-                ant.unzip(src: zipFile, dest: soFile.parentFile, overwrite: true)
-                zipFile.delete()
-                sourceFile.text = releaseBase
+                downloaded = true
             } catch (Exception e) {
                 println "libtorrent_flutter: download failed for ${abi}: ${e.message}"
                 if (soFile.exists()) {
                     println "libtorrent_flutter: keeping the existing ${abi} library"
                 }
+            }
+            if (downloaded) {
+                def digest = java.security.MessageDigest.getInstance('SHA-256')
+                zipFile.withInputStream { input ->
+                    byte[] chunk = new byte[65536]
+                    int n
+                    while ((n = input.read(chunk)) > 0) digest.update(chunk, 0, n)
+                }
+                def actualHash = digest.digest().collect { String.format('%02x', it & 0xff) }.join()
+                if (actualHash != expectedHash) {
+                    zipFile.delete()
+                    throw new GradleException(
+                        "libtorrent_flutter: ${zipName} from ${zipUrl} has SHA-256 ${actualHash}, " +
+                        "expected ${expectedHash} (native/PREBUILT_SHA256). Refusing to use it.")
+                }
+                // The .so sits at the zip root, so unzip into the per-abi directory.
+                ant.unzip(src: zipFile, dest: soFile.parentFile, overwrite: true)
+                zipFile.delete()
+                sourceFile.text = marker
             }
         }
     }

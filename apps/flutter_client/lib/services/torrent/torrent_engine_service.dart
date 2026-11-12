@@ -74,6 +74,7 @@ class TorrentEngineService {
 
       _initialized = true;
       _initError = null;
+      _watchMetered();
     } catch (e) {
       _initError = e;
       print('Error initializing Torrent Engine: $e');
@@ -84,6 +85,32 @@ class TorrentEngineService {
 
   Timer? _stateSaveTimer;
   AppLifecycleListener? _lifecycle;
+  StreamSubscription<List<ConnectivityResult>>? _meteredWatch;
+
+  /// Tells the engine when the device moves between mobile data and
+  /// Wi-Fi/ethernet, so on mobile data it uploads little and keeps few
+  /// peers unchoked (see LibtorrentFlutter.setMetered; a no-op with an
+  /// engine build that predates it). Offline leaves the last setting.
+  void _watchMetered() {
+    void apply(List<ConnectivityResult> links) {
+      try {
+        if (links.contains(ConnectivityResult.wifi) ||
+            links.contains(ConnectivityResult.ethernet)) {
+          engine.setMetered(false);
+        } else if (links.contains(ConnectivityResult.mobile)) {
+          engine.setMetered(true);
+        }
+      } catch (e) {
+        print('Error setting the metered profile: $e');
+      }
+    }
+
+    _meteredWatch?.cancel();
+    try {
+      _meteredWatch = Connectivity().onConnectivityChanged.listen(apply);
+      Connectivity().checkConnectivity().then(apply, onError: (Object _) {});
+    } catch (_) {}
+  }
 
   /// Saves the engine's map of the network (its DHT routing table) every
   /// few minutes and whenever the app leaves the screen — mobile apps are
@@ -147,7 +174,7 @@ class TorrentEngineService {
   }) async {
     final id = await connect(infoHash, trackers: trackers);
     try {
-      return startStream(id, fileIndex: fileIndex);
+      return await startStream(id, fileIndex: fileIndex);
     } catch (e) {
       discardFailedStart(id);
       rethrow;
@@ -196,6 +223,14 @@ class TorrentEngineService {
       throw ArgumentError.value(infoHash, 'infoHash', 'Not an info hash');
     }
     final key = infoHash.toLowerCase();
+    // A trim of this same torrent in flight (the player just closed): wait,
+    // so it isn't added again while still being released.
+    final trimming = _trimming[key];
+    if (trimming != null) {
+      try {
+        await trimming;
+      } catch (_) {}
+    }
     // Possibly paused (a finished head start, a closed player): resumed
     // even when a connection is already in progress, which a page left
     // mid-head-start pauses (see coolDown).
@@ -272,7 +307,7 @@ class TorrentEngineService {
   /// Starts streaming torrent [id], already [connect]ed, and returns its
   /// local URL. Pauses every other torrent so this one gets the full
   /// download budget.
-  StreamResult startStream(int id, {int? fileIndex}) {
+  Future<StreamResult> startStream(int id, {int? fileIndex}) async {
     _streaming.add(id);
     _held.remove(id); // Resumed below.
     _liftCap(); // Playback gets the full speed, whichever head start held it.
@@ -324,9 +359,15 @@ class TorrentEngineService {
       // torrent its pieces have arrived, so a second one waited forever
       // for pieces already downloaded: the next episode never started.
       try {
-        engine.stopAllStreamsForTorrent(id);
+        // Waits for the native stop (which runs off the UI thread): the
+        // new stream must not open while the old one is still closing.
+        await engine.stopAllStreamsForTorrent(id);
       } catch (e) {
         print('Error stopping streams of torrent $id: $e');
+      }
+      if (!_streaming.contains(id)) {
+        // The player closed (pause) while the old stream was closing.
+        throw StateError('Stopped while the previous stream was closing');
       }
       stream = _openStream(id, videoIdx);
     }
@@ -365,7 +406,7 @@ class TorrentEngineService {
 
   void _stopStream(int streamId) {
     try {
-      engine.stopStream(streamId);
+      unawaited(engine.stopStream(streamId));
     } catch (e) {
       print('Error stopping stream $streamId: $e');
     }
@@ -812,10 +853,88 @@ class TorrentEngineService {
     _warmStreams.remove(torrentId); // Stopped below.
     _cancelReadAhead(torrentId);
     try {
-      engine.stopAllStreamsForTorrent(torrentId);
+      unawaited(engine.stopAllStreamsForTorrent(torrentId));
       engine.pauseTorrent(torrentId);
     } catch (e) {
       print('Error pausing torrent $torrentId: $e');
+    }
+  }
+
+  // Trims in flight, by lowercase info hash: anything adding or resuming the
+  // same torrent waits for it first (see connect).
+  final Map<String, Future<void>> _trimming = {};
+
+  /// Like [pause] for a normal player close, but also takes the torrent out
+  /// of the session and shrinks what it keeps on disk: from [keepFrom]
+  /// (a byte offset in file [fileIndex]; negative: no trimming, just
+  /// release) to the end of that file, plus every file's head and tail —
+  /// so a download holds the last stretch watched and what was fetched
+  /// ahead, not a whole movie. The kept size becomes the download's
+  /// recorded size.
+  ///
+  /// Only pauses, as before, when that isn't possible or wanted: an engine
+  /// build without the call, or a torrent a head start or a connection in
+  /// progress still wants. Playing the same content again straight away is
+  /// safe: [connect] waits for the trim to finish.
+  Future<void> releaseAndTrim(
+    int torrentId, {
+    required int fileIndex,
+    required int keepFrom,
+  }) async {
+    final key = _keyOf(torrentId);
+    final stillWanted = key == null ||
+        _warmOwners.owns(key) ||
+        _warmStreams.containsKey(torrentId) ||
+        _connecting.containsKey(key) ||
+        _trimming.containsKey(key);
+    if (stillWanted || !_initialized || !engine.canReleaseAndTrim) {
+      pause(torrentId);
+      return;
+    }
+    // What pause() does for the player's own torrent, and what dropLoser
+    // does to take it out of the session.
+    _streaming.remove(torrentId);
+    if (_streaming.isEmpty) _stopWatchingDisk();
+    _held.remove(torrentId);
+    _cancelReadAhead(torrentId);
+    _idsByHash.remove(key);
+
+    Future<void> run() async {
+      int? kept;
+      try {
+        kept = await engine.releaseAndTrim(torrentId,
+            fileIndex: fileIndex, keepFrom: keepFrom);
+      } catch (e) {
+        print('Error trimming torrent $torrentId: $e');
+      }
+      if (kept == null) {
+        // Not released (or unknown): it may still be in the session, so
+        // keep it known and just pause it, as before.
+        _idsByHash.putIfAbsent(key, () => torrentId);
+        try {
+          engine.pauseTorrent(torrentId);
+        } catch (_) {}
+        return;
+      }
+      if (keepFrom >= 0) {
+        // The size on disk can't always be measured (and after hole
+        // punching a file's apparent size stays the full one), so record
+        // what's kept for the storage limit's estimate.
+        try {
+          await TorrentDownloadRegistry.updateProgress(key,
+              downloadedBytes: kept, force: true);
+        } catch (e) {
+          print('Error recording the trimmed size: $e');
+        }
+      }
+    }
+
+    final done = run();
+    _trimming[key] = done;
+    try {
+      await done;
+    } finally {
+      if (identical(_trimming[key], done)) _trimming.remove(key);
     }
   }
 
@@ -933,6 +1052,8 @@ class TorrentEngineService {
   Future<void> dispose() async {
     _stateSaveTimer?.cancel();
     _lifecycle?.dispose();
+    _meteredWatch?.cancel();
+    _meteredWatch = null;
     _stopWatchingDisk();
     try {
       engine.saveSessionState();

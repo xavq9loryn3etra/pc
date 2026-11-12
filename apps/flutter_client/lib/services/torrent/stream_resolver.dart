@@ -729,7 +729,7 @@ class StreamResolver {
       // A connection that fails cleans up its own torrent (see
       // TorrentEngineService.connect) — nothing to dispose here.
       _engine.connect(candidate.infoHash, trackers: candidate.trackers).then(
-          (id) {
+          (id) async {
         if (outcome.isCompleted) {
           // Lost the race, or the user gave up: stop it, keeping what it
           // has, unless it's what's playing; and out of the session unless
@@ -743,7 +743,15 @@ class StreamResolver {
           return;
         }
         try {
-          final result = _engine.startStream(id, fileIndex: candidate.fileIdx);
+          final result =
+              await _engine.startStream(id, fileIndex: candidate.fileIdx);
+          if (outcome.isCompleted) {
+            // Another copy won (or the user gave up) while this one's
+            // previous stream was closing.
+            _engine.pause(id);
+            unawaited(_engine.dropLoser(id));
+            return;
+          }
           print('[timing] copy $number of ${candidates.length} connected '
               'first, after ${stopwatch.elapsedMilliseconds} ms');
           outcome.complete(
@@ -797,6 +805,16 @@ class StreamResolver {
   /// it downloaded, for a later resume. Use on normal player close, and for
   /// an abandoned start.
   void pause(int torrentId) => _engine.pause(torrentId);
+
+  /// [pause] for a normal player close, that also trims the download to
+  /// the last stretch watched — see [TorrentEngineService.releaseAndTrim].
+  Future<void> releaseAndTrim(
+    int torrentId, {
+    required int fileIndex,
+    required int keepFrom,
+  }) =>
+      _engine.releaseAndTrim(torrentId,
+          fileIndex: fileIndex, keepFrom: keepFrom);
 
   /// Let a torrent paused by a later start download again — for going back
   /// to it when that start failed.

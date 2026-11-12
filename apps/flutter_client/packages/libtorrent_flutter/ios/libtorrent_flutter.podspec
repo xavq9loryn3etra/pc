@@ -35,26 +35,51 @@ Pod::Spec.new do |s|
   # dropped your own libtorrent_flutter.xcframework in here).
   # ───────────────────────────────────────────────────────────────────────
   release_base = File.read(File.join(__dir__, '..', 'native', 'PREBUILT_RELEASE_URL')).strip
-  # Records which release the XCFramework came from, so bumping
-  # PREBUILT_RELEASE_URL replaces a previously downloaded copy.
+  # The zip's expected SHA-256, from native/PREBUILT_SHA256 (sha256sum format,
+  # one line per zip).
+  require 'digest'
+  zip_name = 'ios-native-lib.zip'
+  hash_file = File.join(__dir__, '..', 'native', 'PREBUILT_SHA256')
+  expected_hash = nil
+  if File.exist?(hash_file)
+    File.readlines(hash_file).each do |line|
+      digest, name = line.strip.split(/\s+/, 2)
+      expected_hash = digest.downcase if digest && name && name.sub(/\A\*/, '') == zip_name
+    end
+  end
+  # Records which release (and which hash) the XCFramework came from, so
+  # bumping PREBUILT_RELEASE_URL or the hash replaces a previously
+  # downloaded copy.
+  marker = "#{release_base} #{expected_hash}"
   source_marker = File.join(xcframework_absolute, '.source')
-  up_to_date = File.exist?(source_marker) && File.read(source_marker).strip == release_base
+  up_to_date = File.exist?(source_marker) && File.read(source_marker).strip == marker
 
   if !up_to_date && ENV['LIBTORRENT_FLUTTER_SKIP_DOWNLOAD'] != '1'
-    zip_url  = "#{release_base}/ios-native-lib.zip"
+    if expected_hash.nil?
+      raise "libtorrent_flutter: native/PREBUILT_SHA256 has no line for #{zip_name}. " \
+            "Add the hash from the release's SHA256SUMS."
+    end
+    zip_url  = "#{release_base}/#{zip_name}"
     zip_path = File.join(__dir__, '.ios-native-lib.zip')
     Pod::UI.puts "libtorrent_flutter: downloading prebuilt XCFramework from #{zip_url}"
     begin
       require 'open-uri'
       require 'fileutils'
       URI.open(zip_url) { |remote| File.binwrite(zip_path, remote.read) }
+      actual_hash = Digest::SHA256.file(zip_path).hexdigest
+      if actual_hash != expected_hash
+        hash_mismatch = "libtorrent_flutter: #{zip_name} has SHA-256 #{actual_hash}, " \
+                        "expected #{expected_hash} (native/PREBUILT_SHA256). Refusing to use it."
+        raise hash_mismatch
+      end
       # The zip root is the xcframework directory itself (Info.plist +
       # ios-arm64/ + ios-arm64_x86_64-simulator/), so extract straight into it.
       FileUtils.rm_rf(xcframework_absolute)
       FileUtils.mkdir_p(xcframework_absolute)
       system("/usr/bin/unzip -o -q '#{zip_path}' -d '#{xcframework_absolute}'") || raise('unzip failed')
-      File.write(source_marker, release_base)
+      File.write(source_marker, marker)
     rescue => e
+      raise if hash_mismatch # never fall back to an unverified copy
       Pod::UI.warn "libtorrent_flutter: prebuilt download failed (#{e.message})"
     ensure
       File.delete(zip_path) if File.exist?(zip_path)

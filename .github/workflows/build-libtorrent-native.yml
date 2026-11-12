@@ -102,13 +102,18 @@ jobs:
             echo "PREBUILT_RELEASE_URL ($url) doesn't point at this repo's releases" >&2
             exit 1
           fi
-          ls -l dist
+          # A published tag is never overwritten: apps pin the zips'
+          # hashes (native/PREBUILT_SHA256), so a rebuild needs a new tag.
           if gh release view "$tag" > /dev/null 2>&1; then
-            gh release upload "$tag" dist/*.zip --clobber
-          else
-            gh release create "$tag" dist/*.zip \
-              --target "$GITHUB_SHA" \
-              --latest=false \
-              --title "libtorrent native libs ($tag)" \
-              --notes "libtorrent $LIBTORRENT_VERSION, Boost $BOOST_VERSION headers, built from $GITHUB_SHA by the build-libtorrent-native workflow."
+            echo "Release $tag already exists. Bump native/PREBUILT_RELEASE_URL to a new tag (e.g. -v5) and run again; published releases are never overwritten." >&2
+            exit 1
           fi
+          ls -l dist
+          (cd dist && sha256sum *.zip > SHA256SUMS)
+          cat dist/SHA256SUMS
+          echo "Copy these lines into packages/libtorrent_flutter/native/PREBUILT_SHA256 (the apps refuse zips whose hash isn't listed there)."
+          gh release create "$tag" dist/*.zip dist/SHA256SUMS \
+            --target "$GITHUB_SHA" \
+            --latest=false \
+            --title "libtorrent native libs ($tag)" \
+            --notes "libtorrent $LIBTORRENT_VERSION, Boost $BOOST_VERSION headers, built from $GITHUB_SHA by the build-libtorrent-native workflow."

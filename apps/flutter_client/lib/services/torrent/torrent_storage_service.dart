@@ -79,7 +79,7 @@ class TorrentStorageService {
 
   /// The most the downloads may take up together; over it, [enforceLimit]
   /// removes the ones played longest ago.
-  static const int limitBytes = 2 * 1024 * 1024 * 1024; // 2 GB
+  static const int limitBytes = 1024 * 1024 * 1024; // 1 GB
 
   static Future<void>? _enforcing;
 

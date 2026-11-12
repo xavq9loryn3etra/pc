@@ -2077,6 +2077,9 @@ class _TorrentQualitySelectorSheetState
   // The quality being started, and how that's going — shown on its row
   // (see QualityOptionList.starting).
   QualityOption? _startingOption;
+  // A pick is being saved (its language) before it starts: a second tap in
+  // that moment is ignored.
+  bool _choosing = false;
   String? _resolvingMessage;
   // Why the last tapped stream failed to start. Shown inside the sheet —
   // a SnackBar would land on the details screen *behind* this modal sheet.
@@ -2205,12 +2208,18 @@ class _TorrentQualitySelectorSheetState
   }
 
   void _selectQuality(QualityOption option) async {
+    if (_startingOption != null || _choosing) return;
     final stream = option.best;
     // Listed in another audio language than the saved one: that's the one
     // to play in now, and for the rest of the series.
     final language = _language;
     if (language != null) {
-      await AudioLanguageService().set(widget.details, language);
+      _choosing = true;
+      try {
+        await AudioLanguageService().set(widget.details, language);
+      } finally {
+        _choosing = false;
+      }
       if (!mounted) return;
     }
     if (widget.onStreamSelected != null && !widget.resolveOnSelect) {

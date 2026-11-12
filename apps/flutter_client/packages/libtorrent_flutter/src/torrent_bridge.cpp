@@ -1040,6 +1040,25 @@ struct StreamEngine {
     std::mutex                 conn_mu;
     std::shared_ptr<ConnState> primary;
 
+    // The pieces the playback request has raised since the last seek:
+    // [win_lo, win_hi], under win_mu. A seek sets those it leaves behind
+    // (not had, not head or tail) back to dont_download.
+    std::mutex win_mu;
+    int        win_lo = -1;
+    int        win_hi = -1;
+
+    void note_window(int lo, int hi) {
+        std::lock_guard<std::mutex> lk(win_mu);
+        if (win_lo < 0 || lo < win_lo) win_lo = lo;
+        if (hi > win_hi) win_hi = hi;
+    }
+
+    // In the head or tail kept for the container's headers and index.
+    bool is_protected(int p) const {
+        return (p >= start_piece && p <= head_end_piece)
+            || (p >= tail_start_piece && p <= end_piece);
+    }
+
     // piece availability — signaled by alert thread on piece_finished
     std::mutex              piece_mu;
     std::condition_variable piece_cv;
@@ -1062,6 +1081,10 @@ struct StreamEngine {
 
     // trailing retention — keep last N played pieces for re-reads/rewinds
     static constexpr int TRAILING_WINDOW = 3;
+
+    // pieces past a seek target that keep their priority (serve_range's
+    // pipeline while waiting)
+    static constexpr int SEEK_WINDOW = 16;
     std::deque<int>  trailing_pieces;
     std::mutex       trailing_mu;
 
@@ -1702,6 +1725,8 @@ static bool serve_range(StreamEngine* s, const ConnState& conn, bool primary,
                 s->handle.piece_priority(lt::piece_index_t(p), lt::top_priority);
                 s->handle.set_piece_deadline(lt::piece_index_t(p), 0);
             } catch (...) {}
+            if (primary)
+                s->note_window(p, std::min(p + PIPELINE_AHEAD, last_wanted));
             for (int i = 1; i <= PIPELINE_AHEAD && p + i <= last_wanted; ++i) {
                 bool have_next = false;
                 { std::lock_guard<std::mutex> lk(s->piece_mu); have_next = s->pieces_have.count(p+i) > 0; }
@@ -1826,6 +1851,35 @@ static bool serve_range(StreamEngine* s, const ConnState& conn, bool primary,
     }
     TB_LOG("serve_range: DONE cursor=%lld end=%lld", (long long)cursor, (long long)range_end);
     return true;
+}
+
+// On a seek: the pieces raised around the old position that are not had,
+// not in the new window [new_lo, new_hi] and not head or tail go back to
+// dont_download — otherwise up to a whole window (tens to hundreds of MB)
+// kept downloading at the old spot after every seek.
+static void drop_old_window(StreamEngine* s, int new_lo, int new_hi) {
+    int lo, hi;
+    {
+        std::lock_guard<std::mutex> lk(s->win_mu);
+        lo = s->win_lo;
+        hi = s->win_hi;
+        s->win_lo = new_lo;
+        s->win_hi = new_hi;
+    }
+    if (lo < 0 || hi < lo) return;
+    std::vector<int> drop;
+    {
+        std::lock_guard<std::mutex> lk(s->piece_mu);
+        for (int q = lo; q <= hi; ++q) {
+            if (q >= new_lo && q <= new_hi) continue;
+            if (s->is_protected(q) || s->pieces_have.count(q)) continue;
+            drop.push_back(q);
+        }
+    }
+    for (int q : drop) {
+        try { s->handle.piece_priority(lt::piece_index_t(q), lt::dont_download); }
+        catch (...) {}
+    }
 }
 
 // handle_connection — port of torr/stream.go Stream()
@@ -1996,6 +2050,12 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
 
                 int seek_piece = std::clamp(s->byte_to_piece(rstart),
                                             s->start_piece, s->end_piece);
+
+                // The preload is for the old position: stop it.
+                s->preloading.store(false);
+                drop_old_window(s, seek_piece,
+                    std::min(seek_piece + StreamEngine::SEEK_WINDOW, s->end_piece));
+
                 try {
                     // Minimal seek path — just unblock the picker, then let
                     // serve_range do its normal 16-piece + 80ms gradient on

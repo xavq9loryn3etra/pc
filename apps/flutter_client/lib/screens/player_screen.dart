@@ -915,6 +915,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// playback carries on (see _seekPending) — and, like a stall, bringing
   /// the controls up to show it if that takes long enough to notice.
   void _seekTo(Duration target) {
+    _pendingSkipSeek = null; // A newer seek replaces a waiting skip.
     player.seek(target);
     setState(() {
       _seekPending = true;
@@ -1929,6 +1930,30 @@ class _PlayerScreenState extends State<PlayerScreen>
   Duration? _lastSkipTarget;
   DateTime? _lastSkipAt;
 
+  // A held arrow key repeats ~30 times a second: the target keeps building
+  // (above), but the real seek goes out at most every 150 ms — the first at
+  // once, the last of a burst when the gap ends — so mpv isn't flooded with
+  // seeks on a torrent stream.
+  Timer? _skipSeekTimer;
+  Duration? _pendingSkipSeek;
+  static const _skipSeekGap = Duration(milliseconds: 150);
+
+  void _seekThrottled(Duration target) {
+    if (_skipSeekTimer?.isActive ?? false) {
+      _pendingSkipSeek = target;
+      return;
+    }
+    _seekTo(target);
+    _skipSeekTimer = Timer(_skipSeekGap, _flushSkipSeek);
+  }
+
+  void _flushSkipSeek() {
+    final target = _pendingSkipSeek;
+    if (target == null || !mounted) return;
+    _seekTo(target);
+    _skipSeekTimer = Timer(_skipSeekGap, _flushSkipSeek);
+  }
+
   void _skipBy(Duration delta, {bool flash = false}) {
     final now = DateTime.now();
     final base = _lastSkipTarget != null &&
@@ -1952,7 +1977,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       });
       _playPauseFlash.forward(from: 0);
     }
-    _seekTo(target);
+    _seekThrottled(target);
     _syncMediaSessionPlaybackState();
     _resetControlsTimer();
   }
@@ -2970,6 +2995,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _screenTapTimer?.cancel();
     _bufferingRevealTimer?.cancel();
     _seekRevealTimer?.cancel();
+    _skipSeekTimer?.cancel();
     // Safety net in case this screen is disposed while still backgrounded.
     BackgroundDownloadService.instance.stop();
 

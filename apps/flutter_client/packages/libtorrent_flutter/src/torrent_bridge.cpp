@@ -2621,7 +2621,9 @@ TORRENT_API lt_session_t lt_create_session(const char* iface, int dl, int ul) {
 static lt::session_params read_saved_state(const char* path) {
     if (!path || !*path) return {};
     try {
-        std::ifstream in(path, std::ios::binary);
+        // (u8path: the path is UTF-8, and on Windows a char* path would be
+        // read in the ANSI code page — a non-ASCII profile name broke it)
+        std::ifstream in(std::filesystem::u8path(path), std::ios::binary);
         std::vector<char> buf((std::istreambuf_iterator<char>(in)),
                               std::istreambuf_iterator<char>());
         if (buf.empty()) return {};
@@ -2819,14 +2821,20 @@ TORRENT_API int lt_save_session_state(lt_session_t session,
             lt::write_session_params_buf(sw->session.session_state(flags), flags);
         // Written aside and moved into place, so a crash mid-write can't
         // leave a truncated file for the next launch.
-        const std::string tmp = std::string(path) + ".tmp";
+        // UTF-8 paths, and one rename that replaces the old file (no
+        // remove first, which left no file at all if the rename failed).
+        const auto dest = std::filesystem::u8path(path);
+        auto tmp = dest;
+        tmp += ".tmp";
         {
             std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
             out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+            out.flush();
             if (!out) return 0;
         }
-        std::remove(path);
-        if (std::rename(tmp.c_str(), path) != 0) return 0;
+        std::error_code ec;
+        std::filesystem::rename(tmp, dest, ec);
+        if (ec) { set_err(ec.message()); return 0; }
         return 1;
     } catch (const std::exception& e) { set_err(e.what()); return 0; }
 }

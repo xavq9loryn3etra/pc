@@ -83,18 +83,22 @@ typedef struct {
     int32_t       download_rate;     /* bytes/s for this stream */
 } lt_stream_status;
 
-/* ── port of settings/btsets.go BTSets struct ── */
+/* ── port of settings/btsets.go BTSets struct ──
+   Fields marked IGNORED are kept only so the layout matches the Dart FFI
+   mirror; the engine doesn't read them. */
 typedef struct {
     /* Cache */
-    int64_t cache_size;              /* bytes, default 64MB */
-    int32_t reader_read_ahead;       /* percent 5-100, default 95 */
-    int32_t preload_cache;           /* percent 0-100, default 50 */
+    int64_t cache_size;              /* bytes, default 64MB: a new stream's
+                                        read-ahead (see lt_set_cache_settings)
+                                        when lt_start_stream gets none */
+    int32_t reader_read_ahead;       /* IGNORED (was percent 5-100) */
+    int32_t preload_cache;           /* IGNORED (was percent 0-100) */
 
     /* Torrent engine */
     int32_t connections_limit;       /* default 25 */
-    int32_t torrent_disconnect_timeout; /* seconds, default 30 */
+    int32_t torrent_disconnect_timeout; /* IGNORED (was seconds) */
     int32_t force_encrypt;           /* 0=enabled, 1=forced */
-    int32_t disable_tcp;             /* 0=enabled (default), 1=disabled */
+    int32_t disable_tcp;             /* IGNORED */
     int32_t disable_utp;             /* 0=enabled (default), 1=disabled */
     int32_t disable_upload;          /* 0=enabled (default), 1=disabled */
     int32_t disable_dht;             /* 0=enabled (default), 1=disabled */
@@ -105,7 +109,7 @@ typedef struct {
     int32_t peers_listen_port;       /* 0=random (default) */
 
     /* Reader */
-    int32_t responsive_mode;         /* 1=enabled (default), 0=disabled */
+    int32_t responsive_mode;         /* IGNORED */
 } lt_bt_config;
 
 typedef void (*lt_alert_callback)(int alert_type, lt_torrent_id id,
@@ -183,7 +187,10 @@ TORRENT_API int          lt_get_all_stream_statuses(lt_session_t session,
 TORRENT_API int  lt_preload_stream(lt_session_t session, lt_stream_id id,
                                    int64_t preload_bytes);
 
-/* cache settings — port of settings/btsets.go */
+/* cache settings. capacity (bytes, > 0 to change): how far ahead of
+   playback stream id downloads — capacity / piece length pieces, 4 to 64.
+   read_ahead_pct is ignored; connections_limit > 0 caps the torrent's
+   peers. */
 TORRENT_API void lt_set_cache_settings(lt_session_t session, lt_stream_id id,
                                        int64_t capacity,
                                        int read_ahead_pct,

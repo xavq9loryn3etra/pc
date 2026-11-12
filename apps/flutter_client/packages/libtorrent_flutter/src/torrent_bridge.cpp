@@ -1046,6 +1046,24 @@ struct StreamEngine {
     std::mutex win_mu;
     int        win_lo = -1;
     int        win_hi = -1;
+    int        ra_hi  = -1;   // last piece the read-ahead has raised (win_mu)
+
+    // How far ahead of playback to download: the cache capacity given to
+    // lt_start_stream / lt_set_cache_settings, in pieces, 4 to 64.
+    std::atomic<int64_t> ra_capacity{64LL * 1024 * 1024};
+
+    int readahead_pieces() const {
+        if (piece_length <= 0) return 4;
+        const int64_t n = ra_capacity.load() / piece_length;
+        return (int)std::clamp<int64_t>(n, 4, 64);
+    }
+
+    // Roughly how long playback takes over one piece, in ms.
+    int piece_play_ms() const {
+        const double ms = (double)piece_length * 1000.0
+                        / std::max(1.0f, estimated_bitrate_bps);
+        return (int)std::clamp(ms, 50.0, 60000.0);
+    }
 
     void note_window(int lo, int hi) {
         std::lock_guard<std::mutex> lk(win_mu);
@@ -1668,6 +1686,63 @@ static int send_all(socket_t sock, const char* data, int len) {
     return sent;
 }
 
+// Read-ahead, run after the playback request sends piece [p]: pieces
+// (p, p+N] are kept wanted — the next two at top priority, the rest at 6 —
+// with deadlines spaced by the time playback takes to reach them, N being
+// readahead_pieces(). Before, pieces ahead were raised only while the
+// reader was blocked on one, so the download never got ahead of playback.
+// When N shrinks (the cache cut down in the background), the pieces past
+// the new end go back to dont_download.
+static void extend_readahead(StreamEngine* s, int p) {
+    const int n  = s->readahead_pieces();
+    const int hi = std::min(p + n, s->end_piece);
+    int from;
+    std::vector<int> demote;
+    {
+        std::lock_guard<std::mutex> lk(s->win_mu);
+        if (s->ra_hi > hi) {
+            for (int q = hi + 1; q <= s->ra_hi; ++q) demote.push_back(q);
+            s->ra_hi = hi;
+        }
+        from = std::max(p + 1, s->ra_hi + 1);
+        if (hi > s->ra_hi) s->ra_hi = hi;
+        if (s->win_lo < 0 || p < s->win_lo) s->win_lo = p;
+        if (hi > s->win_hi) s->win_hi = hi;
+    }
+    if (hi <= p && demote.empty()) return;
+
+    std::vector<char> had((size_t)std::max(0, hi - p), 0);  // [i] = piece p+1+i
+    std::vector<int>  drop;
+    {
+        std::lock_guard<std::mutex> lk(s->piece_mu);
+        for (int q = p + 1; q <= hi; ++q)
+            had[(size_t)(q - p - 1)] = s->pieces_have.count(q) ? 1 : 0;
+        for (int q : demote)
+            if (!s->is_protected(q) && !s->pieces_have.count(q)) drop.push_back(q);
+    }
+
+    const int step_ms = s->piece_play_ms();
+    try {
+        for (int q = p + 1; q <= hi; ++q) {
+            if (had[(size_t)(q - p - 1)]) continue;
+            const int dist = q - p;
+            if (dist <= 2) {
+                // re-set on every piece: they're next
+                s->handle.piece_priority(lt::piece_index_t(q), lt::top_priority);
+                s->handle.set_piece_deadline(lt::piece_index_t(q), dist * step_ms);
+            } else if (q >= from) {
+                // new to the window
+                s->handle.piece_priority(lt::piece_index_t(q), lt::download_priority_t(6));
+                s->handle.set_piece_deadline(lt::piece_index_t(q), dist * step_ms);
+            }
+        }
+        for (int q : drop) {
+            s->handle.reset_piece_deadline(lt::piece_index_t(q));
+            s->handle.piece_priority(lt::piece_index_t(q), lt::dont_download);
+        }
+    } catch (...) {}
+}
+
 // serve_range — based on lt2http's Reader::read() pattern
 //
 // lt2http reads directly from libtorrent storage — no intermediate cache.
@@ -1719,7 +1794,9 @@ static bool serve_range(StreamEngine* s, const ConnState& conn, bool primary,
             // full so the swarm doesn't idle between piece completions.
             // (Previous current+2 window was below libtorrent's own
             //  request pipeline depth → peers sat idle after each piece.)
-            constexpr int PIPELINE_AHEAD = 16;
+            // (No further than the read-ahead window: a cache shrunk to
+            // save mobile data must shrink this too.)
+            const int PIPELINE_AHEAD = std::min(16, s->readahead_pieces());
             TB_LOG("serve_range: piece=%d not ready, prioritizing p..p+%d", p, PIPELINE_AHEAD);
             try {
                 s->handle.piece_priority(lt::piece_index_t(p), lt::top_priority);
@@ -1824,6 +1901,8 @@ static bool serve_range(StreamEngine* s, const ConnState& conn, bool primary,
         cursor = sbeg + nb;
         if (!primary) continue;
 
+        extend_readahead(s, p);
+
         reader->offset = cursor;
         reader->last_access = TorrReader::now_unix();
         s->read_head.store(cursor);
@@ -1862,9 +1941,10 @@ static void drop_old_window(StreamEngine* s, int new_lo, int new_hi) {
     {
         std::lock_guard<std::mutex> lk(s->win_mu);
         lo = s->win_lo;
-        hi = s->win_hi;
+        hi = std::max(s->win_hi, s->ra_hi);
         s->win_lo = new_lo;
         s->win_hi = new_hi;
+        s->ra_hi  = -1;   // the read-ahead starts over from the new spot
     }
     if (lo < 0 || hi < lo) return;
     std::vector<int> drop;
@@ -2054,7 +2134,9 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
                 // The preload is for the old position: stop it.
                 s->preloading.store(false);
                 drop_old_window(s, seek_piece,
-                    std::min(seek_piece + StreamEngine::SEEK_WINDOW, s->end_piece));
+                    std::min(seek_piece + std::min(StreamEngine::SEEK_WINDOW,
+                                                   s->readahead_pieces()),
+                             s->end_piece));
 
                 try {
                     // Minimal seek path — just unblock the picker, then let
@@ -2972,6 +3054,8 @@ TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
                            : (64 * 1024 * 1024);
     s->cache = std::make_unique<TorrCache>();
     s->cache->init(cache_capacity, s->piece_length, ti->num_pieces(), handle);
+    // ...and how far ahead of playback to download (extend_readahead)
+    s->ra_capacity.store(cache_capacity);
     // apply session-level connections_limit to cache AND to libtorrent.
     // The cache field is informational; the actual swarm-fanout cap lives
     // on torrent_handle::set_max_connections(). Without this call, every
@@ -3320,19 +3404,22 @@ TORRENT_API void lt_set_cache_settings(lt_session_t session, lt_stream_id sid,
                                        int connections_limit) {
     if (!session) return;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->streams_mu);
-    auto it = sw->streams.find(sid);
-    if (it == sw->streams.end()) return;
+    std::shared_ptr<StreamEngine> s;
+    {
+        std::lock_guard<std::mutex> lk(sw->streams_mu);
+        auto it = sw->streams.find(sid);
+        if (it == sw->streams.end()) return;
+        s = it->second;
+    }
 
-    auto* s = it->second.get();
-    if (!s->cache) return;
-
+    // [capacity] sets how far ahead of playback the stream downloads
+    // (readahead_pieces: capacity / piece length, 4 to 64 pieces); the
+    // player cuts it in the background to save mobile data. The memory
+    // cache has its own fixed cap. [read_ahead_pct] is ignored.
     if (capacity > 0)
-        s->cache->capacity = capacity;
-    if (read_ahead_pct >= 5 && read_ahead_pct <= 100)
-        s->cache->reader_read_ahead_pct = read_ahead_pct;
+        s->ra_capacity.store(capacity);
+    (void)read_ahead_pct;
     if (connections_limit > 0) {
-        s->cache->connections_limit = connections_limit;
         // Wire to libtorrent so it actually takes effect on the swarm.
         try { s->handle.set_max_connections(connections_limit); } catch (...) {}
     }
@@ -3447,14 +3534,11 @@ TORRENT_API void lt_configure_session(lt_session_t session,
         std::lock_guard<std::mutex> lk(sw->streams_mu);
         for (auto& kv : sw->streams) {
             auto* s = kv.second.get();
-            if (!s || !s->cache) continue;
+            if (!s) continue;
 
             if (cfg.cache_size > 0)
-                s->cache->capacity = cfg.cache_size;
-            if (cfg.reader_read_ahead >= 5 && cfg.reader_read_ahead <= 100)
-                s->cache->reader_read_ahead_pct = cfg.reader_read_ahead;
+                s->ra_capacity.store(cfg.cache_size);
             if (cfg.connections_limit > 0) {
-                s->cache->connections_limit = cfg.connections_limit;
                 try { s->handle.set_max_connections(cfg.connections_limit); } catch (...) {}
             }
         }

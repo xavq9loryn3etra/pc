@@ -52,6 +52,7 @@
   #define POLL_READ_EV    POLLRDNORM
   #define SOCK_ERRNO()    ::WSAGetLastError()
   #define SOCK_EINTR      WSAEINTR
+  #define SOCK_EWOULDBLOCK WSAEWOULDBLOCK
 #else
   #include <sys/socket.h>
   #include <netinet/in.h>
@@ -72,6 +73,7 @@
   #define POLL_READ_EV    POLLIN
   #define SOCK_ERRNO()    errno
   #define SOCK_EINTR      EINTR
+  #define SOCK_EWOULDBLOCK EWOULDBLOCK
 #endif
 
 #include <thread>
@@ -1590,6 +1592,28 @@ static RangeReq parse_range(const char* buf, int len) {
     return r;
 }
 
+// Whether the HTTP client has gone — closed its end, or the socket failed.
+// Never blocks.
+static bool client_gone(socket_t cli) {
+    pollfd_t pfd{};
+    pfd.fd     = cli;
+    pfd.events = POLL_READ_EV;
+    int r = POLL_SOCKETS(&pfd, 1, 0);
+    if (r < 0) return SOCK_ERRNO() != SOCK_EINTR;
+    if (r == 0) return false;
+    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) return true;
+    if (pfd.revents & POLL_READ_EV) {
+        char b;
+        int n = ::recv(cli, &b, 1, MSG_PEEK);  // readable: doesn't block
+        if (n == 0) return true;                // orderly close
+        if (n < 0) {
+            int e = SOCK_ERRNO();
+            return e != SOCK_EINTR && e != SOCK_EWOULDBLOCK;
+        }
+    }
+    return false;
+}
+
 static int send_all(socket_t sock, const char* data, int len) {
     int sent = 0;
     while (sent < len) {
@@ -1670,23 +1694,36 @@ static bool serve_range(StreamEngine* s, TorrReader* reader, socket_t cli,
             // Wait for piece — like lt2http's sleep_for(300ms) polling loop
             // but using condition variable for zero-latency wakeup
             TB_LOG("serve_range: WAITING for piece=%d", p);
-            std::unique_lock<std::mutex> lk(s->piece_mu);
-            bool ok = s->piece_cv.wait_for(lk, chr::seconds(60), [&] {
-                return !s->active.load()
-                    || s->seek_generation.load() != my_gen
-                    || s->pieces_have.count(p) > 0;
-            });
-
-            if (!s->active.load() || s->seek_generation.load() != my_gen) {
-                TB_LOG("serve_range: ABORT piece=%d gen_now=%d my_gen=%d", p, s->seek_generation.load(), my_gen);
-                return false;
-            }
-            if (!ok || s->pieces_have.count(p) == 0) {
-                lk.unlock();
-                if (!check_have(s, p)) {
-                    TB_LOG("serve_range: TIMEOUT piece=%d", p);
+            // No overall deadline: on a slow swarm one piece can take
+            // minutes, and cutting the response mid-body made the player
+            // see a premature end of file. The wait goes on in 5 s slices
+            // while the stream is active and this request current; after
+            // each slice the piece is asked for directly (a missed alert),
+            // the client checked for (gone: stop), and the piece's
+            // priority and deadline set again.
+            for (;;) {
+                {
+                    std::unique_lock<std::mutex> lk(s->piece_mu);
+                    s->piece_cv.wait_for(lk, chr::seconds(5), [&] {
+                        return !s->active.load()
+                            || s->seek_generation.load() != my_gen
+                            || s->pieces_have.count(p) > 0;
+                    });
+                    if (!s->active.load() || s->seek_generation.load() != my_gen) {
+                        TB_LOG("serve_range: ABORT piece=%d gen_now=%d my_gen=%d", p, s->seek_generation.load(), my_gen);
+                        return false;
+                    }
+                    if (s->pieces_have.count(p) > 0) break;
+                }
+                if (check_have(s, p)) break;
+                if (client_gone(cli)) {
+                    TB_LOG("serve_range: client gone waiting for piece=%d", p);
                     return false;
                 }
+                try {
+                    s->handle.piece_priority(lt::piece_index_t(p), lt::top_priority);
+                    s->handle.set_piece_deadline(lt::piece_index_t(p), 0);
+                } catch (...) {}
             }
             TB_LOG("serve_range: piece=%d READY", p);
         }

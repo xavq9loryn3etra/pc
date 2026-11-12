@@ -190,8 +190,12 @@ static std::string get_mime(const std::string& name) {
 // data (pieces had, and its metadata) is written next to its files,
 // ".popcorn-resume-<info hash>", and read back when it's added.
 
+// The torrent's key for its resume file: the v1 hash when it has one,
+// else the (truncated) v2 hash. get_best() preferred v2, so a hybrid
+// v1+v2 torrent was saved under its v2 hash and looked for — when added
+// from a magnet with only its btih — under its v1 hash: never found.
 static std::string hash_hex(const lt::info_hash_t& ih) {
-    const lt::sha1_hash h = ih.get_best();
+    const lt::sha1_hash h = ih.has_v1() ? ih.v1 : ih.get_best();
     static const char* digits = "0123456789abcdef";
     std::string out;
     out.reserve(40);
@@ -211,6 +215,14 @@ static std::filesystem::path resume_file(const std::string& save_path,
 
 static lt::info_hash_t hashes_of(const lt::add_torrent_params& p) {
     return p.ti ? p.ti->info_hashes() : p.info_hashes;
+}
+
+// Whether [a] and [b] are the same torrent: equal on a hash both have
+// (v1 first), so a hybrid torrent's full hashes match a magnet's v1 alone.
+static bool same_torrent(const lt::info_hash_t& a, const lt::info_hash_t& b) {
+    if (a.has_v1() && b.has_v1()) return a.v1 == b.v1;
+    if (a.has_v2() && b.has_v2()) return a.v2 == b.v2;
+    return false;
 }
 
 // Writes [p] (a save_resume_data_alert's) beside the torrent's files —
@@ -247,7 +259,7 @@ static bool load_resume(lt::add_torrent_params& atp,
         if (buf.empty()) return false;
         lt::error_code ec;
         lt::add_torrent_params rd = lt::read_resume_data(buf, ec);
-        if (ec || !(hashes_of(rd) == want)) return false;
+        if (ec || !same_torrent(hashes_of(rd), want)) return false;
         for (const auto& t : atp.trackers)
             if (std::find(rd.trackers.begin(), rd.trackers.end(), t)
                     == rd.trackers.end())

@@ -143,7 +143,20 @@ class _PlayerScreenState extends State<PlayerScreen>
   DateTime? _lastProgressPersist;
 
   // UI Control State
-  bool _controlsVisible = true;
+  bool _controlsShown = true;
+
+  /// Whether the controls are up. While they're hidden the seek bar's
+  /// position and buffer aren't pushed on every tick (nothing's showing
+  /// them); on coming back up they're brought up to date at once.
+  bool get _controlsVisible => _controlsShown;
+  set _controlsVisible(bool visible) {
+    if (visible && !_controlsShown) {
+      _positionNotifier.value = _currentPosition;
+      _bufferNotifier.value = player.state.buffer;
+    }
+    _controlsShown = visible;
+  }
+
   Timer? _controlsTimer;
   Timer? _screenTapTimer;
   DateTime? _controlsPointerAt;
@@ -747,7 +760,13 @@ class _PlayerScreenState extends State<PlayerScreen>
           // needs to react to this, not the whole screen, since this fires
           // several times a second during playback.
           _currentPosition = pos;
-          _positionNotifier.value = pos;
+          // The seek bar and the clock show whole seconds, and hidden
+          // controls show nothing (they catch up when shown again: see
+          // _controlsVisible) — so no rebuild for anything finer.
+          if (_controlsVisible &&
+              pos.inSeconds != _positionNotifier.value.inSeconds) {
+            _positionNotifier.value = pos;
+          }
         }
         if (_isMediaOpening) _checkOpeningFinished(pos);
         if (_seekPending) _checkSeekFinished(pos);
@@ -765,7 +784,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     // Listen to video buffer duration (for YouTube-style grayed-out buffered bar).
     // Not wrapped in setState — only the seek bar's secondary track needs this.
     _bufferSub = player.stream.buffer.listen((buf) {
-      if (mounted) {
+      if (mounted && _controlsVisible) {
         _bufferNotifier.value = buf;
       }
     });
@@ -2672,6 +2691,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _mkvSkipSegments = const [];
       _apiSkipSegments = const [];
       _skipSegments = const [];
+      _updateTimelineShapes();
       _timelinePartitionRevision.value++;
       _activeSkipSegmentNotifier.value = null;
     }
@@ -3952,6 +3972,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           SkipSegmentsService().alignToFile(_apiSkipSegments, _duration),
     );
     _logSkipSegments();
+    _updateTimelineShapes();
     _timelinePartitionRevision.value++;
     _updateActiveSkipSegment(_currentPosition);
   }
@@ -3977,6 +3998,16 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (line == _lastSkipLog) return;
     _lastSkipLog = line;
     print(line);
+  }
+
+  // The seek bar's skip ranges and partition gaps, worked out when the
+  // segments or the duration change rather than on every rebuild of the bar.
+  List<({double start, double end})> _skipRanges = const [];
+  List<double> _partitions = const [];
+
+  void _updateTimelineShapes() {
+    _skipRanges = _skipRangesFor(_duration);
+    _partitions = _partitionFractionsFor(_duration);
   }
 
   /// Normalized `(start, end)` fraction ranges (`0.0..1.0`) for skippable
@@ -4760,9 +4791,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                                               dur,
                                             )
                                           : null;
-                                      final skipRanges = _skipRangesFor(dur);
-                                      final partitions =
-                                          _partitionFractionsFor(dur);
+                                      final skipRanges = _skipRanges;
+                                      final partitions = _partitions;
                                       final pad = wide ? 16.0 : 14.0;
 
                                       return LayoutBuilder(

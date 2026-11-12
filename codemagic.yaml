@@ -13,13 +13,17 @@ workflows:
         script: |
           cd apps/flutter_client
           flutter pub get
+      - name: Analyze and test
+        script: |
+          cd apps/flutter_client
+          flutter analyze --no-fatal-infos
+          flutter test
       - name: Build Android Release
         script: |
           cd apps/flutter_client
           flutter build apk --release --dart-define=GEMINI_API_KEY=$GEMINI_API_KEY
     artifacts:
       - apps/flutter_client/build/app/outputs/flutter-apk/*.apk
-      - apps/flutter_client/build/app/outputs/bundle/release/*.aab
 
   windows-workflow:
     name: Windows Release
@@ -85,28 +89,3 @@ workflows:
       app_store_connect:
         auth: integration
         submit_to_testflight: false
-
-  macos-workflow:
-    name: macOS Release
-    max_build_duration: 120
-    instance_type: mac_mini_m1
-    environment:
-      flutter: 3.44.6
-      cocoapods: default
-      groups:
-        - gemini
-    scripts:
-      - name: Get dependencies
-        script: |
-          cd apps/flutter_client
-          flutter pub get
-      - name: Install Pods
-        script: |
-          cd apps/flutter_client/macos
-          pod install
-      - name: Build macOS Release
-        script: |
-          cd apps/flutter_client
-          flutter build macos --release --dart-define=GEMINI_API_KEY=$GEMINI_API_KEY
-    artifacts:
-      - apps/flutter_client/build/macos/Build/Products/Release/*.app

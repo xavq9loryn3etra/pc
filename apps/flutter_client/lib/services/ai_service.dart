@@ -110,7 +110,7 @@ Earlier messages may come before the latest: use them to understand follow-ups (
 Reply with JSON only, no markdown:
 {"offTopic": false, "service": null, "message": "2-3 warm, chatty sentences, like a friend who loves films: why these fit what they asked for, with a little enthusiasm; no spoilers or titles by name (as some may not be shown) unless answering a question about a particular title or its ending, no lists", "titles": [{"title": "its widely known English or original title, in the Latin alphabet where one exists, whatever language the reply is in", "year": 2014, "type": "movie" or "tv", "language": "its original language as an ISO 639-1 code, e.g. en, ml, ko"}]}''';
 
-  final Dio _dio = Dio();
+  final Dio _dio = Dio(BaseOptions(connectTimeout: const Duration(seconds: 10)));
 
   // The most titles an answer shows, when asked for "20 more" (9 unless
   // asked; see [_instructions]).
@@ -133,7 +133,8 @@ Reply with JSON only, no markdown:
       throw const AiUnavailable(
           "Popcorn Ask isn't set up in this version of the app.");
     }
-    await _countQuestion();
+    // Refused at the day's limit now; counted only once a model answers.
+    await _checkLimit();
 
     for (var i = 0; i < _models.length; i++) {
       final model = _models[i];
@@ -143,7 +144,11 @@ Reply with JSON only, no markdown:
       try {
         final reply =
             await _ask(model, request, history: history, slow: i >= slowFrom);
-        if (reply != null) return await _answerFrom(reply);
+        if (reply != null) {
+          final answer = await _answerFrom(reply);
+          await _countQuestion();
+          return answer;
+        }
       } on DioException catch (e) {
         final status = e.response?.statusCode;
         // Over its free limit for the minute: try it again in a minute.
@@ -154,6 +159,8 @@ Reply with JSON only, no markdown:
       } on FormatException {
         // A reply that isn't the JSON asked for: the next model may do
         // better.
+      } catch (_) {
+        // Anything else odd in a reply: likewise.
       }
     }
     throw const AiUnavailable(
@@ -332,18 +339,29 @@ Reply with JSON only, no markdown:
         (a.containsAll(b) || b.containsAll(a));
   }
 
-  // Counts a question against today's limit, or refuses it.
-  Future<void> _countQuestion() async {
+  // How many questions have been answered today.
+  Future<(SharedPreferences, String, int)> _todaysCount() async {
     final prefs = await SharedPreferences.getInstance();
     final today = DateTime.now().toIso8601String().substring(0, 10);
     final saved = prefs.getString(_countKey)?.split('|');
     final count = saved != null && saved.length == 2 && saved[0] == today
         ? int.tryParse(saved[1]) ?? 0
         : 0;
+    return (prefs, today, count);
+  }
+
+  // Refuses a question once today's limit is used up.
+  Future<void> _checkLimit() async {
+    final (_, _, count) = await _todaysCount();
     if (count >= _dailyLimit) {
       throw const AiUnavailable(
           "That's all the questions for today. Ask again tomorrow!");
     }
+  }
+
+  // Counts an answered question against today's limit.
+  Future<void> _countQuestion() async {
+    final (prefs, today, count) = await _todaysCount();
     await prefs.setString(_countKey, '$today|${count + 1}');
   }
 }

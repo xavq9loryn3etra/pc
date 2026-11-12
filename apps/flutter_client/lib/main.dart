@@ -1,12 +1,14 @@
+import 'dart:io' show File, Platform;
 import 'dart:ui';
 import 'package:flutter/foundation.dart'
-    show LicenseRegistry, LicenseEntryWithLineBreaks;
+    show LicenseRegistry, LicenseEntryWithLineBreaks, kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'dart:async';
@@ -23,6 +25,7 @@ import 'theme/app_theme.dart';
 import 'widgets/glass_blur.dart';
 
 import 'services/app_mode_service.dart';
+import 'services/background_download_service.dart';
 import 'services/saved_movies_service.dart';
 import 'services/deep_link_service.dart';
 import 'services/feature_flags_service.dart';
@@ -35,6 +38,29 @@ import 'services/visual_effects_service.dart';
 import 'services/window_full_screen.dart';
 
 void main() async {
+  // Errors nothing else caught: logged, never the end of the app.
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+  };
+  PlatformDispatcher.instance.onError = (e, s) {
+    debugPrint('Uncaught error: $e\n$s');
+    return true;
+  };
+  // A widget that fails to build: a quiet note in its place, not the red
+  // debug screen (release only; debug builds keep the details).
+  if (kReleaseMode) {
+    ErrorWidget.builder = (_) => const ColoredBox(
+          color: AppTheme.scaffoldColor,
+          child: Center(
+            child: Text(
+              'Something went wrong',
+              textDirection: TextDirection.ltr,
+              style: TextStyle(color: Colors.white70, fontSize: 14),
+            ),
+          ),
+        );
+  }
+
   // Smooth mouse-wheel scrolling on Windows; the stock binding elsewhere.
   SmoothWheelBinding.ensureInitialized();
 
@@ -78,12 +104,21 @@ void main() async {
   SystemChrome.setSystemUIOverlayStyle(AppTheme.systemUiStyle);
 
   MediaKit.ensureInitialized();
-  await WindowFullScreen.init();
-  await SavedMoviesService().init();
-  await AppModeService().init();
-  await FeatureFlagsService().init();
-  await VisualEffectsService().init();
-  await DownloadAheadSettings().init();
+  // Each startup step on its own: one that fails (say, a settings file cut
+  // short by a power cut) leaves that service on its defaults, rather than
+  // stopping the app before its first frame and leaving an empty window.
+  await _initStep('prefs', _recoverCorruptPrefs);
+  await _initStep('WindowFullScreen', WindowFullScreen.init);
+  await _initStep('SavedMoviesService', SavedMoviesService().init);
+  await _initStep('AppModeService', AppModeService().init);
+  await _initStep('FeatureFlagsService', FeatureFlagsService().init);
+  await _initStep('VisualEffectsService', VisualEffectsService().init);
+  await _initStep('DownloadAheadSettings', DownloadAheadSettings().init);
+  // A background-buffering service left running by a previous run (the
+  // app swiped away mid-playback) has nothing to keep alive now. Not
+  // awaited: nothing at startup depends on it.
+  unawaited(_initStep(
+      'BackgroundDownloadService', BackgroundDownloadService.instance.stop));
   // Not awaited: this spins up the native libtorrent engine (DHT bootstrap,
   // tracker connections), which isn't needed until the user actually starts
   // streaming something. Awaiting it here delayed the first frame on every
@@ -107,6 +142,33 @@ void main() async {
   unawaited(TrendingService().fetch(AppModeService().currentMode.value));
 
   runApp(const MyApp());
+}
+
+/// Runs one startup step, logging (not throwing) if it fails.
+Future<void> _initStep(String name, Future<void> Function() step) async {
+  try {
+    await step();
+  } catch (e, s) {
+    debugPrint('init failed ($name): $e\n$s');
+  }
+}
+
+/// On Windows the settings live in one JSON file, rewritten as they change.
+/// One cut short (a crash or power cut mid-write) made reading the settings
+/// throw on every launch; set it aside as `.bak` and start afresh instead.
+Future<void> _recoverCorruptPrefs() async {
+  if (!Platform.isWindows) return;
+  try {
+    await SharedPreferences.getInstance();
+  } on FormatException catch (e) {
+    debugPrint('Settings file unreadable ($e); moving it aside');
+    final dir = await getApplicationSupportDirectory();
+    final file = File('${dir.path}${Platform.pathSeparator}shared_preferences.json');
+    if (await file.exists()) {
+      await file.rename('${file.path}.bak');
+    }
+    await SharedPreferences.getInstance();
+  }
 }
 
 class MyApp extends StatefulWidget {
@@ -166,6 +228,17 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     DeepLinkService().init(_navigatorKey);
   }
 
+  /// Tells the deep-link service whether a link can open now: not before
+  /// the splash and first-run screens are done, never over the maintenance
+  /// or forced-update screens.
+  void _syncDeepLinks() {
+    DeepLinkService().setAppState(
+      ready: _splashDone && _currentScreen == _AppScreen.modeSelector,
+      blocked: _currentScreen == _AppScreen.maintenance ||
+          _currentScreen == _AppScreen.updateRequired,
+    );
+  }
+
   void _initConnectivity() {
     _connectivitySubscription =
         Connectivity().onConnectivityChanged.listen((results) {
@@ -184,9 +257,17 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.detached) {
       TorrentEngineService.instance.dispose();
     }
-    // Picks up flag edits (e.g. hide_playback) without a cold restart.
+    // Watch history is written in batches (see SavedMoviesService.flush):
+    // whatever is waiting goes out before the app can be killed.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      unawaited(SavedMoviesService().flush());
+    }
+    // Picks up flag edits (hide_playback, maintenance, a forced update)
+    // without a cold restart.
     if (state == AppLifecycleState.resumed) {
-      FeatureFlagsService().refreshIfStale();
+      unawaited(_recheckConfig());
     }
   }
 
@@ -216,33 +297,77 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     // Flags come from docs/flags.json on GitHub Pages (see
     // FeatureFlagsService). If the fetch fails (offline, slow network),
     // the last fetched values are used instead.
+    await FeatureFlagsService().refresh();
+    await _resolveScreen();
+  }
+
+  /// Re-checks the flags once the app is back in the foreground (or on
+  /// "Try Again"), in both directions: maintenance or a forced update can
+  /// start, and a stuck maintenance screen can end, without a restart.
+  Future<void> _recheckConfig({bool force = false}) async {
     final flags = FeatureFlagsService();
-    await flags.refresh();
-
-    if (flags.maintenanceEnabled) {
-      if (mounted) {
-        setState(() {
-          _currentScreen = _AppScreen.maintenance;
-          _maintenanceMsg = flags.maintenanceMessage;
-        });
-      }
-      return;
+    if (force) {
+      await flags.refresh();
+    } else {
+      await flags.refreshIfStale();
     }
+    // The first check (which also resolves the first screen) is still
+    // running, or the app is gone.
+    if (!mounted || _currentScreen == _AppScreen.checking) return;
 
+    final lock = await _lockScreen();
+    if (!mounted) return;
+    if (lock != null) {
+      _showLock(lock);
+    } else if (_isLocked) {
+      await _resolveScreen();
+    }
+  }
+
+  bool get _isLocked =>
+      _currentScreen == _AppScreen.maintenance ||
+      _currentScreen == _AppScreen.updateRequired;
+
+  /// The maintenance or forced-update screen the current flags call for,
+  /// or null if neither.
+  Future<_AppScreen?> _lockScreen() async {
+    final flags = FeatureFlagsService();
+    if (flags.maintenanceEnabled) return _AppScreen.maintenance;
     try {
       final packageInfo = await PackageInfo.fromPlatform();
       if (_isVersionLessThan(packageInfo.version, flags.minRequiredVersion)) {
-        if (mounted) {
-          setState(() {
-            _currentScreen = _AppScreen.updateRequired;
-            _updateMsg = flags.updateRequiredMessage;
-            _updateUrl = flags.updateUrl;
-          });
-        }
-        return;
+        return _AppScreen.updateRequired;
       }
     } catch (e) {
       print("Failed to check app version: $e");
+    }
+    return null;
+  }
+
+  void _showLock(_AppScreen lock) {
+    final flags = FeatureFlagsService();
+    // Whatever page the user was on is covered by it.
+    if (_currentScreen != lock) {
+      _navigatorKey.currentState?.popUntil((route) => route.isFirst);
+    }
+    setState(() {
+      _currentScreen = lock;
+      if (lock == _AppScreen.maintenance) {
+        _maintenanceMsg = flags.maintenanceMessage;
+      } else {
+        _updateMsg = flags.updateRequiredMessage;
+        _updateUrl = flags.updateUrl;
+      }
+    });
+    _syncDeepLinks();
+  }
+
+  Future<void> _resolveScreen() async {
+    final lock = await _lockScreen();
+    if (!mounted) return;
+    if (lock != null) {
+      _showLock(lock);
+      return;
     }
 
     // Determine which screen to show based on first-launch state
@@ -263,6 +388,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     } catch (_) {
       if (mounted) setState(() => _currentScreen = _AppScreen.modeSelector);
     }
+    _syncDeepLinks();
   }
 
   bool _isVersionLessThan(String current, String minReq) {
@@ -304,6 +430,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     await prefs.setBool('has_seen_onboarding', true);
     if (mounted) {
       setState(() => _currentScreen = _AppScreen.modeSelector);
+      _syncDeepLinks();
     }
   }
 
@@ -323,7 +450,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       case _AppScreen.updateRequired:
         return UpdateOverlay(message: _updateMsg, url: _updateUrl);
       case _AppScreen.maintenance:
-        return MaintenanceOverlay(message: _maintenanceMsg);
+        return MaintenanceOverlay(
+          message: _maintenanceMsg,
+          onRetry: () => _recheckConfig(force: true),
+        );
       case _AppScreen.welcome:
         return WelcomeScreen(onGetStarted: _onWelcomeComplete);
       case _AppScreen.onboarding:
@@ -400,7 +530,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                 opacity: _splashFading ? 0 : 1,
                 duration: const Duration(milliseconds: 450),
                 curve: Curves.easeOut,
-                onEnd: () => setState(() => _splashDone = true),
+                onEnd: () {
+                  setState(() => _splashDone = true);
+                  _syncDeepLinks();
+                },
                 child: Scaffold(
                   backgroundColor: AppTheme.scaffoldColor,
                   body: Stack(

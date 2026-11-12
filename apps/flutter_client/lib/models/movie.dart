@@ -57,6 +57,10 @@ class Movie {
   final int? currentEpisode;
   final double? progress; // 0.0 to 1.0
 
+  /// What history and favourites key this title by. TMDB numbers movies
+  /// and shows separately, so the id alone isn't unique.
+  String get storageKey => '${type}_$id';
+
   String? get posterUrl => image;
   String? get backdropUrl => backdrop;
   // `backdrop` is TMDB's w1280 tier — plenty for episode thumbnails, the
@@ -168,24 +172,43 @@ class Movie {
     };
   }
 
+  // Tolerant of what older versions (or a hand-edited backup) stored: a
+  // number where a string was expected, a missing field. Only the id is
+  // required; without one this throws, and callers skip the entry.
   factory Movie.fromStorageJson(Map<String, dynamic> json) {
+    final id = json['id'];
+    if (id == null) throw const FormatException('Stored movie has no id');
+    String? str(String key) {
+      final v = json[key];
+      return v == null ? null : '$v';
+    }
+
+    num? number(String key) {
+      final v = json[key];
+      return v is num ? v : (v is String ? num.tryParse(v) : null);
+    }
+
+    int? integer(String key) => number(key)?.toInt();
+
     return Movie(
-      id: json['id'],
-      title: json['title'],
-      year: json['year'],
-      image: json['image'],
-      backdrop: json['backdrop'],
-      rating: json['rating'],
-      voteCount: json['vote_count'],
-      description: json['description'],
-      type: json['type'],
-      inCinemas: json['in_cinemas'] ?? false,
-      releaseDateRaw: json['release_date_raw'],
-      trailerUrl: json['trailer_url'],
-      imdbId: json['imdb_id'],
-      currentSeason: json['current_season'],
-      currentEpisode: json['current_episode'],
-      progress: json['progress']?.toDouble(),
+      id: '$id',
+      title: str('title') ?? '',
+      year: integer('year') ?? 0,
+      image: str('image'),
+      backdrop: str('backdrop'),
+      rating: str('rating') ?? 'N/A',
+      voteCount: integer('vote_count') ?? 0,
+      description: str('description') ?? '',
+      // Every version so far stored a type; one without is taken as a
+      // movie.
+      type: str('type') ?? 'movie',
+      inCinemas: json['in_cinemas'] == true,
+      releaseDateRaw: str('release_date_raw'),
+      trailerUrl: str('trailer_url'),
+      imdbId: str('imdb_id'),
+      currentSeason: integer('current_season'),
+      currentEpisode: integer('current_episode'),
+      progress: number('progress')?.toDouble(),
     );
   }
 }

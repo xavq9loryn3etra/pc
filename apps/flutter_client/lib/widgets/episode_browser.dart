@@ -615,19 +615,31 @@ class _EpisodeSourcePickerState extends State<_EpisodeSourcePicker> {
   /// another, then played — or, for the copy already playing (now wanted
   /// in another language), just its soundtrack switched.
   Future<void> _choose(QualityOption option) async {
-    final languages = AudioLanguageService();
-    final language = _language;
-    final changed = language != null && language != languages.of(widget.details);
-    if (changed) await languages.set(widget.details, language);
-    final playing = widget.playingStream;
-    if (changed &&
-        playing != null &&
-        option.best.infoHash.toLowerCase() == playing.infoHash.toLowerCase()) {
-      widget.onAudioLanguageChanged?.call();
-      return;
+    if (_choosing) return;
+    _choosing = true;
+    try {
+      final languages = AudioLanguageService();
+      final language = _language;
+      final changed =
+          language != null && language != languages.of(widget.details);
+      if (changed) await languages.set(widget.details, language);
+      if (!mounted) return;
+      final playing = widget.playingStream;
+      if (changed &&
+          playing != null &&
+          option.best.infoHash.toLowerCase() ==
+              playing.infoHash.toLowerCase()) {
+        widget.onAudioLanguageChanged?.call();
+        return;
+      }
+      widget.onTorrentChosen(option.best, _streams!);
+    } finally {
+      _choosing = false;
     }
-    widget.onTorrentChosen(option.best, _streams!);
   }
+
+  // A pick is being handled (see [_choose]): a second tap is ignored.
+  bool _choosing = false;
 
   Future<void> _load() async {
     try {

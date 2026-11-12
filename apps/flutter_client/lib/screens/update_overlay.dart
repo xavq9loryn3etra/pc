@@ -9,6 +9,19 @@ class UpdateOverlay extends StatelessWidget {
 
   const UpdateOverlay({super.key, required this.message, required this.url});
 
+  bool get _hasValidUrl {
+    final uri = Uri.tryParse(url.trim());
+    return uri != null && uri.scheme == 'https' && uri.host.isNotEmpty;
+  }
+
+  /// The remote link, opened only if it's a well-formed https one.
+  Future<void> _openDownload() async {
+    if (!_hasValidUrl) return;
+    try {
+      await launchUrl(Uri.parse(url.trim()));
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     return StatusScreen(
@@ -20,11 +33,11 @@ class UpdateOverlay extends StatelessWidget {
       message: Platform.isIOS
           ? 'A new update is available. Please update the app from TestFlight.'
           : message,
-      footer: Platform.isIOS || url.trim().isEmpty
+      footer: Platform.isIOS || !_hasValidUrl
           ? null
           : StatusPrimaryButton(
               label: 'Download Update',
-              onPressed: () => launchUrl(Uri.parse(url)),
+              onPressed: _openDownload,
             ),
     );
   }

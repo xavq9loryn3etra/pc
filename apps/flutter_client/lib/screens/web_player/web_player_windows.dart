@@ -31,6 +31,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
   bool _showControls = false;
   Timer? _hideTimer;
   StreamSubscription? _webMessageSub;
+  StreamSubscription<String>? _urlSub;
 
   @override
   void initState() {
@@ -48,6 +49,13 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
 
       _webMessageSub = _controller.webMessage.listen((msg) {
         _handleMessage(msg);
+      });
+      // The page leaving the embed sites (an ad's redirect): back to the
+      // player.
+      _urlSub = _controller.url.listen((url) {
+        if (!mounted || isAllowedWebPlayerUrl(url, widget.initialUrl)) return;
+        debugPrint('Blocking redirect to: $url');
+        _controller.loadUrl(widget.initialUrl);
       });
 
       /*
@@ -81,7 +89,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
           ) ??
           0.0;
     } else {
-      final m = service.getMovieFromHistory(widget.movie.id);
+      final m = service.getMovieFromHistory(widget.movie.id, type: widget.movie.type);
       if (m != null) startProgress = m.progress ?? 0.0;
     }
 
@@ -224,6 +232,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
               "DEBUG: Pause event - currentTime=$currentTime, duration=$total");
           if (total > 60) {
             final double progress = currentTime / total;
+            if (!_isSaneProgress(progress)) return;
             print("DEBUG: Attempting pause save with progress=$progress");
             _saveProgress(progress);
           } else {
@@ -236,6 +245,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
 
           if (total > 60) {
             final double progress = currentTime / total;
+            if (!_isSaneProgress(progress)) return;
             final now = DateTime.now().millisecondsSinceEpoch;
             if (now - _lastUpdate > 4000) {
               print("DEBUG: Periodic save with progress=$progress");
@@ -249,6 +259,10 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
       print("DEBUG: Message handler error: $e");
     }
   }
+
+  // Any frame on the page can post messages; a position outside the
+  // video (or NaN) isn't one to save.
+  static bool _isSaneProgress(double p) => p.isFinite && p >= 0 && p <= 1;
 
   void _saveProgress(double progress) {
     print(
@@ -287,6 +301,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
   void dispose() {
     _hideTimer?.cancel();
     _webMessageSub?.cancel();
+    _urlSub?.cancel();
     _controller.dispose();
     super.dispose();
   }

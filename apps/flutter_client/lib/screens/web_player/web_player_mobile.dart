@@ -190,6 +190,11 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
   // What season the drawer is currently browsing (may differ from playing)
   int? _browsingSeason;
   late List<Episode> _episodes;
+  // When progress from the page was last saved (ms since epoch).
+  int _lastProgressSave = 0;
+  // Set while switching episodes, till the new one's page starts: the old
+  // page's progress messages would otherwise be saved as the new episode's.
+  bool _ignoreProgressUntilLoaded = false;
 
   // YouTube-style continuous gyro rotation
   StreamSubscription? _accelSubscription;
@@ -337,22 +342,30 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
               return;
             }
 
-            // JSON progress updates
+            // JSON progress updates. Any frame on the page (ads included)
+            // can post here, so only the position is taken from it — the
+            // title and episode are the ones this player has open — and
+            // only a sane one, at most once every 4 s.
             final dynamic data = jsonDecode(message.message);
             if (data is Map) {
               if (data['type'] == 'pause' || data['type'] == 'timeupdate') {
                 final double currentTime =
                     (data['currentTime'] as num).toDouble();
                 final double duration = (data['duration'] as num).toDouble();
-                final int? s = data.containsKey('season') ? data['season'] as int : _currentSeason;
-                final int? e = data.containsKey('episode') ? data['episode'] as int : _currentEpisode;
+                final p = currentTime / duration;
+                if (!p.isFinite || p < 0 || p > 1) return;
+                // Mid-switch: the old episode's page, still reporting.
+                if (_ignoreProgressUntilLoaded) return;
+                final now = DateTime.now().millisecondsSinceEpoch;
+                if (now - _lastProgressSave < 4000) return;
 
                 if (duration > 60 && mounted) {
+                  _lastProgressSave = now;
                   SavedMoviesService().addToHistory(
                     widget.movie,
-                    season: s,
-                    episode: e,
-                    progress: currentTime / duration,
+                    season: _currentSeason,
+                    episode: _currentEpisode,
+                    progress: p,
                   );
                 }
               }
@@ -373,28 +386,11 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
               return NavigationDecision.navigate;
             }
 
-            final uri = Uri.parse(request.url);
-            final host = uri.host;
-            final initialHost = Uri.parse(widget.initialUrl).host;
-
-            // Same-origin — always allow
-            if (host.contains(initialHost) || initialHost.contains(host)) {
-              return NavigationDecision.navigate;
-            }
-
-            // Allow media/streaming URLs.
-            // iOS WKWebView can report HLS manifest or direct video
-            // fetches as navigation events (Android does not).
-            final path = uri.path.toLowerCase();
-            if (path.endsWith('.m3u8') || path.endsWith('.mp4') ||
-                path.endsWith('.ts') || path.endsWith('.webm') ||
-                path.endsWith('.mpd')) {
-              return NavigationDecision.navigate;
-            }
-
-            // Allow common CDN/streaming sub-domains
-            if (host.contains('cdn') || host.contains('stream') ||
-                host.contains('cache') || host.contains('cloud')) {
+            // The page itself: only the embed site it opened on (exact
+            // host or a subdomain) or another known embed site, over
+            // https. Matching by substring let "vidlink.pro.evil.com"
+            // through.
+            if (isAllowedWebPlayerUrl(request.url, widget.initialUrl)) {
               return NavigationDecision.navigate;
             }
 
@@ -408,6 +404,9 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
           // embed player's own JavaScript.
           // ----------------------------------------------------------------
           onPageStarted: (String url) {
+            // The episode switched to has started loading: progress from
+            // here on is its own.
+            _ignoreProgressUntilLoaded = false;
             if (mounted) {
               setState(() => _isLoading = true);
               _showControls.value = true;
@@ -428,18 +427,19 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
               _startHideTimer();
             }
 
-            // Get saved progress for resume
+            // Get saved progress for resume — of the episode loaded now,
+            // which after a switch isn't the one the player opened on.
             double startProgress = 0.0;
             final service = SavedMoviesService();
-            if (widget.season != null && widget.episode != null) {
+            if (_currentSeason != null && _currentEpisode != null) {
               startProgress = service.getEpisodeProgress(
                     widget.movie.id,
-                    widget.season!,
-                    widget.episode!,
+                    _currentSeason!,
+                    _currentEpisode!,
                   ) ??
                   0.0;
             } else {
-              final m = service.getMovieFromHistory(widget.movie.id);
+              final m = service.getMovieFromHistory(widget.movie.id, type: widget.movie.type);
               if (m != null) startProgress = m.progress ?? 0.0;
             }
 
@@ -581,24 +581,32 @@ if (window.flutterTrackingActive) {
   }
 
   Future<void> _switchEpisode(int episodeNumber) async {
-    // 1. Save current progress of old episode before switching
+    // 1. Save current progress of old episode before switching. Read
+    // straight from the page and saved here, under the old episode: a
+    // message posted for it could arrive after the switch below and be
+    // taken for the new one's.
     final oldSeason = _currentSeason;
     final oldEpisode = _currentEpisode;
-    
-    await _controller.runJavaScript("""
-      (function() {
-        var v = document.querySelector('video');
-        if (v && v.duration > 60) {
-          FlutterControlChannel.postMessage(JSON.stringify({
-            type: 'pause',
-            currentTime: v.currentTime,
-            duration: v.duration,
-            season: $oldSeason,
-            episode: $oldEpisode
-          }));
-        }
-      })();
-    """);
+    _ignoreProgressUntilLoaded = true;
+
+    try {
+      final result = await _controller.runJavaScriptReturningResult("""
+        (function() {
+          var v = document.querySelector('video');
+          return (v && v.duration > 60) ? v.currentTime / v.duration : -1;
+        })();
+      """);
+      final p = result is num ? result.toDouble() : double.tryParse('$result');
+      if (p != null && p.isFinite && p >= 0 && p <= 1) {
+        SavedMoviesService().addToHistory(
+          widget.movie,
+          season: oldSeason,
+          episode: oldEpisode,
+          progress: p,
+        );
+      }
+    } catch (_) {}
+    if (!mounted) return;
 
     setState(() {
       // Update both playing and browsing state
@@ -677,6 +685,11 @@ if (window.flutterTrackingActive) {
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false, // Prevent iOS back-swipe from accidentally closing the player
+      // Android's back button still closes it, the same way the close
+      // button does.
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) widget.onClose();
+      },
       child: Scaffold(
       backgroundColor: Colors.black,
       // Use a top-level Stack so the EpisodeDrawer sits ABOVE and OUTSIDE

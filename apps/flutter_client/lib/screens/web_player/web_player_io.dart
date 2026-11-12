@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
 
-import 'web_player_platform_interface.dart';
 import 'web_player_mobile.dart';
 import 'web_player_windows.dart';
 import 'web_player_stub.dart';

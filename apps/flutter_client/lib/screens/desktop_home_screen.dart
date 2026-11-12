@@ -359,17 +359,6 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     );
   }
 
-  Widget _buildMenuLink(BuildContext context, String title, bool isActive) {
-    return Text(
-      title,
-      style: TextStyle(
-        color: isActive ? Colors.white : Colors.white60,
-        fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-        fontSize: 14,
-      ),
-    );
-  }
-
   Widget _buildLogo(BuildContext context) {
     final url = DesktopHomeScreen._heroLogoUrlFor(widget.featuredMovie)!;
     const height = DesktopHomeScreen._heroLogoHeight;
@@ -495,7 +484,10 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
               listenable: SavedMoviesService(),
               builder: (context, _) {
                 final liked =
-                    SavedMoviesService().isFavorite(widget.featuredMovie.id);
+                    SavedMoviesService().isFavorite(
+                          widget.featuredMovie.id,
+                          type: widget.featuredMovie.type,
+                        );
                 return GlassActionButton(
                   onTap: () =>
                       SavedMoviesService().toggleFavorite(widget.featuredMovie),
@@ -561,7 +553,6 @@ class _DesktopSectionList extends StatefulWidget {
   final double posterWidth;
 
   const _DesktopSectionList({
-    super.key,
     required this.title,
     required this.movies,
     required this.heroPrefix,

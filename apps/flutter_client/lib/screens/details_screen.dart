@@ -43,6 +43,9 @@ class DetailsScreen extends StatefulWidget {
   final String? heroTag;
   final VoidCallback? onClose;
   final bool isSidePanel;
+  // Opened by a popcorn:// link rather than a tap: nothing is joined in the
+  // background for a movie the user hasn't chosen to play.
+  final bool fromDeepLink;
 
   const DetailsScreen({
     super.key,
@@ -50,6 +53,7 @@ class DetailsScreen extends StatefulWidget {
     this.heroTag,
     this.onClose,
     this.isSidePanel = false,
+    this.fromDeepLink = false,
   });
 
   /// Starts loading [movie]'s page ahead of it opening — its details, then
@@ -158,7 +162,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
   Season? _selectedSeason;
   int? _selectedEpisode;
   bool _loadingEpisodes = false;
+  // Counts season loads, so only the latest one's result is applied (they
+  // can finish out of order).
+  int _seasonRequest = 0;
+  // A Resume tap is being handled: another one waits for it.
+  bool _resuming = false;
 
+  // The Share button is commented out for now; kept for when it returns.
+  // ignore: unused_element
   Future<void> _shareMovie() async {
     final m = _details ?? widget.movie;
     const downloadUrl =
@@ -230,7 +241,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // updates on its own without a second, full-screen rebuild.
   /// The Like button's heart: filled, in the accent, once it's liked.
   Widget _likeIcon() {
-    final liked = SavedMoviesService().isFavorite(widget.movie.id);
+    final liked = SavedMoviesService().isFavorite(widget.movie.id, type: widget.movie.type);
     return Icon(
       liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
       color: liked ? AppTheme.primaryColor : Colors.white,
@@ -437,7 +448,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     StreamResolver().warmUp(
       _warmedStreams,
       resumeAt:
-          SavedMoviesService().getMovieFromHistory(widget.movie.id)?.progress,
+          SavedMoviesService().getMovieFromHistory(widget.movie.id, type: widget.movie.type)?.progress,
     );
   }
 
@@ -537,7 +548,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
       );
     } catch (e) {
       if (e is DioException && CancelToken.isCancel(e)) return;
-      rethrow;
+      // Not rethrown (nothing awaits this): the page falls back to the
+      // basic details it was opened with, as when none come back.
+      debugPrint('Details failed to load: $e');
     }
     if (!mounted) return;
 
@@ -578,7 +591,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
           type: _details!.type,
           title: _details,
         );
-        _warmUpMovie(_details!.imdbId ?? _details!.id, _movieStreams!);
+        if (!widget.fromDeepLink) {
+          _warmUpMovie(_details!.imdbId ?? _details!.id, _movieStreams!);
+        }
         // Only matters (and only rebuilds the page) while it's in cinemas.
         _movieStreams!.then((streams) {
           if (mounted && streams.isNotEmpty && _details!.isCinemaOnly) {
@@ -702,12 +717,15 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   Future<void> _loadSeasonDetails(int seasonNum) async {
     if (_details == null) return;
+    final token = ++_seasonRequest;
     setState(() => _loadingEpisodes = true);
 
     final episodes = await TMDBService().getSeasonDetails(
       _details!.id,
       seasonNum,
     );
+    // A newer season was asked for meanwhile: its result is the one to show.
+    if (token != _seasonRequest || !mounted) return;
 
     // Inject history progress
     final service = SavedMoviesService();
@@ -723,12 +741,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
       return e;
     }).toList();
 
-    if (mounted) {
-      setState(() {
-        _episodes = processedEpisodes;
-        _loadingEpisodes = false;
-      });
-    }
+    setState(() {
+      _episodes = processedEpisodes;
+      _loadingEpisodes = false;
+    });
   }
 
   /// True if the movie itself, or the currently targeted TV episode, hasn't
@@ -1351,7 +1367,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                               listenable: SavedMoviesService(),
                               builder: (context, _) {
                                 final historyMovie = SavedMoviesService()
-                                    .getMovieFromHistory(widget.movie.id);
+                                    .getMovieFromHistory(widget.movie.id, type: widget.movie.type);
 
                                 // Whether the "quick play" target isn't out yet,
                                 // so the button can look disabled instead of
@@ -1404,12 +1420,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                     ? releaseDateText(tvTargetEpisode?.airDate)
                                     : null;
 
-                                final defaultProvider =
-                                    Platform.isIOS ? 'vsembed' : 'vidlink';
-                                final altProvider =
-                                    Platform.isIOS ? 'vidlink' : 'vsembed';
-                                final altLabel =
-                                    Platform.isIOS ? 'Server 1' : 'Server 4';
                                 // Streaming service carrying this title in
                                 // the user's country, if any: attached to
                                 // the Play pill, or replacing it while
@@ -1563,6 +1573,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                       onTap: tvUnreleased
                                                           ? null
                                                           : () async {
+                                                            if (_resuming) return;
+                                                            _resuming = true;
+                                                            try {
                                                               int s = historyMovie
                                                                       ?.currentSeason ??
                                                                   1;
@@ -1597,6 +1610,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
                                                               await _loadSeasonDetails(
                                                                   s);
+                                                              if (!mounted) return;
                                                               // The same popup as
                                                               // tapping that
                                                               // episode's card.
@@ -1612,6 +1626,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                               } else {
                                                                 _playWithTorrent();
                                                               }
+                                                            } finally {
+                                                              _resuming = false;
+                                                            }
                                                             },
                                                       borderRadius:
                                                           BorderRadius.circular(
@@ -2058,6 +2075,9 @@ class _TorrentQualitySelectorSheetState
   // The quality being started, and how that's going — shown on its row
   // (see QualityOptionList.starting).
   QualityOption? _startingOption;
+  // A pick is being saved (its language) before it starts: a second tap in
+  // that moment is ignored.
+  bool _choosing = false;
   String? _resolvingMessage;
   // Why the last tapped stream failed to start. Shown inside the sheet —
   // a SnackBar would land on the details screen *behind* this modal sheet.
@@ -2170,7 +2190,7 @@ class _TorrentQualitySelectorSheetState
             resumeAt: s != null && e != null
                 ? SavedMoviesService().getEpisodeProgress(widget.movie.id, s, e)
                 : SavedMoviesService()
-                    .getMovieFromHistory(widget.movie.id)
+                    .getMovieFromHistory(widget.movie.id, type: widget.movie.type)
                     ?.progress,
           );
         }
@@ -2186,12 +2206,18 @@ class _TorrentQualitySelectorSheetState
   }
 
   void _selectQuality(QualityOption option) async {
+    if (_startingOption != null || _choosing) return;
     final stream = option.best;
     // Listed in another audio language than the saved one: that's the one
     // to play in now, and for the rest of the series.
     final language = _language;
     if (language != null) {
-      await AudioLanguageService().set(widget.details, language);
+      _choosing = true;
+      try {
+        await AudioLanguageService().set(widget.details, language);
+      } finally {
+        _choosing = false;
+      }
       if (!mounted) return;
     }
     if (widget.onStreamSelected != null && !widget.resolveOnSelect) {

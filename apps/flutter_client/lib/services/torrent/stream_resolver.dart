@@ -748,7 +748,7 @@ class StreamResolver {
           outcome.complete(
               StreamResolveResult(stream: candidate, result: result));
         } catch (e) {
-          _engine.cleanup(id);
+          _engine.discardFailedStart(id);
           failed++;
           if (failed == candidates.length) {
             outcome.completeError(e);

@@ -8,6 +8,7 @@ import 'download_ahead_settings.dart';
 import 'free_space.dart';
 import 'torrent_download_registry.dart';
 import 'torrent_paths.dart';
+import 'warm_owners.dart';
 
 class TorrentEngineService {
   static final TorrentEngineService _instance = TorrentEngineService._();
@@ -123,6 +124,11 @@ class TorrentEngineService {
   final Set<int> _streaming = {};
   // Head starts still fetching, by lowercase info hash (see warmUp).
   final Set<String> _warming = {};
+  // Who holds each head start, so coolDown ends it only for the last one.
+  final WarmOwners _warmOwners = WarmOwners();
+  // Torrents whose folder already had files when they were added: a failed
+  // start doesn't delete them (see discardFailedStart).
+  final Set<String> _hadData = {};
 
   /// Add magnet, wait for metadata, start stream, return local URL
   Future<StreamResult> streamMagnet(
@@ -134,9 +140,30 @@ class TorrentEngineService {
     try {
       return startStream(id, fileIndex: fileIndex);
     } catch (e) {
-      cleanup(id);
+      discardFailedStart(id);
       rethrow;
     }
+  }
+
+  /// For a torrent [startStream] failed on: removes it, with its files, only
+  /// when that loses nothing — nothing downloaded yet, no files there
+  /// before, no head start holding it. Otherwise just pauses it.
+  void discardFailedStart(int id) {
+    final key = _keyOf(id);
+    final hasData = (engine.torrents[id]?.totalDone ?? 0) > 0 ||
+        (key != null && (_hadData.contains(key) || _warmOwners.owns(key)));
+    if (hasData) {
+      pause(id);
+    } else {
+      cleanup(id);
+    }
+  }
+
+  String? _keyOf(int id) {
+    for (final e in _idsByHash.entries) {
+      if (e.value == id) return e.key;
+    }
+    return null;
   }
 
   /// Adds [infoHash] (or finds it already added this session), lets it run
@@ -207,6 +234,11 @@ class TorrentEngineService {
       // directory at a time without risking touching another torrent's
       // files.
       final savePath = await TorrentPaths.savePathFor(key);
+      if (await Directory(savePath).exists()) {
+        _hadData.add(key);
+      } else {
+        _hadData.remove(key);
+      }
       id = engine.addMagnet(magnetUri, savePath);
       _idsByHash[key] = id;
     }
@@ -260,6 +292,9 @@ class TorrentEngineService {
     }
 
     final videoIdx = fileIndex ?? _findLargestVideoFile(files);
+    // Play has taken it over: no head start's to clean up any more.
+    final key = _keyOf(id);
+    if (key != null) _warmOwners.clear(key);
 
     // The head start's stream, already downloading the file's start (see
     // warmUp) — when it's for this same file.
@@ -408,7 +443,14 @@ class TorrentEngineService {
   Future<void> warmUp(List<WarmTarget> targets, {double? resumeAt}) async {
     if (targets.isEmpty) return;
     final keys = [for (final t in targets) t.infoHash.toLowerCase()];
-    if (keys.any((k) => _liveId(k) != null)) return;
+    if (keys.any((k) => _liveId(k) != null)) {
+      // Already added. Those a head start holds are shared with this page
+      // (so its coolDown doesn't end it for the other); the rest —
+      // playing, or downloaded earlier — are never this page's to clean up.
+      _warmOwners.share(keys);
+      return;
+    }
+    _warmOwners.acquire(keys);
     _warming.addAll(keys);
     try {
       final winner = Completer<(WarmTarget, int)?>();
@@ -564,6 +606,8 @@ class TorrentEngineService {
     final known = await TorrentDownloadRegistry.loadAll();
     for (final infoHash in infoHashes) {
       final key = infoHash.toLowerCase();
+      // Not one a head start holds, or another page still wants it.
+      if (!_warmOwners.release(key)) continue;
       final stillConnecting = _warming.remove(key);
       final id = _idsByHash[key];
       if (id == null || _streaming.contains(id)) continue;
@@ -646,6 +690,11 @@ class TorrentEngineService {
   /// episode mid-session discards the old stream on purpose), not for a
   /// normal player close.
   void cleanup(int torrentId) {
+    final key = _keyOf(torrentId);
+    if (key != null) {
+      _hadData.remove(key);
+      _warmOwners.clear(key);
+    }
     _idsByHash.removeWhere((_, id) => id == torrentId);
     _streaming.remove(torrentId);
     if (_streaming.isEmpty) _stopWatchingDisk();

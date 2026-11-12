@@ -228,6 +228,17 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     DeepLinkService().init(_navigatorKey);
   }
 
+  /// Tells the deep-link service whether a link can open now: not before
+  /// the splash and first-run screens are done, never over the maintenance
+  /// or forced-update screens.
+  void _syncDeepLinks() {
+    DeepLinkService().setAppState(
+      ready: _splashDone && _currentScreen == _AppScreen.modeSelector,
+      blocked: _currentScreen == _AppScreen.maintenance ||
+          _currentScreen == _AppScreen.updateRequired,
+    );
+  }
+
   void _initConnectivity() {
     _connectivitySubscription =
         Connectivity().onConnectivityChanged.listen((results) {
@@ -287,6 +298,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           _currentScreen = _AppScreen.maintenance;
           _maintenanceMsg = flags.maintenanceMessage;
         });
+        _syncDeepLinks();
       }
       return;
     }
@@ -300,6 +312,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             _updateMsg = flags.updateRequiredMessage;
             _updateUrl = flags.updateUrl;
           });
+          _syncDeepLinks();
         }
         return;
       }
@@ -325,6 +338,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     } catch (_) {
       if (mounted) setState(() => _currentScreen = _AppScreen.modeSelector);
     }
+    _syncDeepLinks();
   }
 
   bool _isVersionLessThan(String current, String minReq) {
@@ -366,6 +380,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     await prefs.setBool('has_seen_onboarding', true);
     if (mounted) {
       setState(() => _currentScreen = _AppScreen.modeSelector);
+      _syncDeepLinks();
     }
   }
 
@@ -462,7 +477,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                 opacity: _splashFading ? 0 : 1,
                 duration: const Duration(milliseconds: 450),
                 curve: Curves.easeOut,
-                onEnd: () => setState(() => _splashDone = true),
+                onEnd: () {
+                  setState(() => _splashDone = true);
+                  _syncDeepLinks();
+                },
                 child: Scaffold(
                   backgroundColor: AppTheme.scaffoldColor,
                   body: Stack(

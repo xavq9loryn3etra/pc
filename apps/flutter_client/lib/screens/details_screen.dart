@@ -43,6 +43,9 @@ class DetailsScreen extends StatefulWidget {
   final String? heroTag;
   final VoidCallback? onClose;
   final bool isSidePanel;
+  // Opened by a popcorn:// link rather than a tap: nothing is joined in the
+  // background for a movie the user hasn't chosen to play.
+  final bool fromDeepLink;
 
   const DetailsScreen({
     super.key,
@@ -50,6 +53,7 @@ class DetailsScreen extends StatefulWidget {
     this.heroTag,
     this.onClose,
     this.isSidePanel = false,
+    this.fromDeepLink = false,
   });
 
   /// Starts loading [movie]'s page ahead of it opening — its details, then
@@ -578,7 +582,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
           type: _details!.type,
           title: _details,
         );
-        _warmUpMovie(_details!.imdbId ?? _details!.id, _movieStreams!);
+        if (!widget.fromDeepLink) {
+          _warmUpMovie(_details!.imdbId ?? _details!.id, _movieStreams!);
+        }
         // Only matters (and only rebuilds the page) while it's in cinemas.
         _movieStreams!.then((streams) {
           if (mounted && streams.isNotEmpty && _details!.isCinemaOnly) {

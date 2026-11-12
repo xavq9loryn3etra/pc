@@ -1729,32 +1729,77 @@ static ReadResult read_piece_data(StreamEngine* s, const ConnState& conn,
 
 // ── HTTP server — port of torr/stream.go Stream() ───────────────────────────
 
+// One byte range from a Range header. present: there was a usable one —
+// either [start, end] (end -1: to the end of the file) or, suffix >= 0,
+// the file's last [suffix] bytes.
 struct RangeReq {
-    int64_t start = -1;
-    int64_t end   = -1;
-    bool    valid = false;
+    bool    present = false;
+    int64_t start  = -1;
+    int64_t end    = -1;
+    int64_t suffix = -1;
 };
 
-static RangeReq parse_range(const char* buf, int len) {
+static std::string trim_ws(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t");
+    if (a == std::string::npos) return {};
+    size_t b = s.find_last_not_of(" \t");
+    return s.substr(a, b - a + 1);
+}
+
+// Non-negative decimal (up to 18 digits), or -1.
+static int64_t parse_uint(const std::string& s) {
+    if (s.empty() || s.size() > 18) return -1;
+    int64_t v = 0;
+    for (char ch : s) {
+        if (ch < '0' || ch > '9') return -1;
+        v = v * 10 + (ch - '0');
+    }
+    return v;
+}
+
+// The Range header of request [req] (its header lines only — never the
+// request line). Multiple ranges or a malformed one: not present.
+static RangeReq parse_range(const std::string& req) {
     RangeReq r;
-    std::string s(buf, (size_t)len);
-    std::string sl = s;
-    for (auto& c : sl) c = (char)tolower((unsigned char)c);
-
-    auto pos = sl.find("range: bytes=");
-    if (pos == std::string::npos) return r;
-
-    r.valid = true;
-    pos += 13;
-    auto end = s.find('\r', pos);
-    if (end == std::string::npos) end = s.size();
-    std::string rs = s.substr(pos, end - pos);
-    auto dash = rs.find('-');
-    if (dash != std::string::npos) {
-        try {
-            if (dash > 0) r.start = std::stoll(rs.substr(0, dash));
-            if (dash + 1 < rs.size()) r.end = std::stoll(rs.substr(dash + 1));
-        } catch (...) {}
+    size_t pos = req.find("\r\n");                 // end of the request line
+    while (pos != std::string::npos) {
+        const size_t ls = pos + 2;
+        size_t le = req.find("\r\n", ls);
+        if (le == std::string::npos) le = req.size();
+        if (le == ls) break;                       // blank line: end of headers
+        const std::string line = req.substr(ls, le - ls);
+        const auto colon = line.find(':');
+        if (colon != std::string::npos) {
+            std::string name = trim_ws(line.substr(0, colon));
+            for (auto& ch : name) ch = (char)tolower((unsigned char)ch);
+            if (name == "range") {
+                std::string v = trim_ws(line.substr(colon + 1));
+                std::string unit = v.substr(0, std::min<size_t>(6, v.size()));
+                for (auto& ch : unit) ch = (char)tolower((unsigned char)ch);
+                if (unit != "bytes=") return r;
+                const std::string spec = v.substr(6);
+                if (spec.find(',') != std::string::npos) return r;
+                const auto dash = spec.find('-');
+                if (dash == std::string::npos) return r;
+                const std::string a = trim_ws(spec.substr(0, dash));
+                const std::string b = trim_ws(spec.substr(dash + 1));
+                if (a.empty()) {                   // "-n": the last n bytes
+                    const int64_t n = parse_uint(b);
+                    if (n < 0) return r;
+                    r.suffix = n;
+                } else {
+                    const int64_t s0 = parse_uint(a);
+                    const int64_t e0 = b.empty() ? -1 : parse_uint(b);
+                    if (s0 < 0 || (!b.empty() && (e0 < 0 || e0 < s0))) return r;
+                    r.start = s0;
+                    r.end   = e0;
+                }
+                r.present = true;
+                return r;
+            }
+        }
+        if (le >= req.size()) break;
+        pos = le;
     }
     return r;
 }
@@ -2164,13 +2209,34 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
             int64_t fsz = s->file_size;
             if (fsz <= 0) goto cleanup;
 
-            RangeReq rr = parse_range(buf, total);
-            int64_t rstart = (rr.valid && rr.start >= 0) ? rr.start : 0;
-            int64_t rend   = (rr.valid && rr.end >= 0)   ? rr.end   : fsz - 1;
-            rstart = std::clamp(rstart, (int64_t)0, fsz - 1);
-            rend   = std::clamp(rend,   rstart,     fsz - 1);
+            // Range: one byte range, "a-", "a-b" or the suffix "-n"; any
+            // other form is ignored (the whole file, 200), as RFC 9110
+            // allows. A start past the end, or "-0", can't be met: 416.
+            RangeReq rr = parse_range(req);
+            int64_t rstart = 0, rend = fsz - 1;
+            bool is_partial = false;
+            if (rr.present) {
+                bool satisfiable;
+                if (rr.suffix >= 0) {
+                    satisfiable = rr.suffix > 0;
+                    rstart = std::max<int64_t>(0, fsz - rr.suffix);
+                } else {
+                    satisfiable = rr.start < fsz;
+                    rstart = rr.start;
+                    if (rr.end >= 0 && rr.end < fsz) rend = rr.end;
+                }
+                if (!satisfiable) {
+                    const std::string h416 =
+                        "HTTP/1.1 416 Range Not Satisfiable\r\n"
+                        "Content-Range: bytes */" + std::to_string(fsz) + "\r\n"
+                        "Content-Length: 0\r\n"
+                        "Connection: close\r\n\r\n";
+                    send_all(cli, h416.data(), (int)h416.size());
+                    goto cleanup;
+                }
+                is_partial = true;
+            }
             int64_t clen = rend - rstart + 1;
-            bool is_partial = (rr.valid && rr.start >= 0);
 
             // seek detection — 1-to-1 port of TorrServer's seek path
             //
@@ -2192,7 +2258,8 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
             int64_t old_head = s->read_head.load();
             const int64_t tail_bytes = std::min<int64_t>(StreamEngine::PROTECT_BYTES, fsz / 20);
             bool is_tail_req = (rstart >= fsz - tail_bytes);
-            bool reads_on = !rr.valid || rr.end < 0 || clen >= 1024 * 1024;
+            bool reads_on = !rr.present || (rr.suffix < 0 && rr.end < 0)
+                         || clen >= 1024 * 1024;
             bool primary = is_get && !is_tail_req && reads_on;
             TB_LOG("handle_conn: rstart=%lld rend=%lld old_head=%lld is_tail=%d primary=%d",
                    (long long)rstart, (long long)rend, (long long)old_head, is_tail_req?1:0, primary?1:0);

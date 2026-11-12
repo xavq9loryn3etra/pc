@@ -13,6 +13,11 @@ workflows:
         script: |
           cd apps/flutter_client
           flutter pub get
+      - name: Analyze and test
+        script: |
+          cd apps/flutter_client
+          flutter analyze --no-fatal-infos
+          flutter test
       - name: Build Android Release
         script: |
           cd apps/flutter_client

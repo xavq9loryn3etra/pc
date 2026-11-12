@@ -322,6 +322,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   // while we're supposed to be playing, and if so, does that same
   // wipe-and-retry automatically.
   Timer? _stallWatchdogTimer;
+
+  // Lets the screen sleep once paused for a minute (see _playingSub).
+  Timer? _wakelockTimer;
   Duration _lastWatchdogPosition = Duration.zero;
   int? _lastWatchdogDownloadedBytes;
   int _stallTicks = 0;
@@ -381,7 +384,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     // Keep the screen on for the whole time the player is open — without
     // this, the OS can lock the screen mid-playback (video keeps decoding
     // behind a black/locked screen) since Flutter doesn't request a wakelock
-    // on its own.
+    // on its own. (Released a minute after a pause, kept up again on play:
+    // see _playingSub.)
     WakelockPlus.enable();
     _currentStream = widget.selectedStream;
     _availableStreams = widget.availableStreams;
@@ -684,6 +688,19 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
         // Sync play/pause to notification
         _syncMediaSessionPlaybackState();
+        // Screen kept on while playing; a paused player (left that way)
+        // lets it sleep after a minute — not while a switch has it held
+        // paused on purpose.
+        _wakelockTimer?.cancel();
+        if (val) {
+          WakelockPlus.enable();
+        } else {
+          _wakelockTimer = Timer(const Duration(minutes: 1), () {
+            if (mounted && !_isPlaying && !_loadingVideo) {
+              WakelockPlus.disable();
+            }
+          });
+        }
         // Up next's countdown runs only while the video plays.
         if (_upNextShown.value) {
           val ? _upNextFill.forward() : _upNextFill.stop();
@@ -2998,6 +3015,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     WidgetsBinding.instance.removeObserver(this);
+    _wakelockTimer?.cancel();
     WakelockPlus.disable();
     _screenTapTimer?.cancel();
     _bufferingRevealTimer?.cancel();

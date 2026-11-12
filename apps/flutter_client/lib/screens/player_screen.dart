@@ -36,7 +36,6 @@ import '../widgets/floating_bottom_nav_bar.dart'
 import '../widgets/player_settings_panel.dart';
 import '../widgets/glass_blur.dart';
 import '../widgets/glass_bubble_bar.dart';
-import 'details_screen.dart';
 import 'web_player/web_player.dart';
 import '../services/scraper_service.dart';
 import '../services/skip_segments_service.dart';
@@ -1124,6 +1123,10 @@ class _PlayerScreenState extends State<PlayerScreen>
           isCancelled: () => !mounted,
         );
         started = resolved.result;
+        if (_closedDuringSwitch(started)) return;
+        // Re-downloaded copy: register it so it isn't deleted as an
+        // unregistered torrent when the details page closes.
+        await _rememberPlayedTorrent(resolved.stream);
       }
       if (_closedDuringSwitch(started)) return;
       final resolvedStream = resolved.stream;

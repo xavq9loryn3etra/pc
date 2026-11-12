@@ -643,6 +643,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     // A phone's memory is tighter: a smaller demuxer cache there.
     final phone = Platform.isAndroid || Platform.isIOS;
     await mpv.observeProperty('chapter-list', _onMpvChapterList);
+    // Which subtitle tracks are on, in the log ([subtitles] sid / secondary).
+    for (final p in ['sid', 'secondary-sid']) {
+      await mpv.observeProperty(p, (v) async => print('[subtitles] $p = $v'));
+    }
     for (final p in {
       'cache': 'yes',
       'cache-secs': '60', // Keep up to 60s of video cached ahead
@@ -3623,6 +3627,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   Future<void> _applySubtitleTrackToPlayer(SubtitleTrackData? track) async {
+    // One subtitle at a time: the subtitle view shows mpv's secondary
+    // subtitle under the main one, and with one set the same line showed
+    // twice (the video's own English track and the downloaded one).
+    try {
+      await (player.platform as NativePlayer)
+          .setProperty('secondary-sid', 'no');
+    } catch (_) {}
     if (track == null || track.url.isEmpty) {
       await player.setSubtitleTrack(SubtitleTrack.no());
     } else if (track.isEmbedded) {

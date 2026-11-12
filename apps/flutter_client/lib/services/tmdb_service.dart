@@ -1060,8 +1060,8 @@ class TMDBService {
       Episode(
         id: e['id'],
         episodeNumber: episodeNumber,
-        name: e['name'],
-        overview: e['overview'],
+        name: e['name'] as String? ?? 'Episode $episodeNumber',
+        overview: e['overview'] as String? ?? '',
         stillPath:
             e['still_path'] != null ? '$_imageBase${e['still_path']}' : null,
         airDate: e['air_date'],

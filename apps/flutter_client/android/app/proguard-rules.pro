@@ -7,9 +7,8 @@
 -keep class com.sun.jna.** { *; }
 -keepclassmembers class * extends com.sun.jna.Structure { public *; }
 
-# libtorrent_flutter native bridge
--keep class com.libtorrent.** { *; }
--keep class libtorrent_flutter.** { *; }
+# (libtorrent_flutter is an FFI plugin with no Java/Kotlin classes, so it
+# needs no keep rules.)
 
 # webview_flutter JS bridge objects
 -keepclassmembers class * {

@@ -1342,8 +1342,90 @@ struct SessionWrapper {
         }
     }
 
+    // ── resume data writer ──
+    // save_resume_data_alerts are handed to this thread, which writes the
+    // files: the alert thread no longer blocks on disk I/O on every pause.
+    std::mutex                          rq_mu;
+    std::condition_variable             rq_cv;
+    std::deque<lt::add_torrent_params>  rq;
+    bool                                rq_stop = false;
+    std::thread                         resume_thread;
+
+    void queue_resume(lt::add_torrent_params&& p) {
+        {
+            std::lock_guard<std::mutex> lk(rq_mu);
+            rq.push_back(std::move(p));
+        }
+        rq_cv.notify_one();
+    }
+
+    void resume_writer() {
+        for (;;) {
+            lt::add_torrent_params p;
+            {
+                std::unique_lock<std::mutex> lk(rq_mu);
+                rq_cv.wait(lk, [&] { return rq_stop || !rq.empty(); });
+                if (rq.empty()) return;  // stopping, and all written
+                p = std::move(rq.front());
+                rq.pop_front();
+            }
+            try { write_resume(p); } catch (...) {}
+            if (resume_outstanding.load() > 0) resume_outstanding.fetch_sub(1);
+        }
+    }
+
+    void start_resume_writer() {
+        resume_thread = std::thread([this]() { resume_writer(); });
+    }
+
+    // Writes what's queued, then ends the thread.
+    void stop_resume_writer() {
+        {
+            std::lock_guard<std::mutex> lk(rq_mu);
+            rq_stop = true;
+        }
+        rq_cv.notify_all();
+        if (resume_thread.joinable()) resume_thread.join();
+    }
+
     // ── TorrServer config — port of settings.BTSets (session-level defaults) ──
+    // bt_config, normal_upload_limit and metered are guarded by cfg_mu.
+    std::mutex   cfg_mu;
     lt_bt_config bt_config;
+    int          normal_upload_limit = 0;   // bytes/s, 0 = unlimited
+    bool         metered = false;           // lt_set_metered
+
+    lt_bt_config config_copy() {
+        std::lock_guard<std::mutex> lk(cfg_mu);
+        return bt_config;
+    }
+
+    // Applies the upload side of the settings: upload disabled (config),
+    // else the metered profile (mobile data: 4 unchoke slots, at most
+    // 64 KB/s up), else the normal (unlimited unchoke slots, the upload
+    // limit last set).
+    void apply_upload_policy() {
+        int unchoke, upload;
+        {
+            std::lock_guard<std::mutex> lk(cfg_mu);
+            if (bt_config.disable_upload) {
+                unchoke = 0;
+                upload  = 1;   // near-zero upload
+            } else if (metered) {
+                constexpr int kMeteredUpload = 64 * 1024;
+                unchoke = 4;
+                upload  = (normal_upload_limit > 0)
+                    ? std::min(normal_upload_limit, kMeteredUpload) : kMeteredUpload;
+            } else {
+                unchoke = -1;
+                upload  = normal_upload_limit;
+            }
+        }
+        lt::settings_pack sp;
+        sp.set_int(lt::settings_pack::unchoke_slots_limit, unchoke);
+        sp.set_int(lt::settings_pack::upload_rate_limit, upload);
+        session.apply_settings(sp);
+    }
 
     void init_default_config() {
         // port of settings.SetDefaultConfig()
@@ -1439,9 +1521,9 @@ struct SessionWrapper {
 
                         // resume data → written beside the torrent's files
                         else if (auto* sra = lt::alert_cast<lt::save_resume_data_alert>(a)) {
-                            write_resume(sra->params);
-                            if (resume_outstanding.load() > 0)
-                                resume_outstanding.fetch_sub(1);
+                            // written on the resume thread, which also
+                            // counts it off resume_outstanding
+                            queue_resume(std::move(sra->params));
                         }
                         else if (lt::alert_cast<lt::save_resume_data_failed_alert>(a)) {
                             if (resume_outstanding.load() > 0)
@@ -2500,23 +2582,29 @@ TORRENT_API lt_session_t lt_create_session_with_state(const char* iface,
         if (ul > 0) sp.set_int(lt::settings_pack::upload_rate_limit,   ul);
 
         // ── connection speed — get peers fast ──
-        sp.set_int (lt::settings_pack::connection_speed,          200);
-        sp.set_int (lt::settings_pack::torrent_connect_boost,     200);
+        // 50 connection attempts a second (was 200): plenty to fill a
+        // torrent's 25-50 peers in a second or two, without the radio and
+        // CPU cost of hundreds of half-open sockets.
+        sp.set_int (lt::settings_pack::connection_speed,          50);
+        sp.set_int (lt::settings_pack::torrent_connect_boost,     50);
         sp.set_bool(lt::settings_pack::smooth_connects,           false);
-        // Session-wide cap. Per-torrent cap (default 25) is what actually
-        // governs streaming fanout — see set_max_connections() in
-        // lt_start_stream. Keep this comfortably above per-torrent * active.
-        sp.set_int (lt::settings_pack::connections_limit,         200);
+        // Session-wide cap: 4 × the per-torrent cap (25 until
+        // lt_configure_session says otherwise; each torrent gets it as
+        // max_connections when added). A few torrents racing at once fit.
+        sp.set_int (lt::settings_pack::connections_limit,         4 * 25);
         sp.set_int (lt::settings_pack::min_reconnect_time,        5);
         sp.set_int (lt::settings_pack::max_failcount,             3);
         sp.set_int (lt::settings_pack::peer_connect_timeout,      5);
         sp.set_int (lt::settings_pack::handshake_timeout,         5);
 
-        // ── timeouts — detect slow/stalled peers quickly for streaming ──
-        sp.set_int (lt::settings_pack::piece_timeout,             5);
-        sp.set_int (lt::settings_pack::request_timeout,           5);
-        sp.set_int (lt::settings_pack::peer_timeout,              15);
-        sp.set_int (lt::settings_pack::inactivity_timeout,        15);
+        // ── timeouts ──
+        // Long enough not to drop slow but usable peers (5/5/15/15 did, on
+        // thin swarms and mobile links); the deadline picker already
+        // routes urgent blocks to the fast ones.
+        sp.set_int (lt::settings_pack::piece_timeout,             20);
+        sp.set_int (lt::settings_pack::request_timeout,           20);
+        sp.set_int (lt::settings_pack::peer_timeout,              60);
+        sp.set_int (lt::settings_pack::inactivity_timeout,        60);
 
         // ── request pipeline — short queue time = fast seek response ──
         // request_queue_time is SECONDS of outstanding requests per peer.
@@ -2566,7 +2654,8 @@ TORRENT_API lt_session_t lt_create_session_with_state(const char* iface,
             "router.bittorrent.com:6881,"
             "dht.transmissionbt.com:6881,"
             "router.utorrent.com:6881");
-        sp.set_int (lt::settings_pack::dht_announce_interval,     60);
+        // (dht_announce_interval left at libtorrent's 15 min: every 60 s was a
+        // steady drain of radio wake-ups and data for no faster start.)
         sp.set_bool(lt::settings_pack::announce_to_all_trackers,  true);
         sp.set_bool(lt::settings_pack::announce_to_all_tiers,     true);
 
@@ -2641,6 +2730,8 @@ TORRENT_API lt_session_t lt_create_session_with_state(const char* iface,
         params.settings = std::move(sp);
         auto* sw = new SessionWrapper(std::move(params));
         sw->init_default_config();
+        sw->normal_upload_limit = (ul > 0) ? ul : 0;
+        sw->start_resume_writer();
         sw->start_alert_thread();
         set_err("");
         return reinterpret_cast<lt_session_t>(sw);
@@ -2713,6 +2804,9 @@ TORRENT_API void lt_destroy_session(lt_session_t session) {
         if (sw->alert_thread.joinable()) sw->alert_thread.join();
     } catch (...) {}
 
+    // (after the alert thread: nothing more can be queued)
+    try { sw->stop_resume_writer(); } catch (...) {}
+
     try { delete sw; } catch (...) {}
 }
 
@@ -2757,6 +2851,11 @@ TORRENT_API lt_torrent_id lt_add_magnet(lt_session_t session,
         atp.flags &= ~lt::torrent_flags::paused;
         atp.flags &= ~lt::torrent_flags::auto_managed;
         nothing_wanted_until_streamed(atp);
+        {
+            // the per-torrent peer cap from the start, not only once streamed
+            const int lim = sw->config_copy().connections_limit;
+            atp.max_connections = (lim > 0) ? lim : 25;
+        }
 
         // Trackerless magnet (only an info-hash, no &tr=...)? Seed it with a
         // curated set of public open trackers so peer discovery doesn't have
@@ -2811,6 +2910,11 @@ TORRENT_API lt_torrent_id lt_add_torrent_file(lt_session_t session,
         atp.flags &= ~lt::torrent_flags::paused;
         atp.flags &= ~lt::torrent_flags::auto_managed;
         nothing_wanted_until_streamed(atp);
+        {
+            // the per-torrent peer cap from the start, not only once streamed
+            const int lim = sw->config_copy().connections_limit;
+            atp.max_connections = (lim > 0) ? lim : 25;
+        }
 
         if (stream_only) {
             atp.storage_mode = lt::storage_mode_sparse;
@@ -3081,8 +3185,9 @@ TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
 
     // ── TorrCache initialization — port of torrstor.NewCache + Cache.Init ──
     // Use session-level bt_config cache_size, fall back to explicit arg, then default 64MB
+    const lt_bt_config cfg = sw->config_copy();
     int64_t cache_capacity = (max_cache_bytes > 0) ? max_cache_bytes
-                           : (sw->bt_config.cache_size > 0) ? sw->bt_config.cache_size
+                           : (cfg.cache_size > 0) ? cfg.cache_size
                            : (64 * 1024 * 1024);
     s->cache = std::make_unique<TorrCache>();
     s->cache->init(cache_capacity, s->piece_length, ti->num_pieces(), handle);
@@ -3095,13 +3200,13 @@ TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
     // the time-critical picker fans block requests across hundreds of
     // peers — head-of-line blocked by the slowest one. TorrServer caps at
     // 25 per torrent for exactly this reason.
-    if (sw->bt_config.connections_limit > 0) {
-        s->cache->connections_limit = sw->bt_config.connections_limit;
-        try { handle.set_max_connections(sw->bt_config.connections_limit); } catch (...) {}
+    if (cfg.connections_limit > 0) {
+        s->cache->connections_limit = cfg.connections_limit;
+        try { handle.set_max_connections(cfg.connections_limit); } catch (...) {}
     }
     // apply session-level reader_read_ahead to cache
-    if (sw->bt_config.reader_read_ahead >= 5 && sw->bt_config.reader_read_ahead <= 100)
-        s->cache->reader_read_ahead_pct = sw->bt_config.reader_read_ahead;
+    if (cfg.reader_read_ahead >= 5 && cfg.reader_read_ahead <= 100)
+        s->cache->reader_read_ahead_pct = cfg.reader_read_ahead;
 
     lt_stream_id sid = s->id;
     StreamEngine* raw = s.get();
@@ -3390,9 +3495,22 @@ TORRENT_API void lt_set_download_limit(lt_session_t session, int bps) {
 
 TORRENT_API void lt_set_upload_limit(lt_session_t session, int bps) {
     if (!session) return;
-    lt::settings_pack sp;
-    sp.set_int(lt::settings_pack::upload_rate_limit, bps);
-    to_sw(session)->session.apply_settings(sp);
+    auto* sw = to_sw(session);
+    {
+        std::lock_guard<std::mutex> lk(sw->cfg_mu);
+        sw->normal_upload_limit = (bps > 0) ? bps : 0;
+    }
+    sw->apply_upload_policy();  // (capped further while metered)
+}
+
+TORRENT_API void lt_set_metered(lt_session_t session, int metered) {
+    if (!session) return;
+    auto* sw = to_sw(session);
+    {
+        std::lock_guard<std::mutex> lk(sw->cfg_mu);
+        sw->metered = metered != 0;
+    }
+    sw->apply_upload_policy();
 }
 
 // ── utility ─────────────────────────────────────────────────────────────────────
@@ -3500,14 +3618,26 @@ TORRENT_API void lt_configure_session(lt_session_t session,
     if (cfg.preload_cache > 100)
         cfg.preload_cache = 100;
 
-    sw->bt_config = cfg;
+    {
+        std::lock_guard<std::mutex> lk(sw->cfg_mu);
+        sw->bt_config = cfg;
+        sw->normal_upload_limit = (cfg.upload_rate_limit > 0)
+            ? cfg.upload_rate_limit * 1024 : 0;
+    }
 
     // apply to libtorrent session — port of btserver.go configure()
     lt::settings_pack sp;
 
-    // port of: bt.config.DisableIPv6 = !settings.BTsets.EnableIPv6
-    if (!cfg.enable_ipv6) {
-        sp.set_str(lt::settings_pack::listen_interfaces, "0.0.0.0:6881");
+    // Listen on IPv4 and IPv6 both, on the configured port (0: 6881, as
+    // lt_create_session). enable_ipv6 is ignored: "0" used to rewrite this
+    // to 0.0.0.0:6881 alone, dropping every IPv6 peer (the many mobile
+    // networks that are IPv6-first) and ignoring peers_listen_port.
+    {
+        const int port = (cfg.peers_listen_port > 0 && cfg.peers_listen_port < 65536)
+            ? cfg.peers_listen_port : 6881;
+        const std::string p = std::to_string(port);
+        sp.set_str(lt::settings_pack::listen_interfaces,
+                   "0.0.0.0:" + p + ",[::]:" + p);
     }
 
     // port of: bt.config.DisableTCP / DisableUTP
@@ -3530,15 +3660,12 @@ TORRENT_API void lt_configure_session(lt_session_t session,
     // port of: bt.config.NoDHT = settings.BTsets.DisableDHT
     sp.set_bool(lt::settings_pack::enable_dht, !cfg.disable_dht);
 
-    // port of: bt.config.NoUpload = settings.BTsets.DisableUpload
-    if (cfg.disable_upload) {
-        sp.set_int(lt::settings_pack::upload_rate_limit, 1); // near-zero upload
-        sp.set_int(lt::settings_pack::unchoke_slots_limit, 0);
-        sp.set_int(lt::settings_pack::active_seeds, 0);
-    }
+    // (disable_upload, the upload limit and the metered profile: see
+    // apply_upload_policy, below)
 
-    // port of: bt.config.EstablishedConnsPerTorrent = settings.BTsets.ConnectionsLimit
-    sp.set_int(lt::settings_pack::connections_limit, cfg.connections_limit * 20);
+    // Session cap 4 × the per-torrent one (was 20 ×), which every torrent
+    // gets as max_connections when added.
+    sp.set_int(lt::settings_pack::connections_limit, cfg.connections_limit * 4);
 
     // port of: bt.config.TotalHalfOpenConns = 500
     // (already hardcoded in lt_create_session, re-apply for safety)
@@ -3558,11 +3685,7 @@ TORRENT_API void lt_configure_session(lt_session_t session,
     } else {
         sp.set_int(lt::settings_pack::download_rate_limit, 0);
     }
-    if (cfg.upload_rate_limit > 0) {
-        sp.set_int(lt::settings_pack::upload_rate_limit, cfg.upload_rate_limit * 1024);
-    } else if (!cfg.disable_upload) {
-        sp.set_int(lt::settings_pack::upload_rate_limit, 0);
-    }
+
 
     // port of: userAgent spoofing — TorrServer pretends to be qBittorrent 4.3.9
     sp.set_str(lt::settings_pack::user_agent, "qBittorrent/4.3.9");
@@ -3571,6 +3694,7 @@ TORRENT_API void lt_configure_session(lt_session_t session,
 
     try {
         sw->session.apply_settings(sp);
+        sw->apply_upload_policy();
     } catch (...) {}
 
     // Re-apply stream-local settings to active streams as well. Without

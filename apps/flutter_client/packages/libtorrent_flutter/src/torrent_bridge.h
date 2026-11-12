@@ -103,10 +103,10 @@ typedef struct {
     int32_t disable_upload;          /* 0=enabled (default), 1=disabled */
     int32_t disable_dht;             /* 0=enabled (default), 1=disabled */
     int32_t disable_upnp;            /* 0=enabled (default), 1=disabled */
-    int32_t enable_ipv6;             /* 0=disabled (default), 1=enabled */
+    int32_t enable_ipv6;             /* IGNORED: IPv4 and IPv6 are both listened on */
     int32_t download_rate_limit;     /* KB/s, 0=unlimited */
     int32_t upload_rate_limit;       /* KB/s, 0=unlimited */
-    int32_t peers_listen_port;       /* 0=random (default) */
+    int32_t peers_listen_port;       /* 0 = 6881 (default) */
 
     /* Reader */
     int32_t responsive_mode;         /* IGNORED */
@@ -199,6 +199,10 @@ TORRENT_API void lt_set_cache_settings(lt_session_t session, lt_stream_id id,
 /* speed limits */
 TORRENT_API void lt_set_download_limit(lt_session_t session, int bytes_per_sec);
 TORRENT_API void lt_set_upload_limit(lt_session_t session, int bytes_per_sec);
+
+// 1 = on mobile data: few unchoke slots (4) and a low upload cap (~64 KB/s);
+// 0 = back to the normal settings.
+TORRENT_API void lt_set_metered(lt_session_t session, int metered);
 
 /* utility */
 TORRENT_API const char* lt_last_error(void);

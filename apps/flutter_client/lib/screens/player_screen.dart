@@ -557,33 +557,40 @@ class _PlayerScreenState extends State<PlayerScreen>
     // position listener ignores it too, now _closing is set).
     _saveProgress(force: true);
     _progressFinal = true;
-    if (isComputer) {
-      // The desktop app stops the video outright, so it's gone before the
-      // window leaves full screen.
-      await player.stop();
-    } else {
-      // A phone just pauses, without waiting, so turning back upright
-      // starts at once; dispose() stops it once the player's closed.
-      player.pause();
-    }
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    await WindowFullScreen.exit();
-    if (_canTurn && mounted) {
-      await SystemChrome.setPreferredOrientations(
-          [DeviceOrientation.portraitUp]);
-      if (!mounted) return;
-      // Until the screen is portrait, and drawn so; or a moment, where it
-      // won't turn (a tablet that ignores the app's portrait lock).
-      final view = View.of(context);
-      final giveUp = DateTime.now().add(const Duration(milliseconds: 1200));
-      while (mounted &&
-          view.physicalSize.width > view.physicalSize.height &&
-          DateTime.now().isBefore(giveUp)) {
-        await Future.delayed(const Duration(milliseconds: 50));
+    // Whatever goes wrong below, the player still closes: the screen is
+    // already black (_closing), so skipping the pop would leave it that way.
+    try {
+      if (isComputer) {
+        // The desktop app stops the video outright, so it's gone before the
+        // window leaves full screen.
+        await player.stop();
+      } else {
+        // A phone just pauses, without waiting, so turning back upright
+        // starts at once; dispose() stops it once the player's closed.
+        player.pause();
       }
-      await WidgetsBinding.instance.endOfFrame;
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      await WindowFullScreen.exit();
+      if (_canTurn && mounted) {
+        await SystemChrome.setPreferredOrientations(
+            [DeviceOrientation.portraitUp]);
+        if (!mounted) return;
+        // Until the screen is portrait, and drawn so; or a moment, where it
+        // won't turn (a tablet that ignores the app's portrait lock).
+        final view = View.of(context);
+        final giveUp = DateTime.now().add(const Duration(milliseconds: 1200));
+        while (mounted &&
+            view.physicalSize.width > view.physicalSize.height &&
+            DateTime.now().isBefore(giveUp)) {
+          await Future.delayed(const Duration(milliseconds: 50));
+        }
+        await WidgetsBinding.instance.endOfFrame;
+      }
+    } catch (_) {
+      // Fall through to the pop.
+    } finally {
+      if (mounted) Navigator.pop(context);
     }
-    if (mounted) Navigator.pop(context);
   }
 
   /// The player is closing to open the web player, which turns the screen

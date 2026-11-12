@@ -5275,6 +5275,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                 children: [
                                               if (wide) ...[
                                                 _menuButton(GlassPillButton(
+                                                  grouped: true,
                                                   key: _qualityButtonKey,
                                                   icon: Icons.hd_rounded,
                                                   label: 'Quality',
@@ -5290,6 +5291,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                     widget.details)) ...[
                                                   const SizedBox(width: 10),
                                                   _menuButton(GlassPillButton(
+                                                    grouped: true,
                                                     key: _audioButtonKey,
                                                     icon: Icons
                                                         .record_voice_over_rounded,
@@ -5304,6 +5306,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                 ],
                                                 const SizedBox(width: 10),
                                                 _menuButton(GlassPillButton(
+                                                  grouped: true,
                                                   key: _subtitlesButtonKey,
                                                   icon: Icons.subtitles_rounded,
                                                   label: _subtitlesSyncing ? 'Syncing…' : 'Subtitles',
@@ -5316,6 +5319,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                 )),
                                                 const SizedBox(width: 10),
                                                 _menuButton(GlassPillButton(
+                                                  grouped: true,
                                                   key: _videoSizeButtonKey,
                                                   icon: _videoFit.icon,
                                                   label: 'Video Size',
@@ -5329,6 +5333,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                 // Settings — quality, subtitles and
                                                 // video size
                                                 _menuButton(GlassPillButton(
+                                                  grouped: true,
                                                   key: _settingsButtonKey,
                                                   // Syncing: what's being synced.
                                                   icon: _subtitlesSyncing
@@ -5351,6 +5356,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                   groupId:
                                                       EpisodeBrowser.panelTapGroup,
                                                   child: GlassPillButton(
+                                                    grouped: true,
                                                     icon: Icons.grid_view_rounded,
                                                     label: 'Episodes',
                                                     selected: _showEpisodeDrawer,
@@ -5359,6 +5365,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                 ),
                                                 const SizedBox(width: 10),
                                                 GlassPillButton(
+                                                  grouped: true,
                                                   icon: Icons.skip_next_rounded,
                                                   label: 'Next',
                                                   onPressed: nextEpisodePlayable
@@ -5373,6 +5380,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                       WindowFullScreen.state,
                                                   builder: (context, isFullScreen, _) =>
                                                       GlassCircleButton(
+                                                    grouped: true,
                                                     icon: isFullScreen
                                                         ? Icons.fullscreen_exit_rounded
                                                         : Icons.fullscreen_rounded,
@@ -5478,11 +5486,13 @@ class _PlayerScreenState extends State<PlayerScreen>
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         GlassPillButton(
+                                          grouped: true,
                                           label: 'Watch Credits',
                                           onPressed: _watchCredits,
                                         ),
                                         const SizedBox(width: 10),
                                         GlassPillButton(
+                                          grouped: true,
                                           icon: Icons.skip_next_rounded,
                                           label: 'Next Episode',
                                           progress: _upNextFill,
@@ -5491,6 +5501,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                       ],
                                     )
                                   : GlassPillButton(
+                                      grouped: true,
                                       icon: Icons.skip_next_rounded,
                                       label: segment?.type.buttonLabel ??
                                           'Skip Intro',

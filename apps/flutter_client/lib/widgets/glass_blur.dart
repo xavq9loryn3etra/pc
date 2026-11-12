@@ -218,6 +218,12 @@ class GlassCircleButton extends StatelessWidget {
   final double? dimension;
   final bool showBorder;
 
+  /// Shares its backdrop with the other grouped glass (see
+  /// [GlassBlur.grouped]): for rows of glass that don't overlap, over
+  /// moving video (the player's controls) — one capture of the video
+  /// between them instead of one each.
+  final bool grouped;
+
   const GlassCircleButton({
     super.key,
     required this.icon,
@@ -225,6 +231,7 @@ class GlassCircleButton extends StatelessWidget {
     this.iconSize = 20,
     this.dimension,
     this.showBorder = true,
+    this.grouped = false,
   });
 
   /// The back chevron: heavier than the "iOS arrow" icon, like Apple's.
@@ -235,6 +242,7 @@ class GlassCircleButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return ClipOval(
       child: GlassBlur(
+        grouped: grouped,
         reducedTint: Colors.black.withValues(alpha: 0.45),
         child: Material(
           color: kGlassTint,
@@ -397,6 +405,12 @@ class GlassPillButton extends StatelessWidget {
   /// Ask's own button is — "being taken care of", not "wait, loading".
   final bool busy;
 
+  /// Shares its backdrop with the other grouped glass (see
+  /// [GlassBlur.grouped]): for rows of glass that don't overlap, over
+  /// moving video (the player's controls) — one capture of the video
+  /// between them instead of one each.
+  final bool grouped;
+
   const GlassPillButton({
     super.key,
     this.icon,
@@ -407,6 +421,7 @@ class GlassPillButton extends StatelessWidget {
     this.large,
     this.progress,
     this.busy = false,
+    this.grouped = false,
   });
 
   static const _shape = StadiumBorder();
@@ -423,6 +438,7 @@ class GlassPillButton extends StatelessWidget {
           ClipRRect(
             borderRadius: BorderRadius.circular(wide ? 24 : 20),
             child: GlassBlur(
+              grouped: grouped,
               reducedTint: Colors.black.withValues(alpha: 0.45),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 180),

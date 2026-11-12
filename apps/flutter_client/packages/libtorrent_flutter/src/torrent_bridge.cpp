@@ -1670,6 +1670,11 @@ struct SessionWrapper {
                 for (auto* a : alerts) {
                     if (!a) continue;
                     try {
+                        // Piece alerts go to every stream of the torrent
+                        // whose file the piece is in (there was a `break`
+                        // after the first stream of the torrent, so a
+                        // second stream on another file never heard of
+                        // its pieces).
                         // read_piece_alert → route to stream's cache
                         if (auto* rpa = lt::alert_cast<lt::read_piece_alert>(a)) {
                             int p = static_cast<int>(rpa->piece);
@@ -1677,11 +1682,11 @@ struct SessionWrapper {
                             for (auto& kv : streams) {
                                 auto& s = kv.second;
                                 if (!s->active || s->handle != rpa->handle) continue;
+                                if (p < s->start_piece || p > s->end_piece) continue;
                                 s->on_piece_read(p,
                                     rpa->error ? nullptr : rpa->buffer.get(),
                                     rpa->error ? 0 : rpa->size,
                                     !rpa->error);
-                                break;
                             }
                             continue;
                         }
@@ -1695,7 +1700,6 @@ struct SessionWrapper {
                                 if (!s->active || s->handle != pfa->handle) continue;
                                 if (p >= s->start_piece && p <= s->end_piece)
                                     s->on_piece_finished(p);
-                                break;
                             }
                         }
 
@@ -1708,7 +1712,6 @@ struct SessionWrapper {
                                 if (!s->active || s->handle != hf->handle) continue;
                                 if (p >= s->start_piece && p <= s->end_piece)
                                     s->on_hash_failed(p);
-                                break;
                             }
                         }
 

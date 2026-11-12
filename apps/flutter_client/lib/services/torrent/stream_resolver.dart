@@ -806,6 +806,16 @@ class StreamResolver {
   /// an abandoned start.
   void pause(int torrentId) => _engine.pause(torrentId);
 
+  /// [pause] for a normal player close, that also trims the download to
+  /// the last stretch watched — see [TorrentEngineService.releaseAndTrim].
+  Future<void> releaseAndTrim(
+    int torrentId, {
+    required int fileIndex,
+    required int keepFrom,
+  }) =>
+      _engine.releaseAndTrim(torrentId,
+          fileIndex: fileIndex, keepFrom: keepFrom);
+
   /// Let a torrent paused by a later start download again — for going back
   /// to it when that start failed.
   void resume(int torrentId) => _engine.resume(torrentId);

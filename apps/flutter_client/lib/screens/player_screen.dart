@@ -27,6 +27,7 @@ import '../services/torrent/free_space.dart';
 import '../services/torrent/stream_resolver.dart';
 import '../services/torrent/torrent_download_registry.dart';
 import '../services/torrent/torrent_storage_service.dart';
+import '../services/torrent/trim_point.dart';
 import '../services/tmdb_service.dart';
 import '../models/movie.dart';
 import '../theme/app_theme.dart';
@@ -3135,14 +3136,40 @@ class _PlayerScreenState extends State<PlayerScreen>
     // to a paused mpv socket when lt_stop_stream joins it on the UI thread.
     final torrentId = _torrentId;
     final headStart = _nextHeadStart;
-    player.stop().whenComplete(() => player.dispose()).whenComplete(() {
-      _resolver.pause(torrentId);
+    // Where the viewer stopped and which file it was, taken now: stop()
+    // resets the position. The download keeps ~5 minutes before that point
+    // and everything after it; unknown (or mid-switch, when the position
+    // may belong to another video) means no trimming.
+    final streamInfo = LibtorrentFlutter.instance.getStreamInfo(_streamId);
+    final playedFileIndex =
+        streamInfo != null && streamInfo.torrentId == torrentId
+            ? streamInfo.fileIndex
+            : -1;
+    final keepFrom = streamInfo == null ||
+            streamInfo.torrentId != torrentId ||
+            _switchingQuality
+        ? -1
+        : trimKeepFrom(
+            fileSize: streamInfo.fileSize,
+            position: _currentPosition,
+            duration: _duration,
+          );
+    player.stop().whenComplete(() => player.dispose()).whenComplete(() async {
       // A readied next episode not played: what it got ahead goes (one
-      // that was played is now a download of its own, and stays). Then the
+      // that was played is now a download of its own, and stays).
+      try {
+        await _resolver.coolDown(headStart);
+      } catch (_) {}
+      // Then the torrent is released and trimmed (or just paused, where
+      // that isn't possible or the torrent is wanted elsewhere), and the
       // downloads are trimmed to their size limit, if this took them over.
-      _resolver
-          .coolDown(headStart)
-          .whenComplete(TorrentStorageService.enforceLimit);
+      try {
+        await _resolver.releaseAndTrim(torrentId,
+            fileIndex: playedFileIndex, keepFrom: keepFrom);
+      } catch (_) {
+        _resolver.pause(torrentId);
+      }
+      await TorrentStorageService.enforceLimit();
     });
 
     // 5. Dispose seek bar / stats notifiers

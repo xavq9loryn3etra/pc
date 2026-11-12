@@ -121,6 +121,15 @@ void _nativeDestroySession(int sessionAddress) {
   b.destroySession(Pointer<LtSessionOpaque>.fromAddress(sessionAddress));
 }
 
+int _nativeReleaseAndTrim(
+    int sessionAddress, int torrentId, int fileIndex, int keepFrom, int timeoutMs) {
+  final b = TorrentBridgeBindings.open();
+  final fn = b.releaseAndTrim;
+  if (fn == null) return -1;
+  return fn(Pointer<LtSessionOpaque>.fromAddress(sessionAddress), torrentId,
+      fileIndex, keepFrom, timeoutMs);
+}
+
 // ─── LibtorrentFlutter ──────────────────────────────────────────────────────
 
 /// The main libtorrent engine for Flutter.
@@ -296,6 +305,52 @@ class LibtorrentFlutter {
       nativeRemove();
     } else {
       Future.wait(_pendingStops.toList()).then((_) => nativeRemove());
+    }
+  }
+
+  /// Whether the native library can [releaseAndTrim] (engine v4 and later).
+  bool get canReleaseAndTrim => _b.releaseAndTrim != null;
+
+  // Torrents a releaseAndTrim is working on: the status poll leaves them
+  // out until it's done.
+  final Set<int> _releasing = {};
+
+  /// Stops a torrent's streams, pauses it, saves its resume data and takes
+  /// it out of the session WITHOUT deleting its files; then shrinks what's
+  /// kept on disk to bytes [keepFrom] onwards of file [fileIndex] (plus
+  /// every file's head and tail). A negative [keepFrom] only releases.
+  /// Runs off the UI thread. Returns the bytes still kept on disk, or null
+  /// when the native library can't do this (older than engine v4) or it
+  /// failed.
+  Future<int?> releaseAndTrim(
+    int torrentId, {
+    required int fileIndex,
+    required int keepFrom,
+  }) async {
+    final fn = _b.releaseAndTrim;
+    if (fn == null) return null;
+    final streamIds = _streams.entries
+        .where((e) => e.value.torrentId == torrentId)
+        .map((e) => e.key)
+        .toList();
+    for (final sid in streamIds) {
+      _streams.remove(sid);
+    }
+    _stopping.addAll(streamIds);
+    _releasing.add(torrentId);
+    _torrents.remove(torrentId);
+    _streamsCtrl.add(Map.unmodifiable(_streams));
+    _torrentsCtrl.add(Map.unmodifiable(_torrents));
+    final addr = _session.address;
+    try {
+      final kept = await Isolate.run(
+          () => _nativeReleaseAndTrim(addr, torrentId, fileIndex, keepFrom, 10000));
+      return kept < 0 ? null : kept;
+    } catch (_) {
+      return null;
+    } finally {
+      _stopping.removeAll(streamIds);
+      _releasing.remove(torrentId);
     }
   }
 
@@ -557,6 +612,7 @@ class LibtorrentFlutter {
       for (var i = 0; i < n; i++) {
         final info = _toTorrentInfo(buf[i]);
         seen.add(info.id);
+        if (_releasing.contains(info.id)) continue;
         final old = _torrents[info.id];
         if (old == null || _changed(old, info)) {
           _torrents[info.id] = info;

@@ -32,7 +32,11 @@ class SavedMoviesService with ChangeNotifier {
     if (favJson != null) {
       try {
         final List<dynamic> decoded = jsonDecode(favJson);
-        _favorites = decoded.map((e) => Movie.fromStorageJson(e)).toList();
+        // One unreadable entry is left out, not the whole list.
+        _favorites = [
+          for (final e in decoded)
+            if (_tryParse(e) case final movie?) movie,
+        ];
       } catch (e) {
         print("Error loading favorites: $e");
       }
@@ -74,6 +78,26 @@ class SavedMoviesService with ChangeNotifier {
     notifyListeners();
   }
 
+  /// A stored movie, or null if it can't be read.
+  static Movie? _tryParse(Object? json) {
+    if (json is! Map<String, dynamic>) return null;
+    try {
+      return Movie.fromStorageJson(json);
+    } catch (e) {
+      print("Skipping unreadable saved movie: $e");
+      return null;
+    }
+  }
+
+  /// The movie stored in history entry [entry], or null.
+  static Movie? _movieOf(Object? entry) =>
+      entry is Map ? _tryParse(entry['movie']) : null;
+
+  static int _lastWatchedOf(Object? entry) {
+    final t = entry is Map ? entry['last_watched'] : null;
+    return t is num ? t.toInt() : 0;
+  }
+
   /// The length in minutes of the copy of this episode that was played, if
   /// it has been — see [saveEpisodeLength].
   int? getEpisodeMinutes(String movieId, int season, int episode) {
@@ -108,13 +132,7 @@ class SavedMoviesService with ChangeNotifier {
 
   Movie? getMovieFromHistory(String id) {
     if (!_history.containsKey(id)) return null;
-    return _historyById.putIfAbsent(id, () {
-      try {
-        return Movie.fromStorageJson(_history[id]['movie']);
-      } catch (e) {
-        return null;
-      }
-    });
+    return _historyById.putIfAbsent(id, () => _movieOf(_history[id]));
   }
 
   double? getEpisodeProgress(String movieId, int season, int episode) {
@@ -157,16 +175,15 @@ class SavedMoviesService with ChangeNotifier {
 
     // Return movies sorted by last_watched (descending)
     final entries = _history.entries.toList();
-    entries.sort((a, b) {
-      final tA = a.value['last_watched'] as int? ?? 0;
-      final tB = b.value['last_watched'] as int? ?? 0;
-      return tB.compareTo(tA);
-    });
+    entries.sort(
+        (a, b) => _lastWatchedOf(b.value).compareTo(_lastWatchedOf(a.value)));
 
-    _historyCache = entries.map((e) {
-      final movieJson = e.value['movie'];
-      return Movie.fromStorageJson(movieJson);
-    }).toList();
+    // An entry that can't be read is left out rather than failing the
+    // whole list (and every home-screen build with it).
+    _historyCache = [
+      for (final e in entries)
+        if (_movieOf(e.value) case final movie?) movie,
+    ];
     return _historyCache!;
   }
 
@@ -180,8 +197,8 @@ class SavedMoviesService with ChangeNotifier {
     double? existingProgress;
     bool isSameEpisode = true;
     
-    if (_history.containsKey(movie.id)) {
-      final prevMovie = Movie.fromStorageJson(_history[movie.id]['movie']);
+    final prevMovie = _movieOf(_history[movie.id]);
+    if (prevMovie != null) {
       existingProgress = prevMovie.progress;
       
       // If we are passing specific season/episode, check if it changed

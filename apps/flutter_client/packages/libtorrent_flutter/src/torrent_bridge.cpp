@@ -47,6 +47,11 @@
   #define CLOSESOCKET(s)  ::closesocket(s)
   #define INIT_SOCKETS()  { WSADATA _w; ::WSAStartup(MAKEWORD(2,2), &_w); }
   typedef int socklen_t_;
+  typedef WSAPOLLFD pollfd_t;
+  #define POLL_SOCKETS(f, n, t) ::WSAPoll((f), (ULONG)(n), (t))
+  #define POLL_READ_EV    POLLRDNORM
+  #define SOCK_ERRNO()    ::WSAGetLastError()
+  #define SOCK_EINTR      WSAEINTR
 #else
   #include <sys/socket.h>
   #include <netinet/in.h>
@@ -55,11 +60,18 @@
   #include <unistd.h>
   #include <fcntl.h>
   #include <signal.h>
+  #include <poll.h>
+  #include <errno.h>
   typedef int socket_t;
   #define SOCKET_INVALID  (-1)
   #define CLOSESOCKET(s)  ::close(s)
   #define INIT_SOCKETS()  { signal(SIGPIPE, SIG_IGN); }
   typedef socklen_t socklen_t_;
+  typedef struct pollfd pollfd_t;
+  #define POLL_SOCKETS(f, n, t) ::poll((f), (nfds_t)(n), (t))
+  #define POLL_READ_EV    POLLIN
+  #define SOCK_ERRNO()    errno
+  #define SOCK_EINTR      EINTR
 #endif
 
 #include <thread>
@@ -990,11 +1002,16 @@ struct StreamEngine {
     int head_end_piece;
     int tail_start_piece;
 
-    // HTTP server
+    // HTTP server. The listen socket is bound in lt_start_stream and then
+    // owned by the server thread, which alone closes it. The server waits
+    // in poll() on it and, on POSIX, on a wake pipe; wake_server() makes
+    // that poll return (on Windows by connecting to the listen socket).
     std::thread       server_thread;
-    std::atomic<bool> running{false};
     socket_t          listen_sock = SOCKET_INVALID;
     int               server_port = 0;
+#ifndef _WIN32
+    int               wake_fds[2] = {-1, -1};
+#endif
 
     // concurrent stream counter — port of stream.go activeStreams
     static std::atomic<int32_t> active_streams;
@@ -1121,9 +1138,43 @@ struct StreamEngine {
         try { handle.piece_priority(lt::piece_index_t(p), lt::top_priority); } catch (...) {}
     }
 
+    // Wakes every waiter on piece_cv and read_cv. Each mutex is taken
+    // first, so a waiter between checking its predicate and blocking
+    // can't miss a flag set before this call.
     void wake_all() {
+        { std::lock_guard<std::mutex> lk(piece_mu); }
         piece_cv.notify_all();
+        { std::lock_guard<std::mutex> lk(read_mu); }
         read_cv.notify_all();
+    }
+
+    // Makes the server thread's poll() return so it sees active == false.
+    void wake_server() {
+#ifdef _WIN32
+        if (server_port <= 0) return;
+        socket_t c = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (c == SOCKET_INVALID) return;
+        sockaddr_in a{};
+        a.sin_family      = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        a.sin_port        = htons((u_short)server_port);
+        ::connect(c, (sockaddr*)&a, sizeof(a));
+        CLOSESOCKET(c);
+#else
+        if (wake_fds[1] >= 0) {
+            const char b = 1;
+            ssize_t n;
+            do { n = ::write(wake_fds[1], &b, 1); } while (n < 0 && errno == EINTR);
+        }
+#endif
+    }
+
+    void close_wake_fds() {
+#ifndef _WIN32
+        for (int& fd : wake_fds) {
+            if (fd >= 0) { ::close(fd); fd = -1; }
+        }
+#endif
     }
 };
 
@@ -1131,7 +1182,7 @@ std::atomic<int32_t> StreamEngine::active_streams{0};
 
 // ── forward declarations ────────────────────────────────────────────────────────
 struct SessionWrapper;
-static void run_http_server(SessionWrapper* sw, StreamEngine* stream);
+static void run_http_server(StreamEngine* stream);
 
 // ── session wrapper ─────────────────────────────────────────────────────────────
 struct SessionWrapper {
@@ -1143,8 +1194,14 @@ struct SessionWrapper {
     std::atomic<int64_t> next_id{1};
 
     std::mutex streams_mu;
-    std::unordered_map<int64_t, std::unique_ptr<StreamEngine>> streams;
+    std::unordered_map<int64_t, std::shared_ptr<StreamEngine>> streams;
     std::atomic<int64_t> next_stream_id{1};
+
+    // Stopped streams being torn down on their own threads (see
+    // lt_stop_stream); destroy waits for them.
+    std::mutex              reap_mu;
+    std::condition_variable reap_cv;
+    int                     reaping = 0;
 
     // alert thread — sole consumer of session.pop_alerts()
     std::thread       alert_thread;
@@ -1350,6 +1407,30 @@ struct SessionWrapper {
 
 static SessionWrapper* to_sw(lt_session_t h) {
     return reinterpret_cast<SessionWrapper*>(h);
+}
+
+// ── stream shutdown ─────────────────────────────────────────────────────────────
+// Tells stream [s]'s threads to stop and wakes every wait. Cheap; never blocks.
+static void begin_shutdown(StreamEngine* s) {
+    {
+        std::lock_guard<std::mutex> lk(s->piece_mu);
+        s->active = false;
+    }
+    s->preloading.store(false);
+    s->wake_all();
+}
+
+// Waits for [s]'s threads (preload, server, and the server's clients) and
+// frees its cache. Blocks — never on the UI thread.
+static void finish_shutdown(StreamEngine* s) {
+    s->wake_server();
+    if (s->preload_thread.joinable()) s->preload_thread.join();
+    // server_thread joins all client threads before returning, and must
+    // finish before cache->close(): client threads use TorrReader objects
+    // owned by the cache.
+    if (s->server_thread.joinable()) s->server_thread.join();
+    if (s->cache) s->cache->close();
+    s->close_wake_fds();
 }
 
 // ── piece waiting — port of blocking read in TorrServer's Reader.Read ────────
@@ -1744,7 +1825,12 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
             TB_LOG("handle_conn: rstart=%lld rend=%lld old_head=%lld is_tail=%d",
                    (long long)rstart, (long long)rend, (long long)old_head, is_tail_req?1:0);
             if (!is_tail_req && old_head > 0 && std::abs(rstart - old_head) > 65536) {
-                int new_gen = s->seek_generation.fetch_add(1) + 1;
+                int new_gen;
+                {
+                    // (under piece_mu, so no waiter misses the change)
+                    std::lock_guard<std::mutex> plk(s->piece_mu);
+                    new_gen = s->seek_generation.fetch_add(1) + 1;
+                }
                 TB_LOG("SEEK DETECTED: old_head=%lld new_pos=%lld seek_piece=%d gen=%d",
                        (long long)old_head, (long long)rstart,
                        std::clamp(s->byte_to_piece(rstart), s->start_piece, s->end_piece), new_gen);
@@ -1879,39 +1965,54 @@ cleanup:
 // run_http_server — accepts connections, each gets its own TorrReader
 // port of TorrServer's multi-connection model where each http.ServeContent
 // call creates its own Reader
-static void run_http_server(SessionWrapper* /*sw*/, StreamEngine* stream) {
+static void run_http_server(StreamEngine* stream) {
+    // The listen socket was bound and set listening by lt_start_stream;
+    // from here on only this thread touches it, and closes it on the way out.
+    const socket_t sock = stream->listen_sock;
     try {
-        INIT_SOCKETS();
-
-        socket_t sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (sock == SOCKET_INVALID) return;
-
-        int opt = 1;
-        ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
-
-        sockaddr_in addr{};
-        addr.sin_family      = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        addr.sin_port        = 0;
-        if (::bind(sock, (sockaddr*)&addr, sizeof(addr)) != 0) {
-            CLOSESOCKET(sock); return;
-        }
-        socklen_t_ al = sizeof(addr);
-        ::getsockname(sock, (sockaddr*)&addr, (socklen_t*)&al);
-        stream->server_port = ntohs(addr.sin_port);
-        stream->listen_sock = sock;
-        ::listen(sock, 16);
-        stream->running = true;
-
         while (stream->active.load()) {
-            fd_set fds; FD_ZERO(&fds); FD_SET(sock, &fds);
-            timeval tv{0, 200000};
-            if (::select((int)sock + 1, &fds, nullptr, nullptr, &tv) <= 0)
-                continue;
+            // poll(), not select(): the session's many peer sockets can push
+            // this descriptor past FD_SETSIZE.
+            pollfd_t fds[2] = {};
+            int nfds = 1;
+            fds[0].fd     = sock;
+            fds[0].events = POLL_READ_EV;
+#ifndef _WIN32
+            if (stream->wake_fds[0] >= 0) {
+                fds[1].fd     = stream->wake_fds[0];
+                fds[1].events = POLLIN;
+                nfds = 2;
+            }
+#endif
+            // The timeout is only a backstop: wake_server() ends the wait.
+            int r = POLL_SOCKETS(fds, nfds, 1000);
+            if (r < 0) {
+                if (SOCK_ERRNO() == SOCK_EINTR) continue;
+                break;
+            }
+            if (r == 0) continue;
+#ifndef _WIN32
+            if (nfds == 2 && fds[1].revents) {
+                char drain[64];
+                while (::read(stream->wake_fds[0], drain, sizeof(drain)) > 0) {}
+                continue;  // the loop condition looks at active
+            }
+#endif
+            if (fds[0].revents & (POLLERR | POLLNVAL)) break;
+            if (!(fds[0].revents & POLL_READ_EV)) continue;
 
             sockaddr_in ca{}; socklen_t_ cl = sizeof(ca);
             socket_t cli = ::accept(sock, (sockaddr*)&ca, (socklen_t*)&cl);
-            if (cli == SOCKET_INVALID) continue;
+            if (cli == SOCKET_INVALID) {
+                // (e.g. out of descriptors: don't spin on a ready socket)
+                if (SOCK_ERRNO() != SOCK_EINTR)
+                    std::this_thread::sleep_for(chr::milliseconds(20));
+                continue;
+            }
+            if (!stream->active.load()) {  // the wake-up connection, or late
+                CLOSESOCKET(cli);
+                break;
+            }
 
             // each new connection gets its own reader — port of TorrServer model
             // TorrServer does NOT kill old connections; it supports concurrent readers
@@ -1934,32 +2035,38 @@ static void run_http_server(SessionWrapper* /*sw*/, StreamEngine* stream) {
                 }
             }
 
-            std::thread t([stream, cli, rid]() {
-                try {
-                    handle_connection(stream, cli, rid);
-                } catch (...) {}
-                try { CLOSESOCKET(cli); } catch (...) {}
-                // signal completion so accept loop can join us
-                try {
-                    std::lock_guard<std::mutex> lk(stream->clients_mu);
-                    stream->client_sockets.erase(rid);
-                    stream->finished_clients.insert(rid);
-                } catch (...) {}
-            });
-
-            {
+            try {
+                std::thread t([stream, cli, rid]() {
+                    try {
+                        handle_connection(stream, cli, rid);
+                    } catch (...) {}
+                    // Unregistered before it's closed, so the shutdown below
+                    // can't hit a descriptor number already reused.
+                    try {
+                        std::lock_guard<std::mutex> lk(stream->clients_mu);
+                        stream->client_sockets.erase(rid);
+                        stream->finished_clients.insert(rid);
+                    } catch (...) {}
+                    CLOSESOCKET(cli);
+                });
                 std::lock_guard<std::mutex> lk(stream->clients_mu);
                 stream->client_threads[rid] = std::move(t);
+            } catch (...) {
+                // no thread: drop the connection
+                {
+                    std::lock_guard<std::mutex> lk(stream->clients_mu);
+                    stream->client_sockets.erase(rid);
+                }
+                CLOSESOCKET(cli);
             }
         }
+    } catch (...) {}
 
-        // Close listen socket if lt_stop_stream hasn't already closed it
-        if (stream->listen_sock != SOCKET_INVALID) {
-            CLOSESOCKET(sock);
-            stream->listen_sock = SOCKET_INVALID;
-        }
+    try {
+        CLOSESOCKET(sock);
+        stream->listen_sock = SOCKET_INVALID;
 
-        // shut down all client sockets to unblock recv() in client threads
+        // shut down all client sockets to unblock recv()/send() in client threads
         {
             std::lock_guard<std::mutex> lk(stream->clients_mu);
             for (auto& kv : stream->client_sockets) {
@@ -1972,7 +2079,7 @@ static void run_http_server(SessionWrapper* /*sw*/, StreamEngine* stream) {
         }
 
         // join all client threads before returning — prevents use-after-free
-        // on StreamEngine's mutexes when the unique_ptr is destroyed
+        // on StreamEngine's mutexes when the stream is destroyed
         std::unordered_map<int, std::thread> threads_to_join;
         {
             std::lock_guard<std::mutex> lk(stream->clients_mu);
@@ -2271,30 +2378,25 @@ TORRENT_API void lt_destroy_session(lt_session_t session) {
         // stop all streams — move them out so we don't hold streams_mu while
         // joining threads (alert thread also locks streams_mu to deliver pieces,
         // holding it during join would deadlock)
-        std::vector<std::unique_ptr<StreamEngine>> streams_to_destroy;
+        std::vector<std::shared_ptr<StreamEngine>> streams_to_destroy;
         {
             std::lock_guard<std::mutex> lk(sw->streams_mu);
-            for (auto& kv : sw->streams) {
-                try {
-                    kv.second->active = false;
-                    kv.second->preloading.store(false);
-                    kv.second->wake_all();
-                    if (kv.second->listen_sock != SOCKET_INVALID) {
-                        CLOSESOCKET(kv.second->listen_sock);
-                        kv.second->listen_sock = SOCKET_INVALID;
-                    }
-                } catch (...) {}
+            for (auto& kv : sw->streams)
                 streams_to_destroy.push_back(std::move(kv.second));
-            }
             sw->streams.clear();
         }
+        for (auto& stream : streams_to_destroy)
+            try { begin_shutdown(stream.get()); } catch (...) {}
         // join all threads WITHOUT holding streams_mu
-        for (auto& stream : streams_to_destroy) {
-            try { if (stream->preload_thread.joinable()) stream->preload_thread.join(); } catch (...) {}
-            try { if (stream->server_thread.joinable()) stream->server_thread.join(); } catch (...) {}
-            try { if (stream->cache) stream->cache->close(); } catch (...) {}
-        }
+        for (auto& stream : streams_to_destroy)
+            try { finish_shutdown(stream.get()); } catch (...) {}
         streams_to_destroy.clear();
+    } catch (...) {}
+
+    // Streams stopped earlier still being torn down use sw: wait for them.
+    try {
+        std::unique_lock<std::mutex> lk(sw->reap_mu);
+        sw->reap_cv.wait(lk, [&] { return sw->reaping == 0; });
     } catch (...) {}
 
     try {
@@ -2302,15 +2404,6 @@ TORRENT_API void lt_destroy_session(lt_session_t session) {
         if (sw->alert_thread.joinable()) sw->alert_thread.join();
     } catch (...) {}
 
-    // flush resume data
-    try {
-        std::lock_guard<std::mutex> lk(sw->mu);
-        for (auto& kv : sw->handles)
-            if (kv.second.is_valid())
-                try { kv.second.save_resume_data(lt::torrent_handle::flush_disk_cache); } catch (...) {}
-    } catch (...) {}
-
-    std::this_thread::sleep_for(chr::milliseconds(200));
     try { delete sw; } catch (...) {}
 }
 
@@ -2615,7 +2708,7 @@ TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
         set_err("invalid file index"); return -1;
     }
 
-    auto s = std::make_unique<StreamEngine>();
+    auto s = std::make_shared<StreamEngine>();
     s->id           = sw->next_stream_id.fetch_add(1);
     s->torrent_id   = torrent_id;
     s->file_index   = file_index;
@@ -2757,91 +2850,122 @@ TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
     lt_stream_id sid = s->id;
     StreamEngine* raw = s.get();
 
+    // ── HTTP server: bound and listening before the thread starts, so
+    // there's nothing to wait for here ──
+    INIT_SOCKETS();
+    socket_t sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == SOCKET_INVALID) { set_err("HTTP server: no socket"); return -1; }
+    {
+#ifndef _WIN32
+        int opt = 1;
+        ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
+#endif
+        sockaddr_in addr{};
+        addr.sin_family      = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port        = 0;
+        socklen_t_ al = sizeof(addr);
+        if (::bind(sock, (sockaddr*)&addr, sizeof(addr)) != 0
+                || ::getsockname(sock, (sockaddr*)&addr, (socklen_t*)&al) != 0
+                || ::listen(sock, 16) != 0) {
+            CLOSESOCKET(sock);
+            set_err("HTTP server failed to bind"); return -1;
+        }
+        raw->server_port = ntohs(addr.sin_port);
+        raw->listen_sock = sock;
+    }
+#ifndef _WIN32
+    // The server's wake-up pipe (without it, the poll timeout still ends
+    // its wait, just later).
+    if (::pipe(raw->wake_fds) == 0) {
+        for (int fd : raw->wake_fds) {
+            ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
+            ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+        }
+    } else {
+        raw->wake_fds[0] = raw->wake_fds[1] = -1;
+    }
+#endif
+
+    try {
+        raw->server_thread = std::thread([raw]() { run_http_server(raw); });
+    } catch (...) {
+        CLOSESOCKET(raw->listen_sock);
+        raw->listen_sock = SOCKET_INVALID;
+        raw->close_wake_fds();
+        set_err("HTTP server thread failed"); return -1;
+    }
+
     {
         std::lock_guard<std::mutex> lk(sw->streams_mu);
         sw->streams[sid] = std::move(s);
     }
 
-    // start HTTP server thread
-    raw->server_thread = std::thread([sw, raw]() { run_http_server(sw, raw); });
-
-    // wait for server to bind
-    for (int i = 0; i < 200 && !raw->running.load(); ++i)
-        std::this_thread::sleep_for(chr::milliseconds(10));
-
-    if (!raw->running.load()) {
-        raw->active = false;
-        if (raw->server_thread.joinable()) raw->server_thread.join();
-        std::lock_guard<std::mutex> lk(sw->streams_mu);
-        sw->streams.erase(sid);
-        set_err("HTTP server failed to bind"); return -1;
-    }
-
     set_err(""); return sid;
+}
+
+// Joins and frees a stopped stream (see lt_stop_stream), then removes its
+// torrent when it was a stream-only one.
+static void reap_stream(SessionWrapper* sw, std::shared_ptr<StreamEngine> stream,
+                        bool remove_torrent) {
+    try {
+        finish_shutdown(stream.get());
+        if (remove_torrent) {
+            lt_remove_torrent(reinterpret_cast<lt_session_t>(sw),
+                              stream->torrent_id, 1);
+        } else {
+            // restore default file priorities
+            try {
+                auto ti2 = stream->handle.torrent_file();
+                if (ti2) {
+                    int nf = ti2->files().num_files();
+                    std::vector<lt::download_priority_t> p((size_t)nf, lt::default_priority);
+                    stream->handle.prioritize_files(p);
+                }
+            } catch (...) {}
+        }
+    } catch (...) {}
+    stream.reset();
+    // Notified under the lock: once it's released destroy may free sw.
+    std::lock_guard<std::mutex> lk(sw->reap_mu);
+    --sw->reaping;
+    sw->reap_cv.notify_all();
 }
 
 TORRENT_API void lt_stop_stream(lt_session_t session, lt_stream_id sid) {
     if (!session) return;
     auto* sw = to_sw(session);
-    std::unique_ptr<StreamEngine> stream;
-    {
-        std::lock_guard<std::mutex> lk(sw->streams_mu);
-        auto it = sw->streams.find(sid);
-        if (it == sw->streams.end()) return;
-        stream = std::move(it->second);
-        sw->streams.erase(it);
-    }
-
     try {
-
-    lt_torrent_id tid = stream->torrent_id;
-    stream->active = false;
-    stream->preloading.store(false); // stop preload if running
-    stream->wake_all();
-
-    // close listen socket to unblock select() in the server thread
-    if (stream->listen_sock != SOCKET_INVALID) {
-        CLOSESOCKET(stream->listen_sock);
-        stream->listen_sock = SOCKET_INVALID;
-    }
-
-    if (stream->preload_thread.joinable()) stream->preload_thread.join();
-    // server_thread joins all client threads internally before returning
-    // MUST complete before cache->close() — client threads use TorrReader
-    // objects owned by the cache. Closing cache first causes double-free
-    // of TorrReader mutexes (SIGABRT: pthread_mutex_destroy on destroyed mutex).
-    if (stream->server_thread.joinable()) stream->server_thread.join();
-
-    // close TorrCache AFTER all threads are done — port of Cache.Close
-    if (stream->cache) stream->cache->close();
-
-    // clean up ephemeral torrents
-    bool ephemeral = false;
-    {
-        std::lock_guard<std::mutex> lk(sw->mu);
-        if (sw->ephemeral_torrents.count(tid)) {
-            ephemeral = true;
-            sw->ephemeral_torrents.erase(tid);
+        std::shared_ptr<StreamEngine> stream;
+        {
+            std::lock_guard<std::mutex> lk(sw->streams_mu);
+            auto it = sw->streams.find(sid);
+            if (it == sw->streams.end()) return;
+            stream = std::move(it->second);
+            sw->streams.erase(it);
         }
-    }
 
-    if (ephemeral) {
-        lt_remove_torrent(session, tid, 1);
-    } else {
-        // restore default file priorities
+        // Flags set and waiters woken here; the joins happen on a thread of
+        // their own, so the caller (the UI thread) never waits for them.
+        begin_shutdown(stream.get());
+
+        bool ephemeral = false;
+        {
+            std::lock_guard<std::mutex> lk(sw->mu);
+            ephemeral = sw->ephemeral_torrents.erase(stream->torrent_id) > 0;
+        }
+
+        {
+            std::lock_guard<std::mutex> lk(sw->reap_mu);
+            ++sw->reaping;
+        }
         try {
-            auto ti2 = stream->handle.torrent_file();
-            if (ti2) {
-                int nf = ti2->files().num_files();
-                std::vector<lt::download_priority_t> p((size_t)nf, lt::default_priority);
-                stream->handle.prioritize_files(p);
-            }
-        } catch (...) {}
-    }
-
+            std::thread(reap_stream, sw, stream, ephemeral).detach();
+        } catch (...) {
+            reap_stream(sw, stream, ephemeral);  // no thread: do it here
+        }
     } catch (...) {
-        // Never crash during stream shutdown — stream unique_ptr will
-        // still be destroyed when it goes out of scope
+        // Never crash during stream shutdown
     }
 }
 

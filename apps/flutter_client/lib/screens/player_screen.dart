@@ -1365,7 +1365,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _mediaSession.updatePlaybackState(PlaybackState(
       status: _isPlaying ? PlaybackStatus.playing : PlaybackStatus.paused,
       position: _currentPosition,
-      speed: 1.0,
+      speed: _speedBoost ? 2.0 : 1.0,
     ));
   }
 
@@ -1855,12 +1855,14 @@ class _PlayerScreenState extends State<PlayerScreen>
     player.setRate(2.0);
     HapticFeedback.lightImpact();
     setState(() => _speedBoost = true);
+    _syncMediaSessionPlaybackState(); // Its position now moves at 2x.
   }
 
   void _endSpeedBoost() {
     if (!_speedBoost) return;
     player.setRate(1.0);
     setState(() => _speedBoost = false);
+    _syncMediaSessionPlaybackState();
   }
 
   void _playPause() {
@@ -2737,7 +2739,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _heardTried.clear();
         _autoSyncSeen.clear();
         _autoSyncFrom.clear();
-        _retimedPaths.clear();
+        _discardRetimedFiles();
         _retimeTried.clear();
         _referenceTimed.clear();
         _currentPosition = Duration.zero;
@@ -3016,6 +3018,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     WidgetsBinding.instance.removeObserver(this);
     _wakelockTimer?.cancel();
+    _discardRetimedFiles();
     WakelockPlus.disable();
     _screenTapTimer?.cancel();
     _bufferingRevealTimer?.cancel();
@@ -3228,6 +3231,15 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  /// Deletes the retimed subtitle files written to the temp folder (see
+  /// _retimeFromReferences) and forgets them: they were for one file.
+  void _discardRetimedFiles() {
+    for (final path in _retimedPaths.values) {
+      File(path).delete().ignore();
+    }
+    _retimedPaths.clear();
+  }
+
   /// Before opening another copy of the same video (a quality switch, a
   /// reconnect): the old file's built-in tracks, and one picked from them,
   /// don't belong to the new file — each file's tracks are numbered afresh,
@@ -3236,6 +3248,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// file's track in it is picked once its tracks are read; a downloaded
   /// track stays on meanwhile. Called inside setState.
   void _forgetFileSubtitles() {
+    _discardRetimedFiles();
     _subtitleTimings.clear();
     _autoSyncDone.clear();
     _autoSynced.clear();
@@ -3244,7 +3257,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     _heardTried.clear();
     _autoSyncSeen.clear();
     _autoSyncFrom.clear();
-    _retimedPaths.clear();
     _retimeTried.clear();
     _referenceTimed.clear();
     _embeddedSubtitles = [];
@@ -3801,11 +3813,18 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// button (Settings, on a phone) glows, as smart features do.
   bool get _subtitlesSyncing => _subtitleSyncNote == 'Syncing…';
 
+  // One client for every subtitle download, with timeouts: a new one per
+  // call had none, so a dead server hung the sync.
+  static final Dio _subtitleDio = Dio(BaseOptions(
+    connectTimeout: const Duration(seconds: 15),
+    receiveTimeout: const Duration(seconds: 15),
+  ));
+
   /// [track]'s text (an SRT, VTT or ASS file), downloaded once.
   Future<String> _subtitleText(SubtitleTrackData track) async {
     final cached = _subtitleTexts[track.url];
     if (cached != null) return cached;
-    final response = await Dio().get<String>(
+    final response = await _subtitleDio.get<String>(
       track.url,
       options: Options(responseType: ResponseType.plain),
     );
@@ -4021,12 +4040,14 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     final retime = (timing?.delay ?? 0.0) != _subtitleDelaySeconds ||
         (timing?.speed ?? 1.0) != _subtitleSpeed;
+    if (!mounted) return; // Closed while the saved timing was read.
     setState(() {
       _selectedSubtitle = track;
       _subtitleDelaySeconds = timing?.delay ?? 0.0;
       _subtitleSpeed = timing?.speed ?? 1.0;
     });
     if (retime) await _applySubtitleTimingToMpv();
+    if (!mounted) return;
     if (remember) {
       SharedPreferences.getInstance().then(
           (prefs) => prefs.setString(_subtitleLangPrefKey, track?.lang ?? ''));
@@ -4235,186 +4256,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     _positionNotifier.value = target;
     _seekTo(target);
     _syncMediaSessionPlaybackState();
-  }
-
-  void _showSubtitlePicker() {
-    _controlsTimer?.cancel();
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      barrierColor: Colors.black54,
-      builder: (sheetContext) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.5,
-          minChildSize: 0.35,
-          maxChildSize: 0.85,
-          expand: false,
-          builder: (context, scrollController) {
-            return Container(
-              decoration: const BoxDecoration(
-                color: Color(0xFF0C0C0C),
-                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                border: Border(
-                  top: BorderSide(color: Colors.white12, width: 0.5),
-                ),
-              ),
-              padding: const EdgeInsets.only(
-                top: 8,
-                left: 20,
-                right: 20,
-                bottom: 20,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.white24,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Icon(Icons.subtitles_rounded,
-                          color: AppTheme.primaryColor, size: 22),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          'Select Subtitles',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded,
-                            color: Colors.white38, size: 20),
-                        onPressed: () => Navigator.pop(sheetContext),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: _availableSubtitles.isEmpty
-                        ? const Center(
-                            child: Text(
-                              'No subtitles found for this media',
-                              style: TextStyle(
-                                  color: Colors.white38, fontSize: 14),
-                            ),
-                          )
-                        : ListView.builder(
-                            controller: scrollController,
-                            itemCount: _availableSubtitles.length + 1,
-                            itemBuilder: (context, index) {
-                              if (index == 0) {
-                                final isSelected = _selectedSubtitle == null;
-                                return Container(
-                                  margin: const EdgeInsets.only(bottom: 8),
-                                  decoration: BoxDecoration(
-                                    color: isSelected
-                                        ? AppTheme.primaryColor
-                                            .withOpacity(0.12)
-                                        : Colors.white.withOpacity(0.04),
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(
-                                      color: isSelected
-                                          ? AppTheme.primaryColor
-                                          : Colors.transparent,
-                                      width: 1,
-                                    ),
-                                  ),
-                                  child: ListTile(
-                                    contentPadding: const EdgeInsets.symmetric(
-                                        horizontal: 16),
-                                    title: const Text(
-                                      'Subtitles Off',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14,
-                                      ),
-                                    ),
-                                    trailing: isSelected
-                                        ? Icon(Icons.check_circle_rounded,
-                                            color: AppTheme.primaryColor,
-                                            size: 20)
-                                        : null,
-                                    onTap: () {
-                                      _selectSubtitle(null);
-                                      Navigator.pop(sheetContext);
-                                    },
-                                  ),
-                                );
-                              }
-
-                              final track = _availableSubtitles[index - 1];
-                              final isSelected =
-                                  _selectedSubtitle?.id == track.id;
-                              final langName = _getLanguageName(track.lang);
-
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 8),
-                                decoration: BoxDecoration(
-                                  color: isSelected
-                                      ? AppTheme.primaryColor.withOpacity(0.12)
-                                      : Colors.white.withOpacity(0.04),
-                                  borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(
-                                    color: isSelected
-                                        ? AppTheme.primaryColor
-                                        : Colors.transparent,
-                                    width: 1,
-                                  ),
-                                ),
-                                child: ListTile(
-                                  contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 16),
-                                  title: Text(
-                                    langName,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                  subtitle: Text(
-                                    'Track $index',
-                                    style: TextStyle(
-                                      color: Colors.white.withOpacity(0.4),
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                                  trailing: isSelected
-                                      ? Icon(Icons.check_circle_rounded,
-                                          color: AppTheme.primaryColor,
-                                          size: 20)
-                                      : null,
-                                  onTap: () {
-                                    _selectSubtitle(track);
-                                    Navigator.pop(sheetContext);
-                                  },
-                                ),
-                              );
-                            },
-                          ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    ).then((_) => _resetControlsTimer());
   }
 
   /// The playing episode's details, when it's in [_episodes] (TV only).

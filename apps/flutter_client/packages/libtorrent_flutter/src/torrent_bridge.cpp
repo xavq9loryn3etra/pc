@@ -259,6 +259,12 @@ static bool load_resume(lt::add_torrent_params& atp,
 }
 
 // ── fill torrent status struct ──────────────────────────────────────────────────
+// What fill_status reads: the name and save path (two strings) on top of
+// the always-filled fields — not the piece bitfield or the torrent_info,
+// which made every 600 ms poll copy them for every torrent.
+static const lt::status_flags_t kStatusFlags =
+    lt::torrent_handle::query_name | lt::torrent_handle::query_save_path;
+
 static void fill_status(lt_torrent_status& out, int64_t id,
                         const lt::torrent_status& st)
 {
@@ -295,12 +301,10 @@ static void fill_status(lt_torrent_status& out, int64_t id,
     out.total_uploaded = st.total_payload_upload;
     out.num_peers     = st.num_peers;
     out.num_seeds     = st.num_seeds;
+    // (libtorrent's num_pieces is the count of pieces had — what the old
+    // loop over the piece bitfield counted, without asking for it.)
     out.num_pieces    = (int32_t)st.num_pieces;
-
-    int have = 0;
-    for (int i = 0; i < (int)st.pieces.size(); ++i)
-        if (st.pieces.get_bit(lt::piece_index_t(i))) have++;
-    out.pieces_done = (int32_t)have;
+    out.pieces_done   = (int32_t)st.num_pieces;
 
     out.is_paused   = (st.flags & lt::torrent_flags::paused) ? 1 : 0;
     out.is_finished = (st.progress >= 0.999f && st.is_finished) ? 1 : 0;
@@ -309,12 +313,8 @@ static void fill_status(lt_torrent_status& out, int64_t id,
     int qp = static_cast<int>(st.queue_position);
     out.queue_position = (qp < 0) ? -1 : qp;
 
-    std::string name = st.name;
-    if (st.has_metadata) {
-        auto ti = st.handle.torrent_file();
-        if (ti) name = ti->name();
-    }
-    std::strncpy(out.name, name.c_str(), sizeof(out.name) - 1);
+    // (st.name is the metadata's name once there is metadata.)
+    std::strncpy(out.name, st.name.c_str(), sizeof(out.name) - 1);
     out.name[sizeof(out.name) - 1] = 0;
 
     std::strncpy(out.save_path, st.save_path.c_str(), sizeof(out.save_path) - 1);
@@ -1009,6 +1009,7 @@ struct StreamEngine {
     std::thread       server_thread;
     socket_t          listen_sock = SOCKET_INVALID;
     int               server_port = 0;
+    std::string       url;          // set once in lt_start_stream
 #ifndef _WIN32
     int               wake_fds[2] = {-1, -1};
 #endif
@@ -1212,9 +1213,19 @@ struct SessionWrapper {
     void*              dart_user_data = nullptr;
     std::mutex         cb_mu;
 
-    // pull queue (for lt_poll_alerts)
+    // pull queue (for lt_poll_alerts), filled only while someone polls:
+    // last_poll_ms is when lt_poll_alerts was last called.
     std::mutex              dart_queue_mu;
     std::deque<AlertRecord> dart_queue;
+    std::atomic<int64_t>    last_poll_ms{INT64_MIN / 2};
+
+    static int64_t steady_ms() {
+        return (int64_t)chr::duration_cast<chr::milliseconds>(
+            chr::steady_clock::now().time_since_epoch()).count();
+    }
+    bool poll_consumer_active() const {
+        return steady_ms() - last_poll_ms.load() < 10000;
+    }
 
     explicit SessionWrapper(lt::session_params params)
         : session(std::move(params)) {}
@@ -1376,21 +1387,33 @@ struct SessionWrapper {
                             }
                         }
 
-                        // queue alert for dart
+                        // Pass the alert on — only when something takes it:
+                        // a callback set with lt_set_alert_callback, or a
+                        // caller of lt_poll_alerts in the last 10 s. Nobody
+                        // listening, no message formatting and no queue.
+                        bool want_cb;
+                        {
+                            std::lock_guard<std::mutex> cl(cb_mu);
+                            want_cb = dart_callback != nullptr;
+                        }
+                        const bool want_queue = poll_consumer_active();
+                        if (!want_cb && !want_queue) continue;
+
                         lt_torrent_id tid = -1;
                         if (auto* ta = dynamic_cast<lt::torrent_alert*>(a))
                             tid = id_for_handle(ta->handle);
+                        const std::string msg = a->message();
 
-                        {
+                        if (want_queue) {
                             std::lock_guard<std::mutex> ql(dart_queue_mu);
                             if (dart_queue.size() < 2048)
-                                dart_queue.push_back({a->type(), tid, a->message()});
+                                dart_queue.push_back({a->type(), tid, msg});
                         }
 
-                        {
+                        if (want_cb) {
                             std::lock_guard<std::mutex> cl(cb_mu);
                             if (dart_callback)
-                                dart_callback(a->type(), tid, a->message().c_str(), dart_user_data);
+                                dart_callback(a->type(), tid, msg.c_str(), dart_user_data);
                         }
                     } catch (...) {}
                 }
@@ -1909,7 +1932,7 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
             }
 
             // build response headers — port of stream.go header setup
-            std::string etag_raw = s->make_url();
+            const std::string& etag_raw = s->url;
             std::ostringstream hdr;
             if (is_partial) {
                 hdr << "HTTP/1.1 206 Partial Content\r\n";
@@ -2420,6 +2443,9 @@ TORRENT_API void lt_poll_alerts(lt_session_t session,
                                 lt_alert_callback cb, void* ud) {
     if (!session || !cb) return;
     auto* sw = to_sw(session);
+    // Alerts are queued from now on (for 10 s past each call): the first
+    // poll after a quiet spell returns only what came in since.
+    sw->last_poll_ms.store(SessionWrapper::steady_ms());
     std::deque<AlertRecord> local;
     {
         std::lock_guard<std::mutex> lk(sw->dart_queue_mu);
@@ -2589,13 +2615,22 @@ TORRENT_API int lt_get_all_statuses(lt_session_t session,
                                     lt_torrent_status* out, int max) {
     if (!session || !out || max <= 0) return 0;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->mu);
+    // Handles copied out, then queried without holding mu: each status()
+    // is a round trip to the network thread, and the alert thread needs mu.
+    std::vector<std::pair<int64_t, lt::torrent_handle>> hs;
+    {
+        std::lock_guard<std::mutex> lk(sw->mu);
+        hs.reserve(sw->handles.size());
+        for (auto& kv : sw->handles) hs.emplace_back(kv.first, kv.second);
+    }
     int n = 0;
-    for (auto& kv : sw->handles) {
+    for (auto& kv : hs) {
         if (n >= max) break;
         if (!kv.second.is_valid()) continue;
-        try { fill_status(out[n++], kv.first,
-              kv.second.status(lt::torrent_handle::query_pieces)); } catch (...) {}
+        try {
+            fill_status(out[n], kv.first, kv.second.status(kStatusFlags));
+            ++n;
+        } catch (...) {}
     }
     return n;
 }
@@ -2604,11 +2639,15 @@ TORRENT_API int lt_get_status(lt_session_t session, lt_torrent_id id,
                               lt_torrent_status* out) {
     if (!session || !out) return 0;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->mu);
-    auto it = sw->handles.find(id);
-    if (it == sw->handles.end() || !it->second.is_valid()) return 0;
-    try { fill_status(*out, id,
-          it->second.status(lt::torrent_handle::query_pieces)); return 1; } catch (...) { return 0; }
+    lt::torrent_handle h;
+    {
+        std::lock_guard<std::mutex> lk(sw->mu);
+        auto it = sw->handles.find(id);
+        if (it == sw->handles.end()) return 0;
+        h = it->second;
+    }
+    if (!h.is_valid()) return 0;
+    try { fill_status(*out, id, h.status(kStatusFlags)); return 1; } catch (...) { return 0; }
 }
 
 // ── file queries ────────────────────────────────────────────────────────────────
@@ -2873,6 +2912,7 @@ TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
         }
         raw->server_port = ntohs(addr.sin_port);
         raw->listen_sock = sock;
+        raw->url = raw->make_url();  // fixed for the stream's life: built once
     }
 #ifndef _WIN32
     // The server's wake-up pipe (without it, the poll timeout still ends
@@ -2999,9 +3039,9 @@ static void fill_stream_status(lt_stream_status* out, const StreamEngine* s) {
     float bitrate = s->estimated_bitrate_bps;
     out->buffer_seconds = (float)contiguous * s->piece_length / bitrate;
 
-    // telemetry from handle
+    // telemetry from handle (no optional fields: only the counters are read)
     try {
-        lt::torrent_status ts = s->handle.status();
+        lt::torrent_status ts = s->handle.status(lt::status_flags_t{});
         out->active_peers  = ts.num_peers;
         out->download_rate = ts.download_rate;
     } catch (...) {
@@ -3009,8 +3049,7 @@ static void fill_stream_status(lt_stream_status* out, const StreamEngine* s) {
         out->download_rate = 0;
     }
 
-    std::string url = s->make_url();
-    std::strncpy(out->url, url.c_str(), sizeof(out->url) - 1);
+    std::strncpy(out->url, s->url.c_str(), sizeof(out->url) - 1);
     out->url[sizeof(out->url) - 1] = 0;
 }
 
@@ -3018,10 +3057,16 @@ TORRENT_API int lt_get_stream_status(lt_session_t session,
                                      lt_stream_id sid, lt_stream_status* out) {
     if (!session || !out) return 0;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->streams_mu);
-    auto it = sw->streams.find(sid);
-    if (it == sw->streams.end()) return 0;
-    fill_stream_status(out, it->second.get());
+    // Filled outside streams_mu (the alert thread needs it); the
+    // shared_ptr keeps the stream alive even if it's stopped meanwhile.
+    std::shared_ptr<StreamEngine> s;
+    {
+        std::lock_guard<std::mutex> lk(sw->streams_mu);
+        auto it = sw->streams.find(sid);
+        if (it == sw->streams.end()) return 0;
+        s = it->second;
+    }
+    fill_stream_status(out, s.get());
     return 1;
 }
 
@@ -3029,12 +3074,16 @@ TORRENT_API int lt_get_all_stream_statuses(lt_session_t session,
                                            lt_stream_status* out, int max) {
     if (!session || !out || max <= 0) return 0;
     auto* sw = to_sw(session);
-    std::lock_guard<std::mutex> lk(sw->streams_mu);
-    int n = 0;
-    for (auto& kv : sw->streams) {
-        if (n >= max) break;
-        fill_stream_status(&out[n++], kv.second.get());
+    std::vector<std::shared_ptr<StreamEngine>> ss;
+    {
+        std::lock_guard<std::mutex> lk(sw->streams_mu);
+        for (auto& kv : sw->streams) {
+            if ((int)ss.size() >= max) break;
+            ss.push_back(kv.second);
+        }
     }
+    int n = 0;
+    for (auto& s : ss) fill_stream_status(&out[n++], s.get());
     return n;
 }
 

@@ -607,13 +607,16 @@ class _PlayerScreenState extends State<PlayerScreen>
     // and to re-pause when the buffer drains rather than stalling mid-stream.
     // Each step stops if the player's been closed meanwhile.
     final mpv = player.platform as NativePlayer;
+    // A phone's memory is tighter: a smaller demuxer cache there.
+    final phone = Platform.isAndroid || Platform.isIOS;
     await mpv.observeProperty('chapter-list', _onMpvChapterList);
     for (final p in {
       'cache': 'yes',
       'cache-secs': '60', // Keep up to 60s of video cached ahead
       'demuxer-readahead-secs': '10', // Fetch 10s ahead (not 30) to start sooner
-      'demuxer-max-bytes': '150M', // 150MB demuxer cache
-      'demuxer-max-back-bytes': '50M', // 50MB back-buffer for seeking
+      // Demuxer cache ahead, and back-buffer for seeking.
+      'demuxer-max-bytes': phone ? '64M' : '150M',
+      'demuxer-max-back-bytes': phone ? '16M' : '50M',
       'cache-pause-initial': 'yes', // Pause at startup until initial cache fills
       'cache-pause-wait': '5', // Re-pause if buffer drops below 5s
       // Seeks land on the nearest keyframe rather than the exact second: an

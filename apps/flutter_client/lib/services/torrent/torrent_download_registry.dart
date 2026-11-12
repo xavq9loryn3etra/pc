@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -98,18 +99,55 @@ class TorrentDownloadRegistry {
         hash, TorrentDownloadInfo.fromJson(json as Map<String, dynamic>)));
   }
 
+  /// How often a torrent's progress is written to disk while it plays.
+  static const progressEvery = Duration(seconds: 30);
+  static final Map<String, DateTime> _lastWrite = {};
+  static final Map<String, ({int downloadedBytes, int? totalBytes})> _pending =
+      {};
+  static final Map<String, Timer> _flushTimers = {};
+
+  /// Whether progress last written at [last] (null: never) may be written
+  /// again at [now].
+  static bool progressWriteDue(DateTime? last, DateTime now) =>
+      last == null || now.difference(last) >= progressEvery;
+
   /// Updates just the real-progress fields of an already-saved entry
   /// (leaving its movie/episode identity untouched). No-ops if [save]
   /// hasn't been called for this infoHash yet — progress with no known
   /// identity attached isn't useful for anything.
+  ///
+  /// The whole registry is rewritten on each call, and the player reports
+  /// every few seconds, so a call within [progressEvery] of the last write
+  /// for the same torrent is held back and written when that time is up —
+  /// the latest figure wins, so a final report as the player closes still
+  /// lands. [force] writes at once.
   static Future<void> updateProgress(
     String infoHash, {
     required int downloadedBytes,
     int? totalBytes,
+    bool force = false,
   }) async {
+    final key = infoHash.toLowerCase();
+    final now = DateTime.now();
+    if (!force && !progressWriteDue(_lastWrite[key], now)) {
+      _pending[key] = (downloadedBytes: downloadedBytes, totalBytes: totalBytes);
+      _flushTimers[key] ??=
+          Timer(progressEvery - now.difference(_lastWrite[key]!), () {
+        _flushTimers.remove(key);
+        final held = _pending.remove(key);
+        if (held == null) return;
+        updateProgress(key,
+            downloadedBytes: held.downloadedBytes,
+            totalBytes: held.totalBytes,
+            force: true);
+      });
+      return;
+    }
+    _lastWrite[key] = now;
+    _pending.remove(key);
+    _flushTimers.remove(key)?.cancel();
     final prefs = await SharedPreferences.getInstance();
     final map = await _readAll(prefs);
-    final key = infoHash.toLowerCase();
     final existingJson = map[key];
     if (existingJson == null) return;
     final existing =
@@ -139,12 +177,22 @@ class TorrentDownloadRegistry {
     await prefs.setString(_storageKey, jsonEncode(map));
   }
 
-  static Future<void> remove(String infoHash) async {
+  static Future<void> remove(String infoHash) => removeAll([infoHash]);
+
+  /// Removes the entries of [infoHashes], writing once.
+  static Future<void> removeAll(Iterable<String> infoHashes) async {
     final prefs = await SharedPreferences.getInstance();
     final map = await _readAll(prefs);
-    if (map.remove(infoHash.toLowerCase()) != null) {
-      await prefs.setString(_storageKey, jsonEncode(map));
+    var changed = false;
+    for (final infoHash in infoHashes) {
+      final key = infoHash.toLowerCase();
+      // A progress report held back for it must not bring it back.
+      _pending.remove(key);
+      _flushTimers.remove(key)?.cancel();
+      _lastWrite.remove(key);
+      if (map.remove(key) != null) changed = true;
     }
+    if (changed) await prefs.setString(_storageKey, jsonEncode(map));
   }
 
   static Future<Map<String, dynamic>> _readAll(SharedPreferences prefs) async {

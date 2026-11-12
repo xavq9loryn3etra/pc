@@ -96,6 +96,7 @@ class TorrentStorageService {
     try {
       final entries = await listCached();
       final registry = await TorrentDownloadRegistry.loadAll();
+      await _pruneRegistry(registry);
       TorrentDownloadInfo? infoFor(CachedTorrentEntry e) =>
           registry[e.infoHash.toLowerCase()];
       int sizeOf(CachedTorrentEntry e) =>
@@ -126,6 +127,26 @@ class TorrentStorageService {
       }
     } catch (e) {
       print('Error enforcing the downloads limit: $e');
+    }
+  }
+
+  /// Drops the registry's entries for downloads that no longer have a
+  /// folder (deleted by hand, or by the system), so it doesn't grow forever.
+  /// Not one in use, whose folder may not exist yet.
+  static Future<void> _pruneRegistry(
+      Map<String, TorrentDownloadInfo> registry) async {
+    try {
+      final base = await TorrentPaths.torrentsDir();
+      final gone = <String>[];
+      for (final hash in registry.keys) {
+        if (_inUse(hash)) continue;
+        if (!isValidInfoHash(hash) || !await Directory('$base/$hash').exists()) {
+          gone.add(hash);
+        }
+      }
+      await TorrentDownloadRegistry.removeAll(gone);
+    } catch (e) {
+      print('Error pruning the download registry: $e');
     }
   }
 

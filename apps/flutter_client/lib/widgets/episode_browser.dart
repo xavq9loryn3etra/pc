@@ -13,6 +13,7 @@ import 'quality_option_list.dart';
 import 'floating_bottom_nav_bar.dart' show kNavButtonHeight;
 import 'glass_bubble_bar.dart' show GlassBubbleBar, MovieTitleLogo;
 import 'season_picker.dart';
+import 'smooth_scroll_controller.dart';
 
 /// YouTube-style, full-screen episode browser for the in-player "Episodes"
 /// button. Two states:
@@ -92,7 +93,7 @@ class EpisodeBrowser extends StatefulWidget {
 
 class _EpisodeBrowserState extends State<EpisodeBrowser> {
   Episode? _selectedEpisode;
-  final ScrollController _gridScrollController = ScrollController();
+  final ScrollController _gridScrollController = SmoothScrollController();
   bool _hasScrolled = false;
 
   // Where the grid was scrolled to when an episode was opened: put back on

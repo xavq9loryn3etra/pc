@@ -6,6 +6,7 @@ import '../widgets/movie_poster.dart';
 import 'details_screen.dart';
 import '../widgets/screen_scaffold.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
+import '../widgets/smooth_scroll_controller.dart';
 
 class FavoritesScreen extends StatefulWidget {
   const FavoritesScreen({super.key});
@@ -16,7 +17,7 @@ class FavoritesScreen extends StatefulWidget {
 
 class _FavoritesScreenState extends State<FavoritesScreen> {
   List<Movie> _favorites = [];
-  final ScrollController _scrollController = ScrollController();
+  final ScrollController _scrollController = SmoothScrollController();
   Movie? _selectedMovie;
 
   @override

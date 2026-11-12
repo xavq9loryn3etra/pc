@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+import '../widgets/smooth_scroll_controller.dart';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
@@ -67,7 +68,7 @@ class _AskScreenState extends State<AskScreen>
     with SingleTickerProviderStateMixin {
   final _controller = TextEditingController();
   final _focus = FocusNode();
-  final _scroll = ScrollController();
+  final _scroll = SmoothScrollController();
 
   final List<_Turn> _turns = [];
 

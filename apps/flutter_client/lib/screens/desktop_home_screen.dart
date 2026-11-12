@@ -12,6 +12,7 @@ import '../widgets/image_precache.dart';
 import '../services/saved_movies_service.dart';
 import '../services/movie_tab_service.dart';
 import '../widgets/artwork_glow.dart';
+import '../widgets/smooth_scroll_controller.dart';
 
 class DesktopHomeScreen extends StatefulWidget {
   final Movie featuredMovie;
@@ -77,7 +78,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
   // State for Side Panel
   Movie? _selectedMovie;
 
-  final ScrollController _scrollController = ScrollController();
+  final ScrollController _scrollController = SmoothScrollController();
 
   @override
   void dispose() {
@@ -106,7 +107,11 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
   @override
   Widget build(BuildContext context) {
     final double screenHeight = MediaQuery.of(context).size.height;
-    final double heroHeight = screenHeight * 0.95; // 95vh
+    // 95vh, to a whole device pixel: at a fraction its bottom row was half
+    // covered by the fade to black, and the picture showed through it as a
+    // thin line across the page.
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final double heroHeight = (screenHeight * 0.95 * dpr).floorToDouble() / dpr;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -567,7 +572,7 @@ class _DesktopSectionList extends StatefulWidget {
 }
 
 class _DesktopSectionListState extends State<_DesktopSectionList> {
-  final ScrollController _scrollController = ScrollController();
+  final ScrollController _scrollController = SmoothScrollController();
 
   @override
   void dispose() {

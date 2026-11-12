@@ -15,6 +15,7 @@ import 'desktop_home_screen.dart';
 import '../widgets/desktop_skeletons.dart';
 import '../widgets/custom_app_bar.dart';
 import '../widgets/glass_dialog.dart';
+import '../widgets/smooth_scroll_controller.dart';
 
 class MovieHomeScreen extends StatefulWidget {
   const MovieHomeScreen({super.key});
@@ -39,7 +40,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
   static Movie? _cachedFeatured;
 
   final TMDBService _tmdb = TMDBService();
-  final ScrollController _scrollController = ScrollController();
+  final ScrollController _scrollController = SmoothScrollController();
 
   List<Movie> _trendingMovies = [];
   List<Movie> _topRatedMovies = [];

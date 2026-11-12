@@ -37,6 +37,7 @@ import '../widgets/marquee_text.dart';
 import '../widgets/quality_option_list.dart';
 import '../widgets/season_picker.dart';
 import '../widgets/image_precache.dart';
+import '../widgets/smooth_scroll_controller.dart';
 
 class DetailsScreen extends StatefulWidget {
   final Movie movie;
@@ -125,7 +126,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // currently showing (see _openProvider / _showProviderMessage).
   bool _openingProvider = false;
   String? _providerMessage;
-  final ScrollController _scrollController = ScrollController();
+  final ScrollController _scrollController = SmoothScrollController();
   // The page's vertical scroll offset, for the parallax backdrop and the
   // app bar. Fed from scroll notifications rather than a _scrollController
   // listener: when the content shrinks (e.g. the synopsis collapsing) the

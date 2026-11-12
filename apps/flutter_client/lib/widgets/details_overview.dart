@@ -2,6 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shimmer/shimmer.dart';
+import 'smooth_scroll_controller.dart';
 
 import '../models/movie.dart';
 import 'person_sheet.dart';
@@ -262,7 +263,7 @@ class CastRow extends StatefulWidget {
 }
 
 class _CastRowState extends State<CastRow> {
-  final ScrollController _scroll = ScrollController();
+  final ScrollController _scroll = SmoothScrollController();
 
   static final bool _desktop = !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.windows ||

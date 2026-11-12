@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../models/movie.dart';
 import '../theme/app_theme.dart';
 import '../services/saved_movies_service.dart';
+import 'smooth_scroll_controller.dart';
 
 /// YouTube-style bottom panel for browsing episodes while watching.
 ///
@@ -44,7 +45,7 @@ class EpisodeDrawer extends StatefulWidget {
 
 class _EpisodeDrawerState extends State<EpisodeDrawer>
     with SingleTickerProviderStateMixin {
-  final ScrollController _scrollController = ScrollController();
+  final ScrollController _scrollController = SmoothScrollController();
   late final AnimationController _slideController;
   late final Animation<Offset> _slideAnimation;
 

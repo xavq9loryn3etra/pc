@@ -2197,7 +2197,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       // libmpv's default output on Android is OpenSL ES, which is stereo
       // only; AudioTrack takes 5.1/7.1 (OpenSL ES stays as the fallback).
       if (Platform.isAndroid) 'ao': 'audiotrack,opensles',
-      if (Platform.isAndroid) 'audio-channels': 'auto',
+      // Windows too: with Windows Sonic / Dolby Atmos for Headphones on, or
+      // surround speakers, the device takes the film's channels; on a plain
+      // stereo device mpv folds them down as before.
+      if (Platform.isAndroid || Platform.isWindows) 'audio-channels': 'auto',
       'audio-swresample-o': 'lfe_mix_level=0.5',
     };
     for (final o in options.entries) {

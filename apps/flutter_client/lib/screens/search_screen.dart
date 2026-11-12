@@ -3,6 +3,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../models/movie.dart';
 import '../services/tmdb_service.dart';
+import '../widgets/smooth_scroll_controller.dart';
 
 import 'details_screen.dart';
 import '../widgets/movie_poster.dart';
@@ -22,7 +23,7 @@ class SearchScreen extends StatefulWidget {
 
 class _SearchScreenState extends State<SearchScreen> {
   final TextEditingController _controller = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
+  final ScrollController _scrollController = SmoothScrollController();
   final FocusNode _searchFocusNode = FocusNode();
   final TMDBService _tmdb = TMDBService();
 

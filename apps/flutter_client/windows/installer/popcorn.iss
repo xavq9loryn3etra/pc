@@ -27,10 +27,10 @@ VersionInfoVersion={#AppVersion}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
-; Installs for the current user without an administrator prompt; the user
-; can choose "for all users" instead.
+; Installs for the current user, with no administrator prompt — always, so
+; an update lands on the earlier install (no "for all users" choice: that
+; went to Program Files and left the per-user copy and its shortcut).
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0

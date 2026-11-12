@@ -23,6 +23,7 @@ import '../services/background_download_service.dart';
 import '../services/saved_movies_service.dart';
 import '../services/torrent/torrent_index_service.dart';
 import '../services/torrent/torrent_engine_service.dart';
+import '../services/torrent/free_space.dart';
 import '../services/torrent/stream_resolver.dart';
 import '../services/torrent/torrent_download_registry.dart';
 import '../services/torrent/torrent_storage_service.dart';
@@ -344,6 +345,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   // and when — the baseline for the rule above.
   ({int torrentId, int bytes, DateTime at})? _openingBaseline;
   bool _recoveringStream = false;
+
+  /// True while playback is paused because the device ran low on storage
+  /// (see TorrentEngineService.lowDiskSpace), so it only resumes what it
+  /// paused itself.
+  bool _pausedForLowDisk = false;
   int _autoRecoverAttempts = 0;
   static const int _maxAutoRecoverAttempts = 2;
   // Copies (info hashes, lower case) that already got stuck while starting,
@@ -825,6 +831,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _errorSub = player.stream.error.listen(_onPlayerError);
     // The end of the file: the next episode, or the controls.
     _completedSub = player.stream.completed.listen(_onPlaybackCompleted);
+    TorrentEngineService.instance.lowDiskSpace.addListener(_onLowDiskSpace);
 
     await _openMediaWithResume(_streamUrl);
     // Closed while it opened: no watchdog left running for good, holding
@@ -838,6 +845,29 @@ class _PlayerScreenState extends State<PlayerScreen>
     _stallWatchdogTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       _checkForStall();
     });
+  }
+
+  /// The engine paused the download because storage is nearly full (or
+  /// resumed it after space was freed). Playback pauses too, rather than
+  /// sitting on a spinner, and resumes only if this paused it.
+  void _onLowDiskSpace() {
+    if (!mounted) return;
+    if (TorrentEngineService.instance.lowDiskSpace.value) {
+      if (_isPlaying) {
+        _pausedForLowDisk = true;
+        player.pause();
+      }
+      showAppMessage(
+        context,
+        'Your device is nearly out of storage, so the download is paused. '
+        'Free up some space to carry on.',
+        error: true,
+        duration: const Duration(seconds: 6),
+      );
+    } else if (_pausedForLowDisk) {
+      _pausedForLowDisk = false;
+      player.play();
+    }
   }
 
   /// An error from mpv (see _errorSub). Some are passing decoder complaints
@@ -1208,7 +1238,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           debugPrint('Failed to recover playback: $e');
           showAppMessage(
             context,
-            "Couldn't get playback going again. Try another quality.",
+            e is NotEnoughSpaceException
+                ? e.toString()
+                : "Couldn't get playback going again. Try another quality.",
             error: true,
           );
         }
@@ -2104,9 +2136,11 @@ class _PlayerScreenState extends State<PlayerScreen>
         debugPrint('Quality switch failed: $e');
         showAppMessage(
           context,
-          failedMessage ??
-              "Couldn't switch quality, so it's staying on "
-                  '${_currentStream.quality ?? "the current one"}.',
+          e is NotEnoughSpaceException
+              ? e.toString()
+              : failedMessage ??
+                  "Couldn't switch quality, so it's staying on "
+                      '${_currentStream.quality ?? "the current one"}.',
           error: true,
         );
       }
@@ -2620,8 +2654,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     debugPrint('Episode switch failed: $e');
     showAppMessage(
       context,
-      "Couldn't play S$seasonNumber E${targetEp.episodeNumber}, so you're "
-      'still on the episode you were watching.',
+      e is NotEnoughSpaceException
+          ? e.toString()
+          : "Couldn't play S$seasonNumber E${targetEp.episodeNumber}, so "
+              "you're still on the episode you were watching.",
       error: true,
     );
   }
@@ -3068,6 +3104,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _tracksSub?.cancel();
     _errorSub?.cancel();
     _completedSub?.cancel();
+    TorrentEngineService.instance.lowDiskSpace.removeListener(_onLowDiskSpace);
     _errorCheck?.cancel();
     _torrentSub?.cancel();
     _controlsTimer?.cancel();

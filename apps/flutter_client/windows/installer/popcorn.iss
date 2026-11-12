@@ -27,6 +27,9 @@ VersionInfoVersion={#AppVersion}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
+; Installing over the earlier homemade installer's folder (whose uninstaller
+; left its files) is the normal case: no "folder already exists" question.
+DirExistsWarning=no
 ; Installs for the current user, with no administrator prompt — always, so
 ; an update lands on the earlier install (no "for all users" choice: that
 ; went to Program Files and left the per-user copy and its shortcut).

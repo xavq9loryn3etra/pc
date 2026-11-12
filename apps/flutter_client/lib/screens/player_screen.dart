@@ -1081,6 +1081,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     final resumeAt = _resumePointForSwitch();
     final staleInfoHash = _currentStream.infoHash;
     final stuckTorrentId = _torrentId;
+    // Fully downloaded: the stall can't be missing data (download bytes are
+    // always flat once it's done), so wiping would only throw away a good
+    // copy — it's just reopened at the current position.
+    final stuckTorrent = LibtorrentFlutter.instance.torrents[stuckTorrentId];
+    final alreadyComplete = stuckTorrent != null &&
+        stuckTorrent.totalWanted > 0 &&
+        stuckTorrent.totalDone >= stuckTorrent.totalWanted;
 
     // Still starting: nothing's downloaded that could be damaged, so wiping
     // this copy and starting it over would only lose the peers it has
@@ -1124,8 +1131,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       } else {
         // Wipe the stuck torrent's cached data (also removes the live
         // handle if it's still registered) so the retry doesn't just reuse
-        // whatever was stuck on disk.
-        await TorrentStorageService.deleteByInfoHash(staleInfoHash);
+        // whatever was stuck on disk — unless it's all there already.
+        if (!alreadyComplete) {
+          await TorrentStorageService.deleteByInfoHash(staleInfoHash);
+        }
         if (!mounted) return;
         resolved = await _resolver.resolveWithFallback(
           _currentStream,

@@ -331,10 +331,22 @@ class TorrentIndexService {
   /// The longest a search waits, whatever the finders are doing.
   static const _cap = Duration(seconds: 30);
 
+  // Where each finder lives, tried in order until one answers: to follow
+  // a finder that moves, change or add to these lists (no trailing slash).
+  // Only addresses of the real finders belong here — each gets every title
+  // the user looks up.
+  static const _torrentioApis = [
+    'https://torrentio.strem.fun',
+  ];
+
   // YTS keeps moving its address; the old ones forward to the new.
   static const _ytsApis = [
     'https://movies-api.accel.li/api/v2',
     'https://yts.lt/api/v2',
+  ];
+
+  static const _pirateBayApis = [
+    'https://apibay.org',
   ];
 
   // The Pirate Bay's video categories: movies (201, 202, 207, 209, 211)
@@ -429,7 +441,14 @@ class TorrentIndexService {
   }
 
   Future<List<TorrentStream>?> _torrentio(String path) async {
-    final url = 'https://torrentio.strem.fun/stream/$path.json';
+    for (final api in _torrentioApis) {
+      final streams = await _torrentioAt('$api/stream/$path.json');
+      if (streams != null) return streams;
+    }
+    return null; // Every address failed.
+  }
+
+  Future<List<TorrentStream>?> _torrentioAt(String url) async {
     try {
       final response = await _dio.get(
         url,
@@ -526,37 +545,40 @@ class TorrentIndexService {
     final episodePattern = RegExp(
         'S0?${season}E0?$episode(?![0-9])(?!\\s*[-–]\\s*E?[0-9])(?!E[0-9])',
         caseSensitive: false);
-    try {
-      final response = await _dio.get(
-        'https://apibay.org/q.php',
-        queryParameters: {'q': imdbId},
-        options: _quickOptions,
-      );
-      final results = response.data is List ? response.data as List : const [];
-      final streams = [
-        for (final r in results)
-          // "No results returned" comes back as a single id-0 entry.
-          if (r['id'] != '0' &&
-              r['imdb'] == imdbId &&
-              categories.contains(r['category']) &&
-              r['info_hash'] is String &&
-              isValidInfoHash(r['info_hash']) &&
-              (!isEpisode || episodePattern.hasMatch('${r['name']}')))
-            TorrentStream.fromRelease(
-              infoHash: r['info_hash'],
-              name: '${r['name']}',
-              sizeBytes: int.tryParse('${r['size']}') ?? 0,
-              seeders: int.tryParse('${r['seeders']}') ?? 0,
-              source: 'ThePirateBay',
-            ),
-      ];
-      print('The Pirate Bay $imdbId'
-          '${isEpisode ? ' S${season}E$episode' : ''} -> '
-          '${streams.length} stream(s)');
-      return streams;
-    } catch (e) {
-      print('Error fetching torrents from The Pirate Bay ($imdbId): $e');
+    for (final api in _pirateBayApis) {
+      try {
+        final response = await _dio.get(
+          '$api/q.php',
+          queryParameters: {'q': imdbId},
+          options: _quickOptions,
+        );
+        final results =
+            response.data is List ? response.data as List : const [];
+        final streams = [
+          for (final r in results)
+            // "No results returned" comes back as a single id-0 entry.
+            if (r['id'] != '0' &&
+                r['imdb'] == imdbId &&
+                categories.contains(r['category']) &&
+                r['info_hash'] is String &&
+                isValidInfoHash(r['info_hash']) &&
+                (!isEpisode || episodePattern.hasMatch('${r['name']}')))
+              TorrentStream.fromRelease(
+                infoHash: r['info_hash'],
+                name: '${r['name']}',
+                sizeBytes: int.tryParse('${r['size']}') ?? 0,
+                seeders: int.tryParse('${r['seeders']}') ?? 0,
+                source: 'ThePirateBay',
+              ),
+        ];
+        print('The Pirate Bay $imdbId'
+            '${isEpisode ? ' S${season}E$episode' : ''} -> '
+            '${streams.length} stream(s)');
+        return streams;
+      } catch (e) {
+        print('Error fetching torrents from The Pirate Bay ($api, $imdbId): $e');
+      }
     }
-    return null;
+    return null; // Every address failed.
   }
 }

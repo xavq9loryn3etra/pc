@@ -274,15 +274,26 @@ static bool load_resume(lt::add_torrent_params& atp,
 }
 
 // A torrent downloads nothing until a stream asks for pieces
-// (lt_start_stream sets them one by one): every file starts at
+// (lt_start_stream sets them one by one): every PIECE starts at
 // dont_download, and priorities kept in its resume data are dropped.
 // Before, once metadata came in, every added torrent — each raced warm-up
 // copy too, on mobile data as well — downloaded all of its files until the
 // app paused it.
+//
+// Not torrent_flags::default_dont_download (file priorities 0): libtorrent
+// 2.0 writes the pieces of a dont_download file into the torrent's
+// ".parts" file instead of the file itself (mmap_storage::write), so every
+// streamed byte would have gone there. Piece priorities don't touch the
+// storage. libtorrent applies these in torrent::init — at add time when
+// the metadata is known, when it arrives for a magnet — trimming the list
+// to the real piece count; a magnet's count isn't known yet, so it gets
+// 2^20 entries (1 MB, freed once the torrent's resume data is checked;
+// a torrent with more pieces than that is all but unheard of, and its
+// remaining pieces would just keep libtorrent's default).
 static void nothing_wanted_until_streamed(lt::add_torrent_params& atp) {
     atp.file_priorities.clear();
-    atp.piece_priorities.clear();
-    atp.flags |= lt::torrent_flags::default_dont_download;
+    const int n = atp.ti ? atp.ti->num_pieces() : (1 << 20);
+    atp.piece_priorities.assign((size_t)std::max(n, 0), lt::dont_download);
 }
 
 // ── fill torrent status struct ──────────────────────────────────────────────────

@@ -351,6 +351,8 @@ class TMDBService {
         // Fetch it ourselves below.
       }
     }
+    // Only a movie or a show (or, with no type, either).
+    if (type != null && type != 'movie' && type != 'tv') return null;
     // Resolved alongside the details request (cached after the first).
     final watchCountry = _watchCountry();
 
@@ -376,7 +378,11 @@ class TMDBService {
         return movie;
       } catch (e) {
         if (e is DioException && CancelToken.isCancel(e)) rethrow;
-        if (type == 'movie') return null;
+        // It may be a show with that id, but only if TMDB has no such
+        // movie: any other failure (offline, a server error) is just a
+        // failure, not a reason to look for a show.
+        final notFound = e is DioException && e.response?.statusCode == 404;
+        if (type == 'movie' || !notFound) return null;
       }
     }
 

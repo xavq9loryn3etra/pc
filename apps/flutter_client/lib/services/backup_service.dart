@@ -113,6 +113,7 @@ class BackupService {
 
   Future<bool> exportData() async {
     try {
+      await SavedMoviesService().flush();
       final prefs = await SharedPreferences.getInstance();
       final keys = prefs.getKeys();
       final Map<String, dynamic> allData = {backupMarker: 1};
@@ -200,6 +201,8 @@ class BackupService {
       if (checked != null) toWrite[key] = checked;
     });
 
+    // History changes still waiting to be written are part of "now".
+    await SavedMoviesService().flush();
     final prefs = await SharedPreferences.getInstance();
     // What's stored now, to put back if writing the backup fails partway.
     final snapshot = <String, Object>{

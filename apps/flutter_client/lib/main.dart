@@ -257,6 +257,13 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.detached) {
       TorrentEngineService.instance.dispose();
     }
+    // Watch history is written in batches (see SavedMoviesService.flush):
+    // whatever is waiting goes out before the app can be killed.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      unawaited(SavedMoviesService().flush());
+    }
     // Picks up flag edits (hide_playback, maintenance, a forced update)
     // without a cold restart.
     if (state == AppLifecycleState.resumed) {

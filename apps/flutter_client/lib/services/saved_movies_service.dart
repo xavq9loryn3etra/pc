@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,6 +17,17 @@ class SavedMoviesService with ChangeNotifier {
 
   /// A copy of each stored value, taken before the migration changes it.
   static const String _backupSuffix = '_premigration_backup';
+
+  /// The most titles history keeps; past that the least recently watched
+  /// go, with their episode progress.
+  static const int maxHistoryTitles = 200;
+
+  /// Playback saves progress every few seconds; it's written to storage at
+  /// most this often (see [flush]).
+  static const Duration _saveInterval = Duration(seconds: 15);
+
+  Timer? _saveTimer;
+  bool _dirty = false;
 
   // Singleton
   static final SavedMoviesService _instance = SavedMoviesService._internal();
@@ -123,6 +135,11 @@ class SavedMoviesService with ChangeNotifier {
     } catch (e) {
       print("Error migrating storage keys: $e");
     }
+
+    // Whatever is stored now is what's loaded: nothing pending to write.
+    _saveTimer?.cancel();
+    _saveTimer = null;
+    _dirty = false;
 
     _favorites = [];
     _history = {};
@@ -399,11 +416,54 @@ class SavedMoviesService with ChangeNotifier {
     // Save specific episode progress
     if (season != null && episode != null && progress != null) {
       _episodeHistory[_episodeKey(movie.id, season, episode)] = progress;
-      await _saveEpisodeHistory();
     }
+    _evictOldest();
 
-    await _saveHistory();
+    _markDirty();
     notifyListeners();
+  }
+
+  /// Drops the least recently watched titles (and their episodes) past
+  /// [maxHistoryTitles].
+  void _evictOldest() {
+    while (_history.length > maxHistoryTitles) {
+      final oldest = _history.entries.reduce((a, b) =>
+          _lastWatchedOf(a.value) <= _lastWatchedOf(b.value) ? a : b);
+      _history.remove(oldest.key);
+      _historyById.remove(oldest.key);
+      if (oldest.key.startsWith('tv_')) {
+        final prefix = '${oldest.key}_';
+        _episodeHistory.removeWhere((key, _) => key.startsWith(prefix));
+        _episodeLengths.removeWhere((key, _) => key.startsWith(prefix));
+      }
+    }
+    _historyCache = null;
+  }
+
+  void _markDirty() {
+    _dirty = true;
+    _saveTimer ??= Timer(_saveInterval, flush);
+  }
+
+  /// Writes any history changes to storage now. Otherwise they're written
+  /// at most every 15 seconds, since playback reports progress every few:
+  /// call this when the app goes to the background and when a player
+  /// closes.
+  Future<void> flush() async {
+    _saveTimer?.cancel();
+    _saveTimer = null;
+    if (!_dirty) return;
+    _dirty = false;
+    try {
+      await _saveEpisodeHistory();
+      await _saveHistory();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_episodeLengthsKey, jsonEncode(_episodeLengths));
+    } catch (e) {
+      print("Error saving history: $e");
+      _dirty = true;
+      _saveTimer ??= Timer(_saveInterval, flush);
+    }
   }
 
   Future<void> removeFromHistory(String movieId, {String? type}) async {

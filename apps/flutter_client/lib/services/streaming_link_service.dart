@@ -93,7 +93,33 @@ class StreamingLinkService {
     for (final s in _services.values) ...s.tvProps,
   };
 
+  // All the lookups in one stored map, wikidata id → {fetchedAt, ids}, at
+  // most [_maxCached] of them (the oldest fetched dropped first). The key
+  // keeps the old per-title keys' prefix, so backups carry it.
   static const _prefsPrefix = 'wd_streaming_ids_';
+  static const _cacheKey = 'wd_streaming_ids_v2';
+  static const _maxCached = 300;
+  Map<String, dynamic>? _cacheMap;
+
+  /// The stored lookups. Entries an older version kept under a key each
+  /// are dropped: they're only a cache, fetched again when needed.
+  Future<Map<String, dynamic>> _loadCache(SharedPreferences prefs) async {
+    final loaded = _cacheMap;
+    if (loaded != null) return loaded;
+    var map = <String, dynamic>{};
+    try {
+      final raw = prefs.getString(_cacheKey);
+      if (raw != null && jsonDecode(raw) is Map<String, dynamic>) {
+        map = jsonDecode(raw) as Map<String, dynamic>;
+      }
+      for (final key in prefs.getKeys().toList()) {
+        if (key.startsWith(_prefsPrefix) && key != _cacheKey) {
+          await prefs.remove(key);
+        }
+      }
+    } catch (_) {}
+    return _cacheMap = map;
+  }
 
   // How long a cached lookup missing the wanted service's ID is trusted
   // before Wikidata is asked again.
@@ -165,9 +191,8 @@ class StreamingLinkService {
     Map<String, String>? cached;
     try {
       prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('$_prefsPrefix$wikidataId');
-      if (raw != null) {
-        final entry = jsonDecode(raw) as Map;
+      final entry = (await _loadCache(prefs))[wikidataId];
+      if (entry is Map) {
         // Entries saved before misses were rechecked are the bare ID map,
         // with no fetch time — so they count as stale.
         cached = Map<String, String>.from(
@@ -202,13 +227,18 @@ class StreamingLinkService {
         }
       }
       try {
-        await prefs?.setString(
-          '$_prefsPrefix$wikidataId',
-          jsonEncode({
+        if (prefs != null) {
+          final cache = await _loadCache(prefs);
+          cache.remove(wikidataId);
+          cache[wikidataId] = {
             'fetchedAt': DateTime.now().millisecondsSinceEpoch,
             'ids': ids,
-          }),
-        );
+          };
+          while (cache.length > _maxCached) {
+            cache.remove(cache.keys.first);
+          }
+          await prefs.setString(_cacheKey, jsonEncode(cache));
+        }
       } catch (_) {}
       return ids;
     } catch (e) {

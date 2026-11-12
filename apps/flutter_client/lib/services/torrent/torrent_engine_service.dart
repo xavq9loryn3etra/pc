@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:libtorrent_flutter/libtorrent_flutter.dart';
@@ -611,16 +612,31 @@ class TorrentEngineService {
     );
   }
 
-  int _findLargestVideoFile(List<FileInfo> files) {
-    int largestIndex = files.first.index;
-    int largestSize = files.first.size;
+  int _findLargestVideoFile(List<FileInfo> files) => chooseVideoFile(files);
+
+  // Bonus clips in a release, not the feature.
+  static final _bonusPattern = RegExp(
+      r'(?<![A-Za-z])(samples?|trailers?|extras)(?![A-Za-z])',
+      caseSensitive: false);
+
+  /// The file to play when the finder didn't say which: the largest video
+  /// (by the engine's own list of playable types), leaving out samples,
+  /// trailers and extras — the largest file of any kind could be a disc
+  /// image or an archive. Throws when there's none, so the next copy is
+  /// tried instead (see StreamResolver.resolveWithFallback).
+  @visibleForTesting
+  static int chooseVideoFile(List<FileInfo> files) {
+    FileInfo? best;
     for (final file in files) {
-      if (file.size > largestSize) {
-        largestSize = file.size;
-        largestIndex = file.index;
+      if (!file.isStreamable) continue;
+      if (_bonusPattern.hasMatch(file.path) ||
+          _bonusPattern.hasMatch(file.name)) {
+        continue;
       }
+      if (best == null || file.size > best.size) best = file;
     }
-    return largestIndex;
+    if (best == null) throw Exception('No video file found in torrent');
+    return best.index;
   }
 
   /// Clean up after playback — deletes the downloaded data. Only appropriate

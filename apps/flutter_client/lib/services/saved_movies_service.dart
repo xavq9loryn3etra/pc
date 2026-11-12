@@ -192,9 +192,55 @@ class SavedMoviesService with ChangeNotifier {
       }
     }
 
+    // An app version from before the re-keying, run on the same data after
+    // it (an old install still on the PC), saves under the old keys again:
+    // folded in on every load, or the title shows twice.
+    if (foldLegacyKeys(_history, _episodeHistory, _episodeLengths)) {
+      _dirty = true;
+      await flush();
+    }
+
     _historyCache = null;
     _historyById.clear();
     notifyListeners();
+  }
+
+  /// Moves entries an older app version saved under its old keys — a bare
+  /// id in [history] whose movie says its type, 'id_s_e' in [episodes] and
+  /// [lengths] — to their 'type_id' / 'tv_id_s_e' keys, in place. Anything
+  /// under an old key was saved after the re-keying, so it's the newer:
+  /// for an episode it wins; for a title, whichever was watched last does.
+  /// Returns whether anything moved.
+  @visibleForTesting
+  static bool foldLegacyKeys(
+    Map<String, dynamic> history,
+    Map<String, dynamic> episodes,
+    Map<String, dynamic> lengths,
+  ) {
+    var changed = false;
+    for (final key in [...history.keys]) {
+      if (key.contains('_')) continue;
+      final value = history[key];
+      final movie = value is Map ? value['movie'] : null;
+      final type = movie is Map ? movie['type'] : null;
+      if (type is! String || type.isEmpty) continue;
+      final newKey = '${type}_$key';
+      final existing = history[newKey];
+      if (existing == null || _lastWatchedOf(value) >= _lastWatchedOf(existing)) {
+        history[newKey] = value;
+      }
+      history.remove(key);
+      changed = true;
+    }
+    final episodeKey = RegExp(r'^\d+_\d+_\d+$');
+    for (final map in [episodes, lengths]) {
+      for (final key in [...map.keys]) {
+        if (!episodeKey.hasMatch(key)) continue;
+        map['tv_$key'] = map.remove(key);
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   /// A stored movie, or null if it can't be read.

@@ -12,7 +12,9 @@
 #endif
 
 #define AppName "Popcorn"
-#define AppExe "flutter_client.exe"
+; Named Popcorn.exe, as the earlier homemade installer did (2026-11), so its
+; shortcuts and the process name stay the same.
+#define AppExe "Popcorn.exe"
 
 [Setup]
 ; Never change AppId: it's how Windows knows a new version replaces the old.
@@ -48,6 +50,15 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+
+[InstallDelete]
+; What the earlier homemade installer left in the same folder.
+Type: files; Name: "{app}\Uninstall-Popcorn.exe"
+Type: files; Name: "{app}\flutter_client.exe"
+
+[Registry]
+; The earlier installer's own "Installed apps" entry, replaced by this one's.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\Popcorn"; Flags: deletekey dontcreatekey
 
 [Files]
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

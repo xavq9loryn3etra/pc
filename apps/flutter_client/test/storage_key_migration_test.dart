@@ -227,4 +227,36 @@ void main() {
         isNotNull);
     expect(SavedMoviesService().getEpisodeProgress('1399', 2, 3), 0.4);
   });
+
+  test('old keys saved after the migration (an old version run again) fold in',
+      () async {
+    // Seen on Windows: the new version migrated, then the old install was
+    // opened and saved the show under its bare id — it showed twice.
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'storage_key_migrated_v1': true,
+      'watch_history_v1': jsonEncode({
+        'tv_126027': {
+          'movie': _stored(id: '126027', title: 'Ghosts', season: 1, episode: 11),
+          'last_watched': 1,
+        },
+        '126027': {
+          'movie': _stored(id: '126027', title: 'Ghosts', season: 1, episode: 12),
+          'last_watched': 2,
+        },
+      }),
+      'episode_history_v1':
+          jsonEncode({'tv_126027_1_11': 0.9, '126027_1_12': 0.1}),
+    });
+    await SavedMoviesService().init();
+
+    final history = SavedMoviesService().history;
+    expect(history.where((m) => m.id == '126027'), hasLength(1));
+    expect(history.single.currentEpisode, 12); // the newer one
+    expect(SavedMoviesService().getEpisodeProgress('126027', 1, 12), 0.1);
+    expect(SavedMoviesService().getEpisodeProgress('126027', 1, 11), 0.9);
+
+    final stored = jsonDecode((await _prefs()).getString('watch_history_v1')!)
+        as Map<String, dynamic>;
+    expect(stored.keys, ['tv_126027']);
+  });
 }

@@ -5,6 +5,8 @@
 # Add -SkipBuild to package the app already in build\windows\x64\runner\Release.
 #
 # Needs Inno Setup 6 (winget install JRSoftware.InnoSetup) and secrets.json.
+# Replaces the earlier homemade installer (windows/build_installer.ps1, removed):
+# same folder, same Popcorn.exe, and it takes over its uninstall entry.
 
 param([switch]$SkipBuild)
 $ErrorActionPreference = 'Stop'
@@ -31,6 +33,7 @@ try {
     if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
     New-Item -ItemType Directory -Force $stage | Out-Null
     Copy-Item -Recurse "$release\*" $stage
+    Move-Item "$stage\flutter_client.exe" "$stage\Popcorn.exe"
     foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
         Copy-Item (Join-Path $env:SystemRoot "System32\$dll") $stage
     }

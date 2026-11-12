@@ -67,6 +67,10 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
   _GestureType _activeGesture = _GestureType.none;
   double _currentValue = 0.0;
   double _startValue = 0.0;
+  // The start value is read asynchronously: until it arrives (_startReady)
+  // the swipe must not apply anything, or it would act on the stale 0.0.
+  bool _startReady = false;
+  Offset _lastPointer = Offset.zero;
   // Drag updates fire up to ~100x per full swipe — routed through this
   // notifier instead of setState so only the small indicator widget
   // rebuilds, not the whole gesture Stack (video content, overlays, etc).
@@ -239,6 +243,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
     // a volume / brightness swipe.
     if (_holding) return;
 
+    _lastPointer = event.localPosition;
     final delta = event.localPosition - _pointerStart!;
 
     if (!_isDragging && delta.distance < _dragThreshold) return;
@@ -272,30 +277,31 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
       }
 
       _isDragging = true;
+      _startReady = false;
       final screenWidth = MediaQuery.of(context).size.width;
+
+      // Once the start value is known, the swipe is measured from where the
+      // finger is now, so the level doesn't jump by the distance already
+      // travelled.
+      void startAt(double value) {
+        if (!mounted || !_isDragging || _pointerStart == null) return;
+        _startValue = value;
+        _currentValue = value;
+        _currentValueNotifier.value = value;
+        _pointerStart = _lastPointer;
+        _startReady = true;
+      }
 
       if (_pointerStart!.dx > screenWidth / 2) {
         _activeGesture = _GestureType.volume;
-        VolumeController.instance.getVolume().then((v) {
-          if (mounted) {
-            _startValue = v.clamp(0.0, 1.0);
-            _currentValue = _startValue;
-            _currentValueNotifier.value = _startValue;
-          }
-        });
+        VolumeController.instance
+            .getVolume()
+            .then((v) => startAt(v.clamp(0.0, 1.0)));
       } else {
         _activeGesture = _GestureType.brightness;
-        ScreenBrightness.instance.application.then((b) {
-          if (mounted) {
-            _startValue = b.clamp(0.0, 1.0);
-            _currentValue = _startValue;
-            _currentValueNotifier.value = _startValue;
-          }
-        }).catchError((_) {
-          _startValue = 0.5;
-          _currentValue = 0.5;
-          _currentValueNotifier.value = 0.5;
-        });
+        ScreenBrightness.instance.application
+            .then((b) => startAt(b.clamp(0.0, 1.0)))
+            .catchError((_) => startAt(0.5));
       }
 
       // _activeGesture just changed, which decides whether the volume/
@@ -307,7 +313,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
       _fadeController.forward();
     }
 
-    if (_activeGesture == _GestureType.none) return;
+    if (_activeGesture == _GestureType.none || !_startReady) return;
 
     final screenHeight = MediaQuery.of(context).size.height;
     final verticalDelta = _pointerStart!.dy - event.localPosition.dy;

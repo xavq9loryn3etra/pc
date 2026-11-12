@@ -73,7 +73,7 @@
 	<string>Popcorn doesn't use your location. This is only needed by the file picker used to import and export backups.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsArbitraryLoads</key>
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
 	<key>UIBackgroundModes</key>

@@ -18,10 +18,49 @@ class _CacheEntry {
       DateTime.now().difference(timestamp).inMinutes < ttlMinutes;
 }
 
+/// The in-memory cache: at most [maxEntries], the oldest written dropped
+/// first.
+class _BoundedCache {
+  static const int maxEntries = 200;
+  final Map<String, _CacheEntry> _entries = {};
+
+  _CacheEntry? operator [](String key) => _entries[key];
+
+  void operator []=(String key, _CacheEntry value) {
+    _entries.remove(key);
+    _entries[key] = value;
+    while (_entries.length > maxEntries) {
+      _entries.remove(_entries.keys.first);
+    }
+  }
+
+  bool containsKey(String key) => _entries.containsKey(key);
+
+  void clear() => _entries.clear();
+}
+
 class TMDBService {
   static final TMDBService _instance = TMDBService._internal();
   factory TMDBService() => _instance;
-  TMDBService._internal();
+  TMDBService._internal() {
+    // One retry, after a pause, when TMDB says it's being asked too often.
+    _dio.interceptors.add(InterceptorsWrapper(onError: (e, handler) async {
+      final request = e.requestOptions;
+      if (e.response?.statusCode != 429 || request.extra['retried429'] == true) {
+        return handler.next(e);
+      }
+      final seconds =
+          int.tryParse(e.response?.headers.value('retry-after') ?? '') ?? 1;
+      await Future.delayed(Duration(seconds: seconds.clamp(1, 5)));
+      if (request.cancelToken?.isCancelled ?? false) return handler.next(e);
+      request.extra['retried429'] = true;
+      try {
+        handler.resolve(await _dio.fetch(request));
+      } on DioException catch (retryError) {
+        handler.next(retryError);
+      }
+    }));
+  }
 
   final Dio _dio = Dio(
     BaseOptions(
@@ -34,7 +73,7 @@ class TMDBService {
   final String _backdropBase = 'https://image.tmdb.org/t/p/w1280';
 
   // Simple in-memory cache
-  final Map<String, _CacheEntry> _cache = {};
+  final _BoundedCache _cache = _BoundedCache();
 
   // Helper to get API Key
   String get _apiKey => dotenv.env['TMDB_API_KEY'] ?? '';

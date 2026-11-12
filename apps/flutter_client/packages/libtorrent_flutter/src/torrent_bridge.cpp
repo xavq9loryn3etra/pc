@@ -521,6 +521,93 @@ struct TorrCache {
         return it != pieces.end() ? it->second.get() : nullptr;
     }
 
+    // ── bounded RAM ──
+    // The pieces whose bytes are held in memory, each with when it was last
+    // used. Every buffer is filled through store() and freed through drop()
+    // or eviction, so held_bytes is what the cache really holds; past
+    // max_held_bytes() the least recently used piece goes. Lock order:
+    // lru_mu, then a piece's mu.
+    std::mutex lru_mu;
+    std::unordered_map<int, uint64_t> resident;   // piece → last use tick
+    uint64_t lru_tick = 0;
+    int64_t  held_bytes = 0;
+
+    int64_t max_held_bytes() const {
+        return std::max<int64_t>(4 * piece_length, 64LL * 1024 * 1024);
+    }
+
+    // Frees piece [p]'s buffer. Caller holds lru_mu.
+    void release_locked(int p) {
+        CachePiece* cp = get_piece(p);
+        if (!cp) return;
+        std::unique_lock<std::shared_mutex> lk(cp->mu);
+        held_bytes -= (int64_t)cp->buffer.size();
+        if (held_bytes < 0) held_bytes = 0;
+        cp->buffer.clear();
+        cp->buffer.shrink_to_fit();
+        cp->size = 0;
+        cp->complete = false;
+    }
+
+    // Keeps a copy of piece [p]'s data, evicting the least recently used
+    // other pieces while over the cap. False if it couldn't be kept.
+    bool store(int p, const char* data, int size) {
+        CachePiece* cp = get_piece(p);
+        if (!cp || !data || size <= 0 || is_closed.load()) return false;
+        std::lock_guard<std::mutex> lk(lru_mu);
+        auto it = resident.find(p);
+        if (it != resident.end()) { it->second = ++lru_tick; return true; }
+        {
+            std::unique_lock<std::shared_mutex> plk(cp->mu);
+            cp->buffer.assign(data, data + size);
+            cp->size = (int64_t)size;
+            cp->complete = true;
+            cp->accessed = TorrReader::now_unix();
+        }
+        resident[p] = ++lru_tick;
+        held_bytes += (int64_t)size;
+        while (held_bytes > max_held_bytes() && resident.size() > 1) {
+            auto victim = resident.end();
+            for (auto r = resident.begin(); r != resident.end(); ++r) {
+                if (r->first == p) continue;
+                if (victim == resident.end() || r->second < victim->second)
+                    victim = r;
+            }
+            if (victim == resident.end()) break;
+            release_locked(victim->first);
+            resident.erase(victim);
+        }
+        return true;
+    }
+
+    // Copies piece [p]'s data into [out] when it's held; false otherwise.
+    bool copy_out(int p, std::vector<char>& out) {
+        CachePiece* cp = get_piece(p);
+        if (!cp) return false;
+        {
+            std::shared_lock<std::shared_mutex> lk(cp->mu);
+            if (cp->buffer.empty() || !cp->complete) return false;
+            out.assign(cp->buffer.begin(), cp->buffer.end());
+        }
+        std::lock_guard<std::mutex> lk(lru_mu);
+        auto it = resident.find(p);
+        if (it != resident.end()) it->second = ++lru_tick;
+        return true;
+    }
+
+    bool has(int p) {
+        CachePiece* cp = get_piece(p);
+        if (!cp) return false;
+        std::shared_lock<std::shared_mutex> lk(cp->mu);
+        return !cp->buffer.empty() && cp->complete;
+    }
+
+    // Frees piece [p]'s buffer, if held.
+    void drop(int p) {
+        std::lock_guard<std::mutex> lk(lru_mu);
+        if (resident.erase(p)) release_locked(p);
+    }
+
     // ── port of Cache.removePiece ──
     void remove_piece(CachePiece* piece) {
         if (!is_closed.load())
@@ -998,34 +1085,31 @@ struct StreamEngine {
     void on_piece_read(int p, const char* data, int size, bool ok) {
         TB_LOG("on_piece_read: piece=%d ok=%d size=%d", p, (int)ok, size);
 
-        // Store result for read_piece_data() consumers
+        // The data goes into the bounded piece cache — instant re-reads for
+        // player probes, overlapping range requests and small backward
+        // seeks — and only there: read_piece_data() takes it from the
+        // cache. read_results holds just what the cache couldn't (a failed
+        // read, or no cache), so nothing is held twice or forever.
+        bool cached = false;
+        if (ok && data && size > 0 && cache)
+            cached = cache->store(p, data, size);
+
         {
+            // (Taken after the cache write, so a waiter that checks the
+            // cache under read_mu can't miss it.)
             std::lock_guard<std::mutex> lk(read_mu);
-            ReadResult r;
-            if (ok && data && size > 0) {
-                r.data.assign(data, data + size);
-                r.ok = true;
-            }
-            read_results[p] = std::move(r);
-        }
-
-        // Populate hot piece cache — instant re-reads for player probes,
-        // overlapping range requests, and small backward seeks
-        if (ok && data && size > 0 && cache) {
-            auto* cp = cache->get_piece(p);
-            if (cp) {
-                std::unique_lock<std::shared_mutex> lk(cp->mu);
-                if (cp->buffer.empty()) {
-                    cp->buffer.assign(data, data + size);
-                    cp->size = (int64_t)size;
-                    cp->complete = true;
-                    cp->accessed = TorrReader::now_unix();
+            if (cached) {
+                read_results.erase(p);
+            } else {
+                ReadResult r;
+                if (ok && data && size > 0) {
+                    r.data.assign(data, data + size);
+                    r.ok = true;
                 }
+                read_results[p] = std::move(r);
             }
         }
-
         read_cv.notify_all();
-        piece_cv.notify_all();
     }
 
     void on_hash_failed(int p) {
@@ -1033,10 +1117,7 @@ struct StreamEngine {
             std::lock_guard<std::mutex> lk(piece_mu);
             pieces_have.erase(p);
         }
-        if (cache) {
-            auto* cp = cache->get_piece(p);
-            if (cp) cp->mark_not_complete();
-        }
+        if (cache) cache->drop(p);
         try { handle.piece_priority(lt::piece_index_t(p), lt::top_priority); } catch (...) {}
     }
 
@@ -1298,51 +1379,59 @@ static bool wait_for_piece(StreamEngine* s, int piece, int timeout_ms,
 static ReadResult read_piece_data(StreamEngine* s, int piece,
                                   int timeout_ms = 5000, int gen = -1) {
     if (gen < 0) gen = s->seek_generation.load();
+    auto stopped = [&] {
+        return !s->active.load() || s->seek_generation.load() != gen;
+    };
 
     // Check hot piece cache first — instant for re-reads
-    if (s->cache) {
-        auto* cp = s->cache->get_piece(piece);
-        if (cp) {
-            std::shared_lock<std::shared_mutex> lk(cp->mu);
-            if (!cp->buffer.empty() && cp->complete) {
-                ReadResult r;
-                r.data.assign(cp->buffer.begin(), cp->buffer.end());
-                r.ok = true;
-                return r;
-            }
-        }
-    }
+    ReadResult r;
+    if (s->cache && s->cache->copy_out(piece, r.data)) { r.ok = true; return r; }
 
     // Check if we already have a read result buffered
     {
         std::lock_guard<std::mutex> lk(s->read_mu);
         auto it = s->read_results.find(piece);
         if (it != s->read_results.end() && it->second.ok) {
-            ReadResult r = std::move(it->second);
+            r = std::move(it->second);
             s->read_results.erase(it);
             return r;
         }
         s->read_results.erase(piece);
     }
 
-    // Request libtorrent to read piece from disk
-    try { s->handle.read_piece(lt::piece_index_t(piece)); } catch (...) {
-        return {};
-    }
+    // Ask libtorrent to read the piece from disk, and wait for it to land
+    // in the cache (or in read_results). Asked again every 2 s: the cache
+    // may have evicted it before we looked, or a stale failed read may
+    // have answered first.
+    const auto deadline = chr::steady_clock::now() + chr::milliseconds(timeout_ms);
+    int failures = 0;
+    for (;;) {
+        try { s->handle.read_piece(lt::piece_index_t(piece)); } catch (...) {
+            return {};
+        }
+        const auto now = chr::steady_clock::now();
+        if (now >= deadline) return {};
+        const auto slice = std::min<chr::steady_clock::duration>(
+            deadline - now, chr::seconds(2));
 
-    std::unique_lock<std::mutex> lk(s->read_mu);
-    if (s->read_cv.wait_for(lk, chr::milliseconds(timeout_ms),
-            [&]{ return !s->active.load()
-                     || s->read_results.count(piece) > 0
-                     || s->seek_generation.load() != gen; })) {
+        std::unique_lock<std::mutex> lk(s->read_mu);
+        s->read_cv.wait_for(lk, slice, [&] {
+            return stopped()
+                || s->read_results.count(piece) > 0
+                || (s->cache && s->cache->has(piece));
+        });
+        if (stopped()) return {};
         auto it = s->read_results.find(piece);
         if (it != s->read_results.end()) {
-            ReadResult r = std::move(it->second);
+            r = std::move(it->second);
             s->read_results.erase(it);
-            return r;
+            if (r.ok) return r;
+            if (++failures >= 3) return {};
+            continue;
         }
+        lk.unlock();
+        if (s->cache && s->cache->copy_out(piece, r.data)) { r.ok = true; return r; }
     }
-    return {};
 }
 
 // ── HTTP server — port of torr/stream.go Stream() ───────────────────────────
@@ -1509,13 +1598,7 @@ static bool serve_range(StreamEngine* s, TorrReader* reader, socket_t cli,
             { std::lock_guard<std::mutex> lk(s->piece_mu); have_np = s->pieces_have.count(np) > 0; }
             if (!have_np) break;  // not downloaded yet → no point prefetching
             // skip if already cached or result already buffered
-            bool already = false;
-            if (s->cache) {
-                if (auto* cp = s->cache->get_piece(np)) {
-                    std::shared_lock<std::shared_mutex> clk(cp->mu);
-                    if (!cp->buffer.empty() && cp->complete) already = true;
-                }
-            }
+            bool already = s->cache && s->cache->has(np);
             if (!already) {
                 std::lock_guard<std::mutex> rlk(s->read_mu);
                 if (s->read_results.count(np)) already = true;
@@ -1552,16 +1635,7 @@ static bool serve_range(StreamEngine* s, TorrReader* reader, socket_t cli,
                     s->handle.piece_priority(lt::piece_index_t(old_p), lt::dont_download);
                 } catch (...) {}
                 // Release cache memory for evicted piece
-                if (s->cache) {
-                    auto* cp = s->cache->get_piece(old_p);
-                    if (cp) {
-                        std::unique_lock<std::shared_mutex> clk(cp->mu);
-                        cp->buffer.clear();
-                        cp->buffer.shrink_to_fit();
-                        cp->size = 0;
-                        cp->complete = false;
-                    }
-                }
+                if (s->cache) s->cache->drop(old_p);
             }
         }
     }
@@ -1703,6 +1777,8 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
                             s->handle.piece_priority(
                                 lt::piece_index_t(old_p), lt::dont_download);
                         } catch (...) {}
+                        // and their memory, which clear() alone kept
+                        if (s->cache) s->cache->drop(old_p);
                     }
                     s->trailing_pieces.clear();
                 }

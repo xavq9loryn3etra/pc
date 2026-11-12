@@ -546,7 +546,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
       );
     } catch (e) {
       if (e is DioException && CancelToken.isCancel(e)) return;
-      rethrow;
+      // Not rethrown (nothing awaits this): the page falls back to the
+      // basic details it was opened with, as when none come back.
+      debugPrint('Details failed to load: $e');
     }
     if (!mounted) return;
 

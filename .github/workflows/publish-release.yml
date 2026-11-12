@@ -1,0 +1,175 @@
+name: Publish release
+
+# Publishes Popcorn for Android (APK) and Windows (installer) to the public
+# download page, https://github.com/popcorn-organization/popcorn, when the
+# app's version in pubspec.yaml changes on main (e.g. 3.0.0 -> 3.0.1). A
+# version already published is skipped. The new release is marked Latest;
+# earlier ones stay listed below it as the archive.
+#
+# Secrets (on this repo):
+#   RELEASES_TOKEN   fine-grained token with Contents: read and write on
+#                    popcorn-organization/popcorn
+#   GEMINI_API_KEY   for Popcorn Ask
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
+#   ANDROID_KEY_PASSWORD   the release signing key: every APK must be signed
+#                    with it, or it won't install over the one before it.
+on:
+  push:
+    branches: [main]
+    paths: ['apps/flutter_client/pubspec.yaml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+env:
+  APP_DIR: apps/flutter_client
+  RELEASE_REPO: popcorn-organization/popcorn
+  FLUTTER_VERSION: '3.44.6'
+
+jobs:
+  check:
+    name: Is this version new?
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          version="$(sed -n 's/^version:[[:space:]]*\([0-9][0-9.]*\).*/\1/p' "$APP_DIR/pubspec.yaml" | head -1)"
+          if [ -z "$version" ]; then echo "No version: line in pubspec.yaml" >&2; exit 1; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ -z "$GH_TOKEN" ]; then
+            echo "The RELEASES_TOKEN secret isn't set, so nothing can be published." >&2
+            exit 1
+          fi
+          if gh release view "v$version" -R "$RELEASE_REPO" > /dev/null 2>&1; then
+            echo "Popcorn $version is already published: nothing to do."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Popcorn $version is new: building it."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  android:
+    name: Android APK
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ${{ env.APP_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then echo "The Android signing key secrets aren't set." >&2; exit 1; fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/popcorn-release.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/popcorn-release.jks" >> "$GITHUB_ENV"
+      - run: flutter pub get
+      - name: Build
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          flutter build apk --release --dart-define=GEMINI_API_KEY="$GEMINI_API_KEY"
+          mkdir -p "$RUNNER_TEMP/out"
+          cp build/app/outputs/flutter-apk/app-release.apk "$RUNNER_TEMP/out/Popcorn-Android.apk"
+      - name: Check it's signed with the release key
+        run: |
+          apksigner="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner"
+          "$apksigner" verify --print-certs "$RUNNER_TEMP/out/Popcorn-Android.apk" | tee "$RUNNER_TEMP/certs.txt"
+          grep -q 'CN=Popcorn, O=Popcorn Organization' "$RUNNER_TEMP/certs.txt" \
+            || { echo "The APK isn't signed with the Popcorn release key." >&2; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: ${{ runner.temp }}/out/Popcorn-Android.apk
+          if-no-files-found: error
+
+  windows:
+    name: Windows installer
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: ${{ env.APP_DIR }}
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - run: flutter config --enable-windows-desktop
+      - run: flutter pub get
+      - name: Build
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: flutter build windows --release "--dart-define=GEMINI_API_KEY=$env:GEMINI_API_KEY"
+      - name: Inno Setup
+        run: |
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ }
+          if (-not $iscc) { choco install innosetup -y --no-progress }
+      - name: Installer
+        run: |
+          ./windows/installer/build_installer.ps1 -SkipBuild
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\out" | Out-Null
+          Copy-Item "build\installer\Popcorn-Setup-${{ needs.check.outputs.version }}.exe" "$env:RUNNER_TEMP\out\Popcorn-Windows-Setup.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: ${{ runner.temp }}/out/Popcorn-Windows-Setup.exe
+          if-no-files-found: error
+
+  publish:
+    name: Publish to the download page
+    needs: [check, android, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          ls -l dist
+          cat > notes.md <<EOF
+          **Popcorn $VERSION**
+
+          - **Android:** download **Popcorn-Android.apk** below and open it on your phone.
+          - **Windows:** download **Popcorn-Windows-Setup.exe** below and run it. If Windows says it protected your PC, click **More info**, then **Run anyway**.
+
+          Updating keeps your favourites and history. Earlier versions are listed below this one.
+
+          <sub>Built from ${GITHUB_REPOSITORY}@${GITHUB_SHA::7}.</sub>
+          EOF
+          gh release create "v$VERSION" dist/Popcorn-Android.apk dist/Popcorn-Windows-Setup.exe \
+            -R "$RELEASE_REPO" \
+            --title "Popcorn $VERSION" \
+            --notes-file notes.md \
+            --latest

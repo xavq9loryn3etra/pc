@@ -4307,6 +4307,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (totalMs <= 0) return const [];
     final rawPoints = <double>[];
     for (final ch in _mkvChapters) {
+      // Not inside a highlighted part: a chapter starting partway through
+      // the credits cut them in two, which read as two credit sections.
+      final inside = _skipSegments.any((s) =>
+          s.end != null && ch.start > s.start && ch.start < s.end!);
+      if (inside) continue;
       final f = ch.start.inMilliseconds / totalMs;
       if (f > 0.008 && f < 0.992) rawPoints.add(f);
     }

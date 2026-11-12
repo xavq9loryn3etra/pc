@@ -99,6 +99,7 @@
 #include <fstream>
 #include <filesystem>
 #include <iterator>
+#include <random>
 
 namespace lt  = libtorrent;
 namespace chr = std::chrono;
@@ -1137,24 +1138,28 @@ struct StreamEngine {
         end_ = std::min(pe, file_offset + file_size) - file_offset;
     }
 
-    std::string make_url() const {
-        std::string hash = "0000000000000000000000000000000000000000";
-        try {
-            if (handle.is_valid()) {
-                auto ih = handle.info_hashes();
-                std::stringstream ss;
-                if (ih.has_v1()) {
-                    for (auto b : ih.v1)
-                        ss << std::hex << std::setw(2) << std::setfill('0') << (int)(uint8_t)b;
-                } else if (ih.has_v2()) {
-                    for (auto b : ih.v2)
-                        ss << std::hex << std::setw(2) << std::setfill('0') << (int)(uint8_t)b;
-                }
-                hash = ss.str().substr(0, 40);
+    // "/stream/<token>/<file index>", the token 16 random bytes in hex,
+    // made per stream: the only path the server answers.
+    std::string url_path;
+
+    void make_url_path() {
+        std::random_device rd;
+        static const char* digits = "0123456789abcdef";
+        std::string token;
+        token.reserve(32);
+        for (int i = 0; i < 4; ++i) {
+            uint32_t v = (uint32_t)rd();
+            for (int k = 0; k < 4; ++k) {
+                const unsigned b = (v >> (8 * k)) & 0xff;
+                token.push_back(digits[b >> 4]);
+                token.push_back(digits[b & 15]);
             }
-        } catch (...) {}
-        return "http://127.0.0.1:" + std::to_string(server_port)
-             + "/stream/" + hash + "/" + std::to_string(file_index);
+        }
+        url_path = "/stream/" + token + "/" + std::to_string(file_index);
+    }
+
+    std::string make_url() const {
+        return "http://127.0.0.1:" + std::to_string(server_port) + url_path;
     }
 
     // signal piece_finished from alert thread
@@ -1980,6 +1985,15 @@ static void drop_old_window(StreamEngine* s, int new_lo, int new_hi) {
     }
 }
 
+// a == b, in a time that doesn't depend on where they differ.
+static bool same_secret(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    unsigned char d = 0;
+    for (size_t i = 0; i < a.size(); ++i)
+        d |= (unsigned char)(a[i] ^ b[i]);
+    return d == 0;
+}
+
 // handle_connection — port of torr/stream.go Stream()
 // Each connection creates a TorrReader (like TorrServer's t.NewReader(file))
 // and uses it for the lifetime of the connection
@@ -2038,24 +2052,32 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
         {
             std::string req(buf, (size_t)total);
 
-            bool is_options = req.find("OPTIONS ") != std::string::npos;
-            bool is_head    = req.find("HEAD ") != std::string::npos;
-            bool is_get     = req.find("GET ")  != std::string::npos;
-
-            if (is_options) {
-                const char* cors =
-                    "HTTP/1.1 204 No Content\r\n"
-                    "Access-Control-Allow-Origin: *\r\n"
-                    "Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n"
-                    "Access-Control-Allow-Headers: Range\r\n"
-                    "Access-Control-Max-Age: 1728000\r\n"
-                    "Content-Length: 0\r\n"
-                    "Connection: keep-alive\r\n\r\n";
-                if (send_all(cli, cors, (int)strlen(cors)) < 0) goto cleanup;
-                continue;
+            // The request line, "METHOD target HTTP/x.y": only GET or HEAD
+            // of exactly this stream's path (with its random token) is
+            // served — anything else, from another app or a web page in
+            // a browser, gets a 404.
+            std::string method, target;
+            {
+                const std::string line = req.substr(0, req.find("\r\n"));
+                const auto sp1 = line.find(' ');
+                const auto sp2 = (sp1 == std::string::npos)
+                    ? std::string::npos : line.find(' ', sp1 + 1);
+                if (sp2 != std::string::npos) {
+                    method = line.substr(0, sp1);
+                    target = line.substr(sp1 + 1, sp2 - sp1 - 1);
+                }
             }
+            bool is_head = method == "HEAD";
+            bool is_get  = method == "GET";
 
-            if (!is_get && !is_head) goto cleanup;
+            if ((!is_get && !is_head) || !same_secret(target, s->url_path)) {
+                static const char kNotFound[] =
+                    "HTTP/1.1 404 Not Found\r\n"
+                    "Content-Length: 0\r\n"
+                    "Connection: close\r\n\r\n";
+                send_all(cli, kNotFound, (int)sizeof(kNotFound) - 1);
+                goto cleanup;
+            }
 
             int64_t fsz = s->file_size;
             if (fsz <= 0) goto cleanup;
@@ -2216,12 +2238,7 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
             hdr << "Connection: close\r\n";
             // port of stream.go: ETag header
             hdr << "ETag: \"" << std::hash<std::string>{}(etag_raw) << "\"\r\n";
-            hdr << "Access-Control-Allow-Origin: *\r\n";
-            hdr << "Access-Control-Allow-Headers: Range\r\n";
-            // port of stream.go: DLNA headers
-            hdr << "transferMode.dlna.org: Streaming\r\n";
-            hdr << "contentFeatures.dlna.org: DLNA.ORG_OP=01;DLNA.ORG_CI=0;"
-                   "DLNA.ORG_FLAGS=01700000000000000000000000000000\r\n";
+            // (No CORS or DLNA headers: only the app's own player reads this.)
             hdr << "Cache-Control: no-store, no-cache\r\n\r\n";
 
             std::string h = hdr.str();
@@ -3112,6 +3129,7 @@ TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
         }
         raw->server_port = ntohs(addr.sin_port);
         raw->listen_sock = sock;
+        raw->make_url_path();
         raw->url = raw->make_url();  // fixed for the stream's life: built once
     }
 #ifndef _WIN32

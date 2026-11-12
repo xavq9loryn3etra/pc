@@ -257,9 +257,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.detached) {
       TorrentEngineService.instance.dispose();
     }
-    // Picks up flag edits (e.g. hide_playback) without a cold restart.
+    // Picks up flag edits (hide_playback, maintenance, a forced update)
+    // without a cold restart.
     if (state == AppLifecycleState.resumed) {
-      FeatureFlagsService().refreshIfStale();
+      unawaited(_recheckConfig());
     }
   }
 
@@ -289,35 +290,77 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     // Flags come from docs/flags.json on GitHub Pages (see
     // FeatureFlagsService). If the fetch fails (offline, slow network),
     // the last fetched values are used instead.
+    await FeatureFlagsService().refresh();
+    await _resolveScreen();
+  }
+
+  /// Re-checks the flags once the app is back in the foreground (or on
+  /// "Try Again"), in both directions: maintenance or a forced update can
+  /// start, and a stuck maintenance screen can end, without a restart.
+  Future<void> _recheckConfig({bool force = false}) async {
     final flags = FeatureFlagsService();
-    await flags.refresh();
-
-    if (flags.maintenanceEnabled) {
-      if (mounted) {
-        setState(() {
-          _currentScreen = _AppScreen.maintenance;
-          _maintenanceMsg = flags.maintenanceMessage;
-        });
-        _syncDeepLinks();
-      }
-      return;
+    if (force) {
+      await flags.refresh();
+    } else {
+      await flags.refreshIfStale();
     }
+    // The first check (which also resolves the first screen) is still
+    // running, or the app is gone.
+    if (!mounted || _currentScreen == _AppScreen.checking) return;
 
+    final lock = await _lockScreen();
+    if (!mounted) return;
+    if (lock != null) {
+      _showLock(lock);
+    } else if (_isLocked) {
+      await _resolveScreen();
+    }
+  }
+
+  bool get _isLocked =>
+      _currentScreen == _AppScreen.maintenance ||
+      _currentScreen == _AppScreen.updateRequired;
+
+  /// The maintenance or forced-update screen the current flags call for,
+  /// or null if neither.
+  Future<_AppScreen?> _lockScreen() async {
+    final flags = FeatureFlagsService();
+    if (flags.maintenanceEnabled) return _AppScreen.maintenance;
     try {
       final packageInfo = await PackageInfo.fromPlatform();
       if (_isVersionLessThan(packageInfo.version, flags.minRequiredVersion)) {
-        if (mounted) {
-          setState(() {
-            _currentScreen = _AppScreen.updateRequired;
-            _updateMsg = flags.updateRequiredMessage;
-            _updateUrl = flags.updateUrl;
-          });
-          _syncDeepLinks();
-        }
-        return;
+        return _AppScreen.updateRequired;
       }
     } catch (e) {
       print("Failed to check app version: $e");
+    }
+    return null;
+  }
+
+  void _showLock(_AppScreen lock) {
+    final flags = FeatureFlagsService();
+    // Whatever page the user was on is covered by it.
+    if (_currentScreen != lock) {
+      _navigatorKey.currentState?.popUntil((route) => route.isFirst);
+    }
+    setState(() {
+      _currentScreen = lock;
+      if (lock == _AppScreen.maintenance) {
+        _maintenanceMsg = flags.maintenanceMessage;
+      } else {
+        _updateMsg = flags.updateRequiredMessage;
+        _updateUrl = flags.updateUrl;
+      }
+    });
+    _syncDeepLinks();
+  }
+
+  Future<void> _resolveScreen() async {
+    final lock = await _lockScreen();
+    if (!mounted) return;
+    if (lock != null) {
+      _showLock(lock);
+      return;
     }
 
     // Determine which screen to show based on first-launch state
@@ -400,7 +443,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       case _AppScreen.updateRequired:
         return UpdateOverlay(message: _updateMsg, url: _updateUrl);
       case _AppScreen.maintenance:
-        return MaintenanceOverlay(message: _maintenanceMsg);
+        return MaintenanceOverlay(
+          message: _maintenanceMsg,
+          onRetry: () => _recheckConfig(force: true),
+        );
       case _AppScreen.welcome:
         return WelcomeScreen(onGetStarted: _onWelcomeComplete);
       case _AppScreen.onboarding:

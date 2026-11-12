@@ -47,3 +47,9 @@ app.*.map.json
 # The Gemini API key (see AiService): passed to builds with
 # --dart-define-from-file=secrets.json. Never committed: the repo is public.
 secrets.json
+
+# Stray local files and Gradle build output (see AUDIT.md A-C1).
+/diff.txt
+/diff_utf8.txt
+/lib/temp_source*.html
+/android/build/

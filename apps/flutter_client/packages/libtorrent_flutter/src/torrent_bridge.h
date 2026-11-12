@@ -135,7 +135,10 @@ TORRENT_API void lt_configure_session(lt_session_t session,
                                       const lt_bt_config* config);
 TORRENT_API void lt_get_default_config(lt_bt_config* out);
 
-/* alerts */
+/* alerts. The engine formats and queues alerts for lt_poll_alerts only
+   while someone polls (a call in the last 10 s; the first poll after a
+   quiet spell returns only what came in since), and calls the callback
+   only while one is set. */
 TORRENT_API void lt_set_alert_callback(lt_session_t session,
                                        lt_alert_callback cb, void* user_data);
 TORRENT_API void lt_poll_alerts(lt_session_t session,

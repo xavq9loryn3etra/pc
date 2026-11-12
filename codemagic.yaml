@@ -19,7 +19,6 @@ workflows:
           flutter build apk --release --dart-define=GEMINI_API_KEY=$GEMINI_API_KEY
     artifacts:
       - apps/flutter_client/build/app/outputs/flutter-apk/*.apk
-      - apps/flutter_client/build/app/outputs/bundle/release/*.aab
 
   windows-workflow:
     name: Windows Release

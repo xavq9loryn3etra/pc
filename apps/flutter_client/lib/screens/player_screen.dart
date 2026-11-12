@@ -667,6 +667,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (!mounted) return;
       await mpv.setProperty(p.key, p.value);
     }
+    await _configureCinemaSound(mpv);
     // Multi-language releases often make a dub their default audio track;
     // pick the one in the title's audio language when there is one —
     // English, or the original for a title not made in English if that's
@@ -2165,6 +2166,30 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (mounted) return false;
     if (started != null) _resolver.pause(started.torrentId);
     return true;
+  }
+
+  /// Cinema sound. A film's surround soundtrack (5.1/7.1) goes to the
+  /// device as it is, so the phone's own surround — Dolby Atmos, Android's
+  /// spatial audio with head tracking on supported earbuds — can place it
+  /// around the viewer, rather than mpv first folding it to plain stereo,
+  /// which is all Android's default lets through. Where it still has to be
+  /// folded to stereo (stereo-only outputs; Windows' own layout is used
+  /// there already), the bass channel is mixed in at half level instead of
+  /// being dropped, which is most of a film's weight. Each option is tried
+  /// on its own: a libmpv without one just keeps its default.
+  Future<void> _configureCinemaSound(NativePlayer mpv) async {
+    final options = {
+      if (Platform.isAndroid) 'audio-channels': 'auto',
+      'audio-swresample-o': 'lfe_mix_level=0.5',
+    };
+    for (final o in options.entries) {
+      if (!mounted) return;
+      try {
+        await mpv.setProperty(o.key, o.value);
+      } catch (e) {
+        print('Cinema sound: ${o.key} not applied: $e');
+      }
+    }
   }
 
   /// Whether a change of audio language is being carried out (finding a

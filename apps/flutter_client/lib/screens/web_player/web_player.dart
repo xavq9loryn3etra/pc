@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 
-import 'web_player_platform_interface.dart';
 
 // Conditional imports would be cleaner for web support, but for Android/Windows local logic,
 // manual platform checks with separate files are robust enough if we ensure compilation.

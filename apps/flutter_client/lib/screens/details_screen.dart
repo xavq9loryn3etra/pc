@@ -168,6 +168,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // A Resume tap is being handled: another one waits for it.
   bool _resuming = false;
 
+  // The Share button is commented out for now; kept for when it returns.
+  // ignore: unused_element
   Future<void> _shareMovie() async {
     final m = _details ?? widget.movie;
     const downloadUrl =
@@ -1418,12 +1420,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                     ? releaseDateText(tvTargetEpisode?.airDate)
                                     : null;
 
-                                final defaultProvider =
-                                    Platform.isIOS ? 'vsembed' : 'vidlink';
-                                final altProvider =
-                                    Platform.isIOS ? 'vidlink' : 'vsembed';
-                                final altLabel =
-                                    Platform.isIOS ? 'Server 1' : 'Server 4';
                                 // Streaming service carrying this title in
                                 // the user's country, if any: attached to
                                 // the Play pill, or replacing it while

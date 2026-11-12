@@ -338,6 +338,13 @@ struct ReadResult {
     bool ok = false;
 };
 
+// ── one HTTP request being served ───────────────────────────────────────────────
+// Cancelled when a newer playback request on the same stream replaces it
+// (see handle_connection), so one connection's seek doesn't end the others.
+struct ConnState {
+    std::atomic<bool> cancelled{false};
+};
+
 // ── alert record for dart queue ─────────────────────────────────────────────────
 struct AlertRecord {
     int           type;
@@ -1027,6 +1034,12 @@ struct StreamEngine {
     std::unordered_set<int>              finished_clients;  // signal thread completion
     std::atomic<int> next_reader_id{1};
 
+    // The playback request: the latest GET that reads on through the file
+    // (not a probe of its tail or a small range). Only it moves read_head
+    // and priorities; a new one cancels the one before.
+    std::mutex                 conn_mu;
+    std::shared_ptr<ConnState> primary;
+
     // piece availability — signaled by alert thread on piece_finished
     std::mutex              piece_mu;
     std::condition_variable piece_cv;
@@ -1149,6 +1162,15 @@ struct StreamEngine {
         piece_cv.notify_all();
         { std::lock_guard<std::mutex> lk(read_mu); }
         read_cv.notify_all();
+    }
+
+    // Ends request [c]'s waits: it stops at its next check.
+    void cancel(ConnState& c) {
+        {
+            std::lock_guard<std::mutex> lk(piece_mu);
+            c.cancelled = true;
+        }
+        wake_all();
     }
 
     // Makes the server thread's poll() return so it sees active == false.
@@ -1502,11 +1524,10 @@ static bool wait_for_piece(StreamEngine* s, int piece, int timeout_ms,
 
 // Read piece data directly from libtorrent disk storage.
 // Like lt2http: storage()->readv() — reads downloaded piece data.
-static ReadResult read_piece_data(StreamEngine* s, int piece,
-                                  int timeout_ms = 5000, int gen = -1) {
-    if (gen < 0) gen = s->seek_generation.load();
+static ReadResult read_piece_data(StreamEngine* s, const ConnState& conn,
+                                  int piece, int timeout_ms = 5000) {
     auto stopped = [&] {
-        return !s->active.load() || s->seek_generation.load() != gen;
+        return !s->active.load() || conn.cancelled.load();
     };
 
     // Check hot piece cache first — instant for re-reads
@@ -1630,23 +1651,26 @@ static int send_all(socket_t sock, const char* data, int len) {
 // For each piece: wait until downloaded (have_piece), read via read_piece,
 // send to socket. Only prioritize current piece + 2 ahead.
 // This eliminates the complex async cache pipeline that caused seek delays.
-static bool serve_range(StreamEngine* s, TorrReader* reader, socket_t cli,
+// [primary]: this is the stream's playback request (see handle_connection):
+// it alone moves read_head and the trailing window. Ends early (false)
+// when the stream stops or [conn] is cancelled.
+static bool serve_range(StreamEngine* s, const ConnState& conn, bool primary,
+                        TorrReader* reader, socket_t cli,
                         int64_t range_start, int64_t range_end) {
-    int my_gen = s->seek_generation.load();
     int64_t cursor = range_start;
-    TB_LOG("serve_range: start=%lld end=%lld gen=%d", (long long)range_start, (long long)range_end, my_gen);
+    TB_LOG("serve_range: start=%lld end=%lld primary=%d", (long long)range_start, (long long)range_end, (int)primary);
+    auto stopped = [&] { return !s->active.load() || conn.cancelled.load(); };
 
-    bool is_tail = (range_start > s->file_size - s->piece_length * 10);
-
-    if (!is_tail) {
+    if (primary) {
         reader->offset = range_start;
         reader->last_access = TorrReader::now_unix();
         s->read_head.store(range_start);
     }
+    // A probe asks for nothing past what it reads.
+    const int last_wanted = primary ? s->end_piece
+        : std::clamp(s->byte_to_piece(range_end), s->start_piece, s->end_piece);
 
-    while (cursor <= range_end && s->active.load()) {
-        if (s->seek_generation.load() != my_gen) return false;
-
+    while (cursor <= range_end && !stopped()) {
         int p = std::clamp(s->byte_to_piece(cursor), s->start_piece, s->end_piece);
 
         int64_t pfbeg, pfend;
@@ -1678,7 +1702,7 @@ static bool serve_range(StreamEngine* s, TorrReader* reader, socket_t cli,
                 s->handle.piece_priority(lt::piece_index_t(p), lt::top_priority);
                 s->handle.set_piece_deadline(lt::piece_index_t(p), 0);
             } catch (...) {}
-            for (int i = 1; i <= PIPELINE_AHEAD && p + i <= s->end_piece; ++i) {
+            for (int i = 1; i <= PIPELINE_AHEAD && p + i <= last_wanted; ++i) {
                 bool have_next = false;
                 { std::lock_guard<std::mutex> lk(s->piece_mu); have_next = s->pieces_have.count(p+i) > 0; }
                 if (!have_next) {
@@ -1705,12 +1729,10 @@ static bool serve_range(StreamEngine* s, TorrReader* reader, socket_t cli,
                 {
                     std::unique_lock<std::mutex> lk(s->piece_mu);
                     s->piece_cv.wait_for(lk, chr::seconds(5), [&] {
-                        return !s->active.load()
-                            || s->seek_generation.load() != my_gen
-                            || s->pieces_have.count(p) > 0;
+                        return stopped() || s->pieces_have.count(p) > 0;
                     });
-                    if (!s->active.load() || s->seek_generation.load() != my_gen) {
-                        TB_LOG("serve_range: ABORT piece=%d gen_now=%d my_gen=%d", p, s->seek_generation.load(), my_gen);
+                    if (stopped()) {
+                        TB_LOG("serve_range: ABORT piece=%d", p);
                         return false;
                     }
                     if (s->pieces_have.count(p) > 0) break;
@@ -1731,7 +1753,7 @@ static bool serve_range(StreamEngine* s, TorrReader* reader, socket_t cli,
         // ── piece is downloaded — read data directly via read_piece ──
         // Like lt2http: storage()->readv(b, p, offset, ...)
         // We use read_piece_data which does read_piece → waits for data
-        ReadResult rd = read_piece_data(s, p, 10000, my_gen);
+        ReadResult rd = read_piece_data(s, conn, p, 10000);
         if (!rd.ok || rd.data.empty()) {
             TB_LOG("serve_range: read_piece_data FAILED piece=%d", p);
             return false;
@@ -1775,12 +1797,11 @@ static bool serve_range(StreamEngine* s, TorrReader* reader, socket_t cli,
             return false;
 
         cursor = sbeg + nb;
+        if (!primary) continue;
 
-        if (!is_tail) {
-            reader->offset = cursor;
-            reader->last_access = TorrReader::now_unix();
-            s->read_head.store(cursor);
-        }
+        reader->offset = cursor;
+        reader->last_access = TorrReader::now_unix();
+        s->read_head.store(cursor);
 
         if (s->stream_state.load() != LT_STREAM_READY)
             s->stream_state.store(LT_STREAM_READY);
@@ -1815,10 +1836,12 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
     StreamEngine::active_streams.fetch_add(1);
 
     TorrReader* reader = nullptr;
+    auto conn = std::make_shared<ConnState>();
     try {
 
     // Create reader for this connection — port of t.NewReader(file)
-    TorrReader* reader = s->cache->new_reader(
+    // (assigned to the outer variable, so cleanup closes it)
+    reader = s->cache->new_reader(
         reader_id, s->file_index, s->file_offset, s->file_size);
 
     // port of: reader.SetResponsive() — set readahead to 16MB (TorrServer's updateRA)
@@ -1903,11 +1926,30 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
             // prioritize_pieces() + fresh deadlines on the seek target.
             // This stops old time-critical picks without disrupting peer
             // connections (unlike batch-resetting ALL pieces to dont_download).
+            //
+            // Which request is playback: a GET that isn't in the file's
+            // last few MB (a probe for the container's index) and reads on
+            // through the file — no Range, an open-ended one, or at least
+            // 1 MB. Only it moves read_head and priorities, and a new one
+            // cancels the one before; probes (tail reads, a subtitle
+            // hash's 64 KB) run alongside without disturbing it.
             int64_t old_head = s->read_head.load();
-            bool is_tail_req = (rstart > fsz - s->piece_length * 10);
-            TB_LOG("handle_conn: rstart=%lld rend=%lld old_head=%lld is_tail=%d",
-                   (long long)rstart, (long long)rend, (long long)old_head, is_tail_req?1:0);
-            if (!is_tail_req && old_head > 0 && std::abs(rstart - old_head) > 65536) {
+            const int64_t tail_bytes = std::min<int64_t>(StreamEngine::PROTECT_BYTES, fsz / 20);
+            bool is_tail_req = (rstart >= fsz - tail_bytes);
+            bool reads_on = !rr.valid || rr.end < 0 || clen >= 1024 * 1024;
+            bool primary = is_get && !is_tail_req && reads_on;
+            TB_LOG("handle_conn: rstart=%lld rend=%lld old_head=%lld is_tail=%d primary=%d",
+                   (long long)rstart, (long long)rend, (long long)old_head, is_tail_req?1:0, primary?1:0);
+            if (primary) {
+                std::shared_ptr<ConnState> prev;
+                {
+                    std::lock_guard<std::mutex> clk(s->conn_mu);
+                    prev = std::move(s->primary);
+                    s->primary = conn;
+                }
+                if (prev) s->cancel(*prev);
+            }
+            if (primary && old_head > 0 && std::abs(rstart - old_head) > 65536) {
                 int new_gen;
                 {
                     // (under piece_mu, so no waiter misses the change)
@@ -1979,8 +2021,15 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
                     s->handle.resume();
                     // If the seek target is already on disk, kick a read
                     // immediately so serve_range's read_piece_data returns
-                    // without an extra round-trip.
-                    s->handle.read_piece(lt::piece_index_t(seek_piece));
+                    // without an extra round-trip. (Only then: for a piece
+                    // not had, the read fails, and the failure could be
+                    // taken for the answer to a later read.)
+                    bool had;
+                    {
+                        std::lock_guard<std::mutex> plk(s->piece_mu);
+                        had = s->pieces_have.count(seek_piece) > 0;
+                    }
+                    if (had) s->handle.read_piece(lt::piece_index_t(seek_piece));
                 } catch (...) {}
             }
 
@@ -2020,7 +2069,7 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
 
             if (is_get) {
                 TB_LOG("handle_conn: calling serve_range rstart=%lld rend=%lld", (long long)rstart, (long long)rend);
-                bool sr_ok = serve_range(s, reader, cli, rstart, rend);
+                bool sr_ok = serve_range(s, *conn, primary, reader, cli, rstart, rend);
                 TB_LOG("handle_conn: serve_range returned %d", (int)sr_ok);
                 if (!sr_ok) goto cleanup;
             }
@@ -2031,6 +2080,11 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
     }
 
 cleanup:
+    // no longer the playback request, if it was
+    {
+        std::lock_guard<std::mutex> clk(s->conn_mu);
+        if (s->primary == conn) s->primary.reset();
+    }
     // port of stream.go: defer t.CloseReader(reader)
     try {
         if (s->cache && reader) s->cache->close_reader(reader);

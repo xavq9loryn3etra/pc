@@ -32,6 +32,11 @@ class PlayerGestureOverlay extends StatefulWidget {
   /// seeking (on a computer, a double-click is for full screen).
   final VoidCallback? onDoubleClick;
 
+  /// Asked when a second tap lands close enough to the first to be a
+  /// double tap: true if it's really a second press of a control drawn over
+  /// the video (the player's buttons), which must not also seek.
+  final bool Function()? suppressDoubleTap;
+
   /// A finger held still on the screen for [holdDelay] (e.g. to play at 2×
   /// speed), and its release. A hold is neither a tap nor a volume /
   /// brightness swipe.
@@ -51,6 +56,7 @@ class PlayerGestureOverlay extends StatefulWidget {
     this.onSwipeUp,
     this.onDoubleTapSeek,
     this.onDoubleClick,
+    this.suppressDoubleTap,
     this.onHoldStart,
     this.onHoldEnd,
     this.enabled = true,
@@ -356,7 +362,9 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
       final screenWidth = MediaQuery.of(context).size.width;
       final isForward = tapPos.dx > screenWidth / 2;
 
-      if (_isInSeekStreak(now) && isForward == _seekForward) {
+      if (_isInSeekStreak(now) &&
+          isForward == _seekForward &&
+          !(widget.suppressDoubleTap?.call() ?? false)) {
         // Continuing a seek streak on the same side: another 10s, and no
         // single-tap action (it isn't a play/pause tap).
         _seek(isForward, event.localPosition);
@@ -365,7 +373,10 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay>
           now.difference(_lastTapTime!) < const Duration(milliseconds: 320) &&
           _lastTapPosition != null &&
           (tapPos - _lastTapPosition!).distance < 35.0) {
-        if (event.kind == PointerDeviceKind.mouse &&
+        if (widget.suppressDoubleTap?.call() ?? false) {
+          // Two presses of a control, not a double tap on the video.
+          _lastTapTime = null;
+        } else if (event.kind == PointerDeviceKind.mouse &&
             widget.onDoubleClick != null) {
           widget.onDoubleClick!();
         } else {

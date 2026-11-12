@@ -1726,6 +1726,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _markControlsPointer(PointerDownEvent _) =>
       _controlsPointerAt = DateTime.now();
 
+  /// Whether the press that's just ended landed on a control (see
+  /// _markControlsPointer): a double tap on a button mustn't also seek.
+  bool get _pointerWasOnControls =>
+      _controlsPointerAt != null &&
+      DateTime.now().difference(_controlsPointerAt!) <
+          const Duration(seconds: 1);
+
   /// Records how long this copy of the episode really is — TMDB's runtime
   /// can be well off (a 17-minute edit listed as 24m) — for its card and
   /// "time left" (see SavedMoviesService.saveEpisodeLength), here and in
@@ -4473,6 +4480,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             PlayerGestureOverlay(
               enabled: !_episodeCoversVideo && !_showSettingsPanel,
               onTapAt: _onScreenTap,
+              suppressDoubleTap: () => _pointerWasOnControls,
               // No seeking until the video has loaded (see _loadingVideo).
               onDoubleTapSeek: _loadingVideo
                   ? null
@@ -4492,8 +4500,10 @@ class _PlayerScreenState extends State<PlayerScreen>
                       // a pause or the controls.
                       _screenTapTimer?.cancel();
                       // Not in the controls' strip, where clicks do
-                      // nothing (see _inBottomBand).
-                      if (_lastTapInBottomBand) return;
+                      // nothing (see _inBottomBand), nor on a button.
+                      if (_lastTapInBottomBand || _pointerWasOnControls) {
+                        return;
+                      }
                       WindowFullScreen.toggle();
                     }
                   : null,

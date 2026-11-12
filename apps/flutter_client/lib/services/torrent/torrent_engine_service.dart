@@ -1,10 +1,11 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart' show ValueNotifier, visibleForTesting;
 import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:libtorrent_flutter/libtorrent_flutter.dart';
 import 'download_ahead_settings.dart';
+import 'free_space.dart';
 import 'torrent_download_registry.dart';
 import 'torrent_paths.dart';
 
@@ -233,6 +234,7 @@ class TorrentEngineService {
   StreamResult startStream(int id, {int? fileIndex}) {
     _streaming.add(id);
     _held.remove(id); // Resumed below.
+    _watchDisk();
 
     // Torrents stay registered after their player closes (see pause()), so
     // a resumed watch doesn't need to refetch already-cached bytes. Pause
@@ -646,6 +648,7 @@ class TorrentEngineService {
   void cleanup(int torrentId) {
     _idsByHash.removeWhere((_, id) => id == torrentId);
     _streaming.remove(torrentId);
+    if (_streaming.isEmpty) _stopWatchingDisk();
     _held.remove(torrentId);
     _warmStreams.remove(torrentId); // Its streams go with it.
     _cancelReadAhead(torrentId);
@@ -667,6 +670,7 @@ class TorrentEngineService {
   /// [streamMagnet]).
   void pause(int torrentId) {
     _streaming.remove(torrentId);
+    if (_streaming.isEmpty) _stopWatchingDisk();
     _held.remove(torrentId);
     _warmStreams.remove(torrentId); // Stopped below.
     _cancelReadAhead(torrentId);
@@ -736,6 +740,45 @@ class TorrentEngineService {
 
   void resumeFromBackground() => _release(_Hold.background);
 
+  /// True while the device is nearly out of space (under
+  /// [FreeSpace.reserveBytes]) during playback: what's streaming has been
+  /// paused, its stream left open, until space is freed. Checked every
+  /// [_diskCheckEvery] while something streams.
+  final ValueNotifier<bool> lowDiskSpace = ValueNotifier(false);
+  static const _diskCheckEvery = Duration(seconds: 30);
+  Timer? _diskTimer;
+
+  void _watchDisk() {
+    if (_diskTimer != null) return;
+    _diskTimer = Timer.periodic(_diskCheckEvery, (_) => _checkDisk());
+    _checkDisk();
+  }
+
+  void _stopWatchingDisk() {
+    _diskTimer?.cancel();
+    _diskTimer = null;
+    lowDiskSpace.value = false;
+  }
+
+  Future<void> _checkDisk() async {
+    if (_streaming.isEmpty) {
+      _stopWatchingDisk();
+      return;
+    }
+    final free = await FreeSpace.bytes();
+    if (free == null || _streaming.isEmpty) return;
+    final low = FreeSpace.isLow(free, wasLow: lowDiskSpace.value);
+    // Also holds a stream started while it was already low.
+    if (low) _hold(_Hold.lowDisk);
+    if (low == lowDiskSpace.value) return;
+    lowDiskSpace.value = low;
+    if (low) {
+      print('Low disk space (${free ~/ (1024 * 1024)} MB free): paused');
+    } else {
+      _release(_Hold.lowDisk);
+    }
+  }
+
   /// Shrinks or restores how far ahead of the current read position a live
   /// stream is allowed to buffer, without stopping/restarting it. Used to
   /// stop eagerly pre-fetching the rest of the file while the app is
@@ -779,8 +822,8 @@ typedef WarmTarget = ({
 enum _Network { unmetered, mobile, none }
 
 /// Why a streaming torrent's download is on hold: the app has been in the
-/// background too long.
-enum _Hold { background }
+/// background too long, or the disk is nearly full.
+enum _Hold { background, lowDisk }
 
 class StreamResult {
   final int torrentId;

@@ -3,6 +3,8 @@ import 'dart:math' as math;
 
 import '../../models/movie.dart';
 import '../audio_language_service.dart';
+import 'free_space.dart';
+import 'torrent_download_registry.dart';
 import 'torrent_engine_service.dart';
 import 'torrent_index_service.dart';
 
@@ -652,6 +654,26 @@ class StreamResolver {
   /// rather than its full 20s timeout.
   static const _headStart = Duration(seconds: 3);
 
+  /// [streams] without the copies too big for the space the device has
+  /// left (see [FreeSpace.fits]); what's already downloaded of one counts
+  /// as room. Everything stays when the space can't be read.
+  Future<List<TorrentStream>> _thatFit(List<TorrentStream> streams) async {
+    final free = await FreeSpace.bytes();
+    if (free == null) return streams;
+    var registry = const <String, TorrentDownloadInfo>{};
+    try {
+      registry = await TorrentDownloadRegistry.loadAll();
+    } catch (_) {}
+    return streams.where((s) {
+      final have = registry[s.infoHash.toLowerCase()]?.downloadedBytes ?? 0;
+      return FreeSpace.fits(
+        sizeBytes: TorrentDownloadRegistry.parseSizeBytes(s.size),
+        haveBytes: have,
+        freeBytes: free,
+      );
+    }).toList();
+  }
+
   /// Resolve [selected], automatically falling back to the next-best
   /// candidates in [allStreams] if it's slow, fails or times out.
   /// Torrentio's seed counts are scraped/cached and often stale — a
@@ -673,11 +695,13 @@ class StreamResolver {
     int maxAttempts = 3,
     bool Function()? isCancelled,
   }) async {
-    final ordered = [
+    var ordered = [
       selected,
       ...allStreams.where((s) =>
           s.infoHash.toLowerCase() != selected.infoHash.toLowerCase()),
     ];
+    ordered = await _thatFit(ordered);
+    if (ordered.isEmpty) throw const NotEnoughSpaceException();
     // The copy a head start is already downloading (see warmUp) goes
     // first — it starts at once — then others it connected to, where
     // [selected] may be the one the head start found no one sharing. All

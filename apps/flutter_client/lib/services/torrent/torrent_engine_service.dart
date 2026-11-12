@@ -275,6 +275,7 @@ class TorrentEngineService {
   StreamResult startStream(int id, {int? fileIndex}) {
     _streaming.add(id);
     _held.remove(id); // Resumed below.
+    _liftCap(); // Playback gets the full speed, whichever head start held it.
     _watchDisk();
 
     // Torrents stay registered after their player closes (see pause()), so
@@ -593,18 +594,58 @@ class TorrentEngineService {
 
   /// Pauses torrent [id] once it has downloaded [bytes] more — a head start
   /// on mobile data — unless Play has taken it over by then.
+  ///
+  /// The session is held to [_mobileHeadStartRate] meanwhile, so the check
+  /// (every 500 ms) can't be overshot by much at the full speed limit; the
+  /// network is looked at again on each tick, and the limit comes off if
+  /// it's no longer mobile data.
   void _capDownload(int id, int bytes) {
     final from = engine.torrents[id]?.totalDone ?? 0;
-    Timer.periodic(const Duration(milliseconds: 500), (timer) {
+    _cappedId = id;
+    try {
+      engine.setDownloadLimit(_mobileHeadStartRate);
+    } catch (e) {
+      print('Error limiting the head start: $e');
+    }
+    var checkingNetwork = false;
+    Timer.periodic(const Duration(milliseconds: 500), (timer) async {
       final t = engine.torrents[id];
       if (t == null || _streaming.contains(id) || !_warmStreams.containsKey(id)) {
         timer.cancel();
+        _liftCap(id);
       } else if (t.totalDone - from >= bytes) {
         timer.cancel();
+        _liftCap(id);
         _cancelReadAhead(id);
         engine.pauseTorrent(id);
+      } else if (!checkingNetwork) {
+        checkingNetwork = true;
+        final network = await _network();
+        checkingNetwork = false;
+        // On Wi-Fi now: not mobile data's allowance any more.
+        if (network == _Network.unmetered && timer.isActive) {
+          timer.cancel();
+          _liftCap(id);
+        }
       }
     });
+  }
+
+  /// Download speed for a head start on mobile data: with the check above
+  /// every 500 ms, at most about half a megabyte past the cap.
+  static const int _mobileHeadStartRate = 1 * 1024 * 1024; // 1 MB/s
+  // The torrent whose head start holds the speed limit down, if any.
+  int? _cappedId;
+
+  /// Takes the head start speed limit off — when it's [id]'s (null: whoever's).
+  void _liftCap([int? id]) {
+    if (_cappedId == null || (id != null && _cappedId != id)) return;
+    _cappedId = null;
+    try {
+      engine.setDownloadLimit(_downloadLimitBytesPerSec);
+    } catch (e) {
+      print('Error lifting the head start limit: $e');
+    }
   }
 
   /// Ends a [warmUp] that Play didn't take — the user left the page, or the
@@ -917,6 +958,7 @@ class TorrentEngineService {
     _held.clear();
     _hadData.clear();
     _warmOwners.clearAll();
+    _cappedId = null;
   }
 }
 

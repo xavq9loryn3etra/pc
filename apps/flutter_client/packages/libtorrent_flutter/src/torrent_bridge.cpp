@@ -1459,6 +1459,23 @@ static void finish_shutdown(StreamEngine* s) {
 // ── piece waiting — port of blocking read in TorrServer's Reader.Read ────────
 // blocks until piece is downloaded and verified — zero CPU polling
 
+// Whether libtorrent has [piece], asked directly — recorded in pieces_have
+// if so. For a wait that timed out: a piece_finished_alert can be missed
+// (e.g. one for a piece that finished just as the stream started), and
+// without this the wait would never end.
+static bool check_have(StreamEngine* s, int piece) {
+    bool h = false;
+    try { h = s->handle.have_piece(lt::piece_index_t(piece)); } catch (...) {}
+    if (h) {
+        {
+            std::lock_guard<std::mutex> lk(s->piece_mu);
+            s->pieces_have.insert(piece);
+        }
+        s->piece_cv.notify_all();
+    }
+    return h;
+}
+
 static bool wait_for_piece(StreamEngine* s, int piece, int timeout_ms,
                            int gen = -1) {
     if (gen < 0) gen = s->seek_generation.load();
@@ -1471,11 +1488,14 @@ static bool wait_for_piece(StreamEngine* s, int piece, int timeout_ms,
         s->handle.piece_priority(lt::piece_index_t(piece), lt::top_priority);
     } catch (...) {}
 
-    return s->piece_cv.wait_for(lk, chr::milliseconds(timeout_ms),
+    s->piece_cv.wait_for(lk, chr::milliseconds(timeout_ms),
         [&]{ return !s->active.load()
                  || s->seek_generation.load() != gen
-                 || s->pieces_have.count(piece) > 0; })
-        && s->pieces_have.count(piece) > 0;
+                 || s->pieces_have.count(piece) > 0; });
+    if (s->pieces_have.count(piece) > 0) return true;
+    if (!s->active.load() || s->seek_generation.load() != gen) return false;
+    lk.unlock();
+    return check_have(s, piece);
 }
 
 // Read piece data directly from libtorrent disk storage.
@@ -1662,8 +1682,11 @@ static bool serve_range(StreamEngine* s, TorrReader* reader, socket_t cli,
                 return false;
             }
             if (!ok || s->pieces_have.count(p) == 0) {
-                TB_LOG("serve_range: TIMEOUT piece=%d", p);
-                return false;
+                lk.unlock();
+                if (!check_have(s, p)) {
+                    TB_LOG("serve_range: TIMEOUT piece=%d", p);
+                    return false;
+                }
             }
             TB_LOG("serve_range: piece=%d READY", p);
         }
@@ -2813,6 +2836,64 @@ TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
     if (sw->bt_config.reader_read_ahead >= 5 && sw->bt_config.reader_read_ahead <= 100)
         s->cache->reader_read_ahead_pct = sw->bt_config.reader_read_ahead;
 
+    lt_stream_id sid = s->id;
+    StreamEngine* raw = s.get();
+
+    // ── HTTP server: bound and listening before the thread starts, so
+    // there's nothing to wait for here ──
+    INIT_SOCKETS();
+    socket_t sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == SOCKET_INVALID) { set_err("HTTP server: no socket"); return -1; }
+    {
+#ifndef _WIN32
+        int opt = 1;
+        ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
+#endif
+        sockaddr_in addr{};
+        addr.sin_family      = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port        = 0;
+        socklen_t_ al = sizeof(addr);
+        if (::bind(sock, (sockaddr*)&addr, sizeof(addr)) != 0
+                || ::getsockname(sock, (sockaddr*)&addr, (socklen_t*)&al) != 0
+                || ::listen(sock, 16) != 0) {
+            CLOSESOCKET(sock);
+            set_err("HTTP server failed to bind"); return -1;
+        }
+        raw->server_port = ntohs(addr.sin_port);
+        raw->listen_sock = sock;
+        raw->url = raw->make_url();  // fixed for the stream's life: built once
+    }
+#ifndef _WIN32
+    // The server's wake-up pipe (without it, the poll timeout still ends
+    // its wait, just later).
+    if (::pipe(raw->wake_fds) == 0) {
+        for (int fd : raw->wake_fds) {
+            ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
+            ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+        }
+    } else {
+        raw->wake_fds[0] = raw->wake_fds[1] = -1;
+    }
+#endif
+
+    try {
+        raw->server_thread = std::thread([raw]() { run_http_server(raw); });
+    } catch (...) {
+        CLOSESOCKET(raw->listen_sock);
+        raw->listen_sock = SOCKET_INVALID;
+        raw->close_wake_fds();
+        set_err("HTTP server thread failed"); return -1;
+    }
+
+    // In sw->streams before the snapshot of pieces had below, so a
+    // piece_finished_alert from here on reaches it: none can fall between
+    // the snapshot and the registration.
+    {
+        std::lock_guard<std::mutex> lk(sw->streams_mu);
+        sw->streams[sid] = s;
+    }
+
     try {
         // DO NOT use prioritize_files() here!
         // prioritize_files() is ASYNC — it completes later and resets ALL
@@ -2868,13 +2949,18 @@ TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
         // populate pieces we already have — mark them in pieces_have set.
         // Only load nearby pieces into RAM cache (head + tail).
         // Loading ALL pieces would flood I/O and fill the cache budget.
+        // (Merged under piece_mu: the alert thread may be adding too.)
         lt::torrent_status ts = handle.status(lt::torrent_handle::query_pieces);
-        for (int p = s->start_piece; p <= s->end_piece; ++p) {
-            if (ts.pieces.get_bit(lt::piece_index_t(p))) {
-                s->pieces_have.insert(p);
-                auto* cp = s->cache->get_piece(p);
-                if (cp) cp->mark_complete();
-                // only pre-load first 2 + tail pieces into read_results
+        std::vector<int> had;
+        for (int p = s->start_piece; p <= s->end_piece; ++p)
+            if (ts.pieces.get_bit(lt::piece_index_t(p))) had.push_back(p);
+        {
+            std::lock_guard<std::mutex> lk(s->piece_mu);
+            s->pieces_have.insert(had.begin(), had.end());
+        }
+        for (int p : had) {
+            {
+                // only pre-load first 2 + tail pieces into the cache
                 // (kept minimal to limit RAM — serve_range reads the rest on demand)
                 bool is_head = (p <= s->start_piece + 1);
                 bool is_tail = (p >= s->tail_start_piece);
@@ -2885,61 +2971,6 @@ TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
         }
 
     } catch (...) {}
-
-    lt_stream_id sid = s->id;
-    StreamEngine* raw = s.get();
-
-    // ── HTTP server: bound and listening before the thread starts, so
-    // there's nothing to wait for here ──
-    INIT_SOCKETS();
-    socket_t sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (sock == SOCKET_INVALID) { set_err("HTTP server: no socket"); return -1; }
-    {
-#ifndef _WIN32
-        int opt = 1;
-        ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
-#endif
-        sockaddr_in addr{};
-        addr.sin_family      = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        addr.sin_port        = 0;
-        socklen_t_ al = sizeof(addr);
-        if (::bind(sock, (sockaddr*)&addr, sizeof(addr)) != 0
-                || ::getsockname(sock, (sockaddr*)&addr, (socklen_t*)&al) != 0
-                || ::listen(sock, 16) != 0) {
-            CLOSESOCKET(sock);
-            set_err("HTTP server failed to bind"); return -1;
-        }
-        raw->server_port = ntohs(addr.sin_port);
-        raw->listen_sock = sock;
-        raw->url = raw->make_url();  // fixed for the stream's life: built once
-    }
-#ifndef _WIN32
-    // The server's wake-up pipe (without it, the poll timeout still ends
-    // its wait, just later).
-    if (::pipe(raw->wake_fds) == 0) {
-        for (int fd : raw->wake_fds) {
-            ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
-            ::fcntl(fd, F_SETFD, FD_CLOEXEC);
-        }
-    } else {
-        raw->wake_fds[0] = raw->wake_fds[1] = -1;
-    }
-#endif
-
-    try {
-        raw->server_thread = std::thread([raw]() { run_http_server(raw); });
-    } catch (...) {
-        CLOSESOCKET(raw->listen_sock);
-        raw->listen_sock = SOCKET_INVALID;
-        raw->close_wake_fds();
-        set_err("HTTP server thread failed"); return -1;
-    }
-
-    {
-        std::lock_guard<std::mutex> lk(sw->streams_mu);
-        sw->streams[sid] = std::move(s);
-    }
 
     set_err(""); return sid;
 }

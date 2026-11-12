@@ -194,6 +194,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _volumeRecentlyAdjusted = false;
   Timer? _volumeCollapseTimer;
   bool _switchingQuality = false;
+  // Loading another season's episode list in the browser: not a video
+  // switch, so it doesn't block playing, pausing or switching.
+  bool _loadingSeason = false;
   String? _switchingMessage;
 
   // Playback position tracking
@@ -1827,6 +1830,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _playPause() {
+    // Mid-switch the player is held paused: playing would start the old
+    // video again under the loading overlay.
+    if (_switchingQuality) return;
     if (_isPlaying) {
       player.pause();
     } else {
@@ -1953,6 +1959,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     String? message,
     String? failedMessage,
   }) async {
+    // One switch at a time (a second tap would race the first).
+    if (_switchingQuality) return;
     if (newStream.infoHash.toLowerCase() ==
         _currentStream.infoHash.toLowerCase()) return;
 
@@ -2427,6 +2435,8 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// Generalized Play Episode Function
   Future<void> _playEpisode(Episode targetEp, int seasonNumber) async {
+    // One switch at a time (a double tap on Next would start two).
+    if (_switchingQuality) return;
     if (targetEp.isUnreleased) {
       showAppMessage(context, "This episode hasn't aired yet.");
       return;
@@ -2568,6 +2578,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     TorrentStream stream,
     List<TorrentStream> allStreams,
   ) async {
+    if (_switchingQuality) return;
     if (targetEp.isUnreleased) {
       showAppMessage(context, "This episode hasn't aired yet.");
       return;
@@ -2631,33 +2642,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   ) async {
     final imdbId = widget.details.imdbId ?? widget.details.id;
 
-    await SavedMoviesService().addToHistory(
-      widget.movie,
-      season: seasonNumber,
-      episode: targetEp.episodeNumber,
-    );
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final String key =
-          'last_played_torrent_${imdbId}_${seasonNumber}_${targetEp.episodeNumber}';
-      await prefs.setString(key, stream.infoHash);
-      await LastPlayedTorrents.rememberLanguage(prefs, key, widget.details);
-      await TorrentDownloadRegistry.save(
-        stream.infoHash,
-        TorrentDownloadInfo(
-          movieId: widget.movie.id,
-          imdbId: imdbId,
-          title: widget.movie.title,
-          image: widget.movie.image,
-          season: seasonNumber,
-          episode: targetEp.episodeNumber,
-          totalBytes: TorrentDownloadRegistry.parseSizeBytes(stream.size),
-        ),
-      );
-    } catch (e) {
-      print('Error saving last played torrent: $e');
-    }
+    // What the episode switch changes before the media opens; put back if
+    // the open fails, so the old episode that stays on screen isn't saved
+    // as the new one.
+    final oldEpisodes = _episodes;
+    final oldEpisode = _currentEpisode;
+    final oldSeason = _currentSeason;
+    final oldPosition = _currentPosition;
+    final oldDuration = _duration;
 
     // Switch to the new episode's clock *before* opening it: its duration
     // can arrive while it opens, and zeroing it afterwards (as this used
@@ -2706,12 +2698,61 @@ class _PlayerScreenState extends State<PlayerScreen>
       _activeSkipSegmentNotifier.value = null;
     }
 
-    await _openMediaWithResume(
-      result.streamUrl,
-      overrideSeason: seasonNumber,
-      overrideEpisode: targetEp.episodeNumber,
-    );
+    try {
+      await _openMediaWithResume(
+        result.streamUrl,
+        overrideSeason: seasonNumber,
+        overrideEpisode: targetEp.episodeNumber,
+      );
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _episodes = oldEpisodes;
+          _currentEpisode = oldEpisode;
+          _currentSeason = oldSeason;
+          _currentPosition = oldPosition;
+          _duration = oldDuration;
+        });
+        _positionNotifier.value = oldPosition;
+        _durationNotifier.value = oldDuration;
+        _updateTimelineShapes();
+        _timelinePartitionRevision.value++;
+        _loadSubtitles();
+      }
+      rethrow;
+    }
     if (_closedDuringSwitch(result)) return;
+
+    // Playing now, so the episode counts as watched: history (Continue
+    // Watching) and the copy it plays from, saved only after the open
+    // succeeded.
+    await SavedMoviesService().addToHistory(
+      widget.movie,
+      season: seasonNumber,
+      episode: targetEp.episodeNumber,
+    );
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String key =
+          'last_played_torrent_${imdbId}_${seasonNumber}_${targetEp.episodeNumber}';
+      await prefs.setString(key, stream.infoHash);
+      await LastPlayedTorrents.rememberLanguage(prefs, key, widget.details);
+      await TorrentDownloadRegistry.save(
+        stream.infoHash,
+        TorrentDownloadInfo(
+          movieId: widget.movie.id,
+          imdbId: imdbId,
+          title: widget.movie.title,
+          image: widget.movie.image,
+          season: seasonNumber,
+          episode: targetEp.episodeNumber,
+          totalBytes: TorrentDownloadRegistry.parseSizeBytes(stream.size),
+        ),
+      );
+    } catch (e) {
+      print('Error saving last played torrent: $e');
+    }
 
     if (mounted) {
       setState(() {
@@ -2880,7 +2921,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// Browse and fetch details of a different season
   Future<void> _switchSeason(int seasonNumber) async {
     setState(() {
-      _switchingQuality = true;
+      _loadingSeason = true;
       _switchingMessage = 'Loading season $seasonNumber…';
     });
 
@@ -2894,13 +2935,13 @@ class _PlayerScreenState extends State<PlayerScreen>
         setState(() {
           _browsingSeason = seasonNumber;
           _browsingEpisodes = eps;
-          _switchingQuality = false;
+          _loadingSeason = false;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _switchingQuality = false;
+          _loadingSeason = false;
         });
         debugPrint('Failed to load season details: $e');
         showAppMessage(
@@ -4482,7 +4523,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                   // Switching (quality, episode, season, recovery): the
                   // video stays visible, softly darkened, under a small
                   // spinner and one quiet line.
-                  if (_switchingQuality)
+                  if (_switchingQuality || _loadingSeason)
                     ColoredBox(
                       color: Colors.black.withValues(alpha: 0.6),
                       child: Center(

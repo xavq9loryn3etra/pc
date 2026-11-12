@@ -209,7 +209,7 @@ class MovieHeroBanner extends StatelessWidget {
                         listenable: SavedMoviesService(),
                         builder: (context, _) {
                           final liked =
-                              SavedMoviesService().isFavorite(movie.id);
+                              SavedMoviesService().isFavorite(movie.id, type: movie.type);
                           return GlassActionButton(
                             width: 50,
                             onTap: () =>

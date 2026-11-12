@@ -1481,7 +1481,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         );
       } else {
         final histMovie =
-            SavedMoviesService().getMovieFromHistory(widget.movie.id);
+            SavedMoviesService().getMovieFromHistory(widget.movie.id, type: widget.movie.type);
         progress = histMovie?.progress;
       }
 
@@ -3079,7 +3079,13 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     // 2. Save final history position — unless that's been done already
     // (_progressFinal), and the position since is stop()'s 0.
-    if (!_progressFinal) _saveProgress(force: true);
+    // History writes are batched to every 15 s, so flush right after: a
+    // kill just after closing must not lose the position.
+    if (!_progressFinal) {
+      _saveProgress(force: true).whenComplete(SavedMoviesService().flush);
+    } else {
+      SavedMoviesService().flush();
+    }
 
     // Save final torrent download progress too — the periodic update in
     // _subscribeToTorrent is throttled to every 5s, so without this a

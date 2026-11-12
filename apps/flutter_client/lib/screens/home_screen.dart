@@ -378,7 +378,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
       // removeFromHistory() calls notifyListeners() itself — the
       // ListenableBuilder(SavedMoviesService()) around _buildContent picks
       // it up without a manual setState here.
-      await SavedMoviesService().removeFromHistory(movie.id);
+      await SavedMoviesService().removeFromHistory(movie.id, type: movie.type);
     }
   }
 
@@ -413,6 +413,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
               // Check if we have fresher data in history (for progress bar)
               final historyMovie = SavedMoviesService().getMovieFromHistory(
                 movie.id,
+                type: movie.type,
               );
               final movieDisplay = historyMovie ?? movie;
 

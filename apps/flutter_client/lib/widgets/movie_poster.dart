@@ -71,7 +71,7 @@ class _MoviePosterState extends State<MoviePoster> {
             final hidePlayback = FeatureFlagsService().hidePlayback.value;
             final historyMovie = hidePlayback
                 ? null
-                : SavedMoviesService().getMovieFromHistory(widget.movie.id);
+                : SavedMoviesService().getMovieFromHistory(widget.movie.id, type: widget.movie.type);
             final progress = hidePlayback
                 ? null
                 : historyMovie?.progress ?? widget.movie.progress;

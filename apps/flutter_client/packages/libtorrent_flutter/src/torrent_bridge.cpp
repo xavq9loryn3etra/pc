@@ -260,6 +260,18 @@ static bool load_resume(lt::add_torrent_params& atp,
     }
 }
 
+// A torrent downloads nothing until a stream asks for pieces
+// (lt_start_stream sets them one by one): every file starts at
+// dont_download, and priorities kept in its resume data are dropped.
+// Before, once metadata came in, every added torrent — each raced warm-up
+// copy too, on mobile data as well — downloaded all of its files until the
+// app paused it.
+static void nothing_wanted_until_streamed(lt::add_torrent_params& atp) {
+    atp.file_priorities.clear();
+    atp.piece_priorities.clear();
+    atp.flags |= lt::torrent_flags::default_dont_download;
+}
+
 // ── fill torrent status struct ──────────────────────────────────────────────────
 // What fill_status reads: the name and save path (two strings) on top of
 // the always-filled fields — not the piece bitfield or the torrent_info,
@@ -2549,7 +2561,12 @@ TORRENT_API lt_session_t lt_create_session_with_state(const char* iface,
         sp.set_int (lt::settings_pack::active_downloads,          1);
         sp.set_int (lt::settings_pack::active_limit,              10);
         sp.set_int (lt::settings_pack::alert_queue_size,          10000);
-        sp.set_bool(lt::settings_pack::close_redundant_connections, true);
+        // Off: torrents want only the pieces a stream asks for (N-M7), so a
+        // torrent is "finished" whenever its window is done — and with this
+        // on libtorrent then dropped its seeds (and told peers it was upload-
+        // only, so libtorrent seeds dropped it), just before the next
+        // window or the next stream needed them.
+        sp.set_bool(lt::settings_pack::close_redundant_connections, false);
         sp.set_int (lt::settings_pack::peer_turnover,             5);
         sp.set_int (lt::settings_pack::peer_turnover_interval,    30);
         // Off: with it on, a torrent added with no resume data (the first
@@ -2726,6 +2743,7 @@ TORRENT_API lt_torrent_id lt_add_magnet(lt_session_t session,
         atp.save_path = path;
         atp.flags &= ~lt::torrent_flags::paused;
         atp.flags &= ~lt::torrent_flags::auto_managed;
+        nothing_wanted_until_streamed(atp);
 
         // Trackerless magnet (only an info-hash, no &tr=...)? Seed it with a
         // curated set of public open trackers so peer discovery doesn't have
@@ -2779,6 +2797,7 @@ TORRENT_API lt_torrent_id lt_add_torrent_file(lt_session_t session,
         load_resume(atp, path);
         atp.flags &= ~lt::torrent_flags::paused;
         atp.flags &= ~lt::torrent_flags::auto_managed;
+        nothing_wanted_until_streamed(atp);
 
         if (stream_only) {
             atp.storage_mode = lt::storage_mode_sparse;
@@ -3216,19 +3235,12 @@ static void reap_stream(SessionWrapper* sw, std::shared_ptr<StreamEngine> stream
                         bool remove_torrent) {
     try {
         finish_shutdown(stream.get());
+        // (No "restore default file priorities" for the others: that async
+        // job could land after the next stream's prioritize_pieces on an
+        // episode switch and make the whole pack wanted.)
         if (remove_torrent) {
             lt_remove_torrent(reinterpret_cast<lt_session_t>(sw),
                               stream->torrent_id, 1);
-        } else {
-            // restore default file priorities
-            try {
-                auto ti2 = stream->handle.torrent_file();
-                if (ti2) {
-                    int nf = ti2->files().num_files();
-                    std::vector<lt::download_priority_t> p((size_t)nf, lt::default_priority);
-                    stream->handle.prioritize_files(p);
-                }
-            } catch (...) {}
         }
     } catch (...) {}
     stream.reset();

@@ -1830,6 +1830,7 @@ static int send_all(socket_t sock, const char* data, int len) {
     int sent = 0;
     while (sent < len) {
         int n = ::send(sock, data + sent, len - sent, 0);
+        if (n < 0 && SOCK_ERRNO() == SOCK_EINTR) continue;  // a signal, not an error
         if (n <= 0) return -1;
         sent += n;
     }
@@ -2165,6 +2166,7 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
         bool header_complete = false;
         while (total < (int)sizeof(buf) - 1 && s->active.load()) {
             int n = ::recv(cli, buf + total, (int)sizeof(buf) - 1 - total, 0);
+            if (n < 0 && SOCK_ERRNO() == SOCK_EINTR) continue;  // a signal, not an error
             if (n <= 0) goto cleanup;
             total += n;
             for (int i = std::max(0, total - 4); i <= total - 4; ++i) {

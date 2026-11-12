@@ -35,6 +35,7 @@ class TorrentEngineService {
       // why: temp can be purged by the OS independently of app logic, which
       // would silently undo the "keep downloaded data" behavior below.
       final savePath = await TorrentPaths.torrentsDir();
+      await TorrentPaths.prepare();
 
       await LibtorrentFlutter.init(
         downloadLimit: _downloadLimitBytesPerSec,

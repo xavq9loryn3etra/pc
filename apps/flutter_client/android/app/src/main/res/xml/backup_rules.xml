@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older: auto backup leaves out the downloaded torrents
+     and the engine's saved state (see TorrentPaths). -->
+<full-backup-content>
+    <exclude domain="file" path="torrents/" />
+    <exclude domain="file" path="engine_state.dat" />
+</full-backup-content>

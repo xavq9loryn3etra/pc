@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 final _infoHashPattern = RegExp(r'^[0-9a-fA-F]{40}$');
@@ -18,6 +20,22 @@ class TorrentPaths {
   static Future<String> torrentsDir() async {
     final base = await getApplicationSupportDirectory();
     return '${base.path}/torrents';
+  }
+
+  /// Creates the torrents folder and, on iOS, marks it as left out of
+  /// backups — downloads are re-fetchable and can be many GB. (Android does
+  /// the same through its backup rules XML.) Safe to call repeatedly.
+  static Future<void> prepare() async {
+    try {
+      final dir = Directory(await torrentsDir());
+      await dir.create(recursive: true);
+      if (Platform.isIOS) {
+        await const MethodChannel('popcorn/device')
+            .invokeMethod<bool>('excludeFromBackup', {'path': dir.path});
+      }
+    } catch (e) {
+      print('Error preparing the torrents folder: $e');
+    }
   }
 
   /// The engine's saved DHT state (see TorrentEngineService) — beside the

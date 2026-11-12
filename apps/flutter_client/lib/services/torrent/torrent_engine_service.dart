@@ -908,14 +908,16 @@ class TorrentEngineService {
         print('Error trimming torrent $torrentId: $e');
       }
       if (kept == null) {
-        // Not released (or unknown): it may still be in the session, so
-        // keep it known and just pause it, as before.
+        // Still in the session: keep it known and just pause it, as before.
         _idsByHash.putIfAbsent(key, () => torrentId);
         try {
           engine.pauseTorrent(torrentId);
         } catch (_) {}
         return;
       }
+      // Out of the session but not trimmed (-1): its files and resume data
+      // are as a pause leaves them; playing it again adds it afresh.
+      if (kept < 0) return;
       if (keepFrom >= 0) {
         // The size on disk can't always be measured (and after hole
         // punching a file's apparent size stays the full one), so record

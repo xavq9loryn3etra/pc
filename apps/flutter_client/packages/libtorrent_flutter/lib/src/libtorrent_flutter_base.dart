@@ -319,9 +319,10 @@ class LibtorrentFlutter {
   /// it out of the session WITHOUT deleting its files; then shrinks what's
   /// kept on disk to bytes [keepFrom] onwards of file [fileIndex] (plus
   /// every file's head and tail). A negative [keepFrom] only releases.
-  /// Runs off the UI thread. Returns the bytes still kept on disk, or null
-  /// when the native library can't do this (older than engine v4) or it
-  /// failed.
+  /// Runs off the UI thread. Returns the bytes still kept on disk; -1 when
+  /// the torrent was taken out of the session but not trimmed; or null when
+  /// it is still in the session (the native library can't do this — older
+  /// than engine v4 — or it failed before releasing it).
   Future<int?> releaseAndTrim(
     int torrentId, {
     required int fileIndex,
@@ -345,12 +346,28 @@ class LibtorrentFlutter {
     try {
       final kept = await Isolate.run(
           () => _nativeReleaseAndTrim(addr, torrentId, fileIndex, keepFrom, 10000));
-      return kept < 0 ? null : kept;
+      // >= 0: released and trimmed; -1: released, not trimmed; -2: still
+      // in the session. Anything else: ask the session.
+      if (kept >= 0) return kept;
+      if (kept == -1 || kept == -2) return kept == -1 ? -1 : null;
+      return _inSession(torrentId) ? null : -1;
     } catch (_) {
-      return null;
+      return _inSession(torrentId) ? null : -1;
     } finally {
       _stopping.removeAll(streamIds);
       _releasing.remove(torrentId);
+    }
+  }
+
+  /// Whether torrent [id] is still in the native session.
+  bool _inSession(int id) {
+    final out = calloc<LtTorrentStatus>();
+    try {
+      return _b.getStatus(_session, id, out) == 1;
+    } catch (_) {
+      return false;
+    } finally {
+      calloc.free(out);
     }
   }
 

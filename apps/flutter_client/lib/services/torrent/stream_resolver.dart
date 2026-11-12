@@ -732,8 +732,9 @@ class StreamResolver {
           (id) {
         if (outcome.isCompleted) {
           // Lost the race, or the user gave up: stop it, keeping what it
-          // has, unless it's what's playing.
-          if (!_engine.isStreaming(id)) _engine.pause(id);
+          // has, unless it's what's playing; and out of the session unless
+          // it's a saved download or a head start's.
+          unawaited(_engine.dropLoser(id));
           return;
         }
         if (cancelled()) {

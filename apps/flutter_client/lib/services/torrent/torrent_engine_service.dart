@@ -721,6 +721,32 @@ class TorrentEngineService {
     }
   }
 
+  /// For a copy that connected but lost the race to start (see
+  /// StreamResolver.resolveWithFallback): pauses it and, unless a head
+  /// start holds it or it's a saved download, takes it out of the session
+  /// — keeping its files — so it doesn't sit there for the whole run.
+  Future<void> dropLoser(int id) async {
+    if (_streaming.contains(id)) return;
+    pause(id);
+    final key = _keyOf(id);
+    if (key == null || _warmOwners.owns(key)) return;
+    final known = await TorrentDownloadRegistry.loadAll();
+    // Things may have changed while the registry was read.
+    if (known.containsKey(key) ||
+        _streaming.contains(id) ||
+        _warmOwners.owns(key) ||
+        _keyOf(id) != key) {
+      return;
+    }
+    _idsByHash.remove(key);
+    _warmStreams.remove(id);
+    try {
+      engine.removeTorrent(id, deleteFiles: false);
+    } catch (e) {
+      print('Error removing torrent $id: $e');
+    }
+  }
+
   /// Removes torrent [infoHash], with its files, if it was added this
   /// session — for deleting a cached download (Settings > Storage, a wipe
   /// after a stall). Returns whether it was there; does nothing otherwise.

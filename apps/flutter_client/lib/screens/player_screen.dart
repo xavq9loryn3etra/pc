@@ -879,6 +879,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!mounted || _closing) return;
     print('[player] error: $error');
     if (_switchingQuality || _recoveringStream || _errorCheck != null) return;
+    // About something other than the video: an online subtitle file that
+    // wouldn't load ("Failed to open https://…", "Can not open external
+    // file …"). The video is served from 127.0.0.1; one of these arriving
+    // while it's still opening must not be taken for a dead stream.
+    if (_isAboutOtherFile(error)) return;
     final at = _currentPosition;
     _errorCheck = Timer(const Duration(seconds: 5), () {
       _errorCheck = null;
@@ -894,6 +899,16 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
       _attemptStreamRecovery(reason: 'mpv error: $error');
     });
+  }
+
+  static final _urlPattern = RegExp(r'https?://\S+');
+
+  /// Whether mpv [error] is about a file other than the video being played.
+  static bool _isAboutOtherFile(String error) {
+    if (error.toLowerCase().contains('external file')) return true;
+    final urls = _urlPattern.allMatches(error).map((m) => m.group(0)!);
+    return urls.isNotEmpty &&
+        urls.every((u) => !u.contains('127.0.0.1') && !u.contains('localhost'));
   }
 
   /// The file played to its end (see _completedSub): the next episode,
@@ -2179,6 +2194,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// on its own: a libmpv without one just keeps its default.
   Future<void> _configureCinemaSound(NativePlayer mpv) async {
     final options = {
+      // libmpv's default output on Android is OpenSL ES, which is stereo
+      // only; AudioTrack takes 5.1/7.1 (OpenSL ES stays as the fallback).
+      if (Platform.isAndroid) 'ao': 'audiotrack,opensles',
       if (Platform.isAndroid) 'audio-channels': 'auto',
       'audio-swresample-o': 'lfe_mix_level=0.5',
     };
@@ -2189,6 +2207,20 @@ class _PlayerScreenState extends State<PlayerScreen>
       } catch (e) {
         print('Cinema sound: ${o.key} not applied: $e');
       }
+    }
+    // The film's channel layout and what reaches the device, in the log:
+    // how to tell whether the surround gets through on a given phone.
+    for (final p in [
+      'current-ao',
+      'audio-params/channel-count',
+      'audio-out-params/channel-count',
+    ]) {
+      if (!mounted) return;
+      try {
+        await mpv.observeProperty(p, (v) async {
+          if (v.isNotEmpty) print('[sound] $p = $v');
+        });
+      } catch (_) {}
     }
   }
 

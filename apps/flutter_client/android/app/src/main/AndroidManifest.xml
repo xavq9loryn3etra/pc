@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
@@ -12,8 +12,9 @@
     <application
         android:label="Popcorn"
         android:name="${applicationName}"
-        android:usesCleartextTraffic="true"
-        android:requestLegacyExternalStorage="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
@@ -49,10 +50,13 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
-        <!-- flutter_foreground_task's service. Do not change the name. -->
+        <!-- flutter_foreground_task's service. Do not change the name.
+             stopWithTask: swiping the app away ends it, rather than the
+             plugin restarting it with nothing left to download for. -->
         <service
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
             android:foregroundServiceType="dataSync"
+            android:stopWithTask="true"
             android:exported="false" />
     </application>
     <!-- Required to query activities that can process text, see:

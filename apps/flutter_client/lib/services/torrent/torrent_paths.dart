@@ -1,4 +1,13 @@
+import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+
+final _infoHashPattern = RegExp(r'^[0-9a-fA-F]{40}$');
+
+/// Whether [h] is a torrent info hash: 40 hex digits. The finders' answers
+/// go into a magnet link and a folder name (see TorrentPaths.savePathFor),
+/// so anything else — "&dn=…", "../" — is refused.
+bool isValidInfoHash(String h) => _infoHashPattern.hasMatch(h);
 
 /// Single source of truth for where torrent data lives on disk, shared by
 /// [TorrentEngineService] (which writes here) and the Settings storage
@@ -13,6 +22,22 @@ class TorrentPaths {
     return '${base.path}/torrents';
   }
 
+  /// Creates the torrents folder and, on iOS, marks it as left out of
+  /// backups — downloads are re-fetchable and can be many GB. (Android does
+  /// the same through its backup rules XML.) Safe to call repeatedly.
+  static Future<void> prepare() async {
+    try {
+      final dir = Directory(await torrentsDir());
+      await dir.create(recursive: true);
+      if (Platform.isIOS) {
+        await const MethodChannel('popcorn/device')
+            .invokeMethod<bool>('excludeFromBackup', {'path': dir.path});
+      }
+    } catch (e) {
+      print('Error preparing the torrents folder: $e');
+    }
+  }
+
   /// The engine's saved DHT state (see TorrentEngineService) — beside the
   /// torrents directory, not in it, so clearing downloads leaves it be.
   static Future<String> engineStateFile() async {
@@ -25,6 +50,9 @@ class TorrentPaths {
   /// finds and reuses whatever was already downloaded there instead of
   /// starting over.
   static Future<String> savePathFor(String infoHash) async {
+    if (!isValidInfoHash(infoHash)) {
+      throw ArgumentError.value(infoHash, 'infoHash', 'Not an info hash');
+    }
     final dir = await torrentsDir();
     return '$dir/$infoHash';
   }

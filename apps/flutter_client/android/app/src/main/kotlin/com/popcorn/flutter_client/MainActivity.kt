@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
+import android.os.StatFs
 import android.telephony.TelephonyManager
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
@@ -42,6 +43,14 @@ class MainActivity : FlutterActivity() {
                     val country = tm?.simCountryIso?.takeIf { it.isNotBlank() }
                         ?: tm?.networkCountryIso?.takeIf { it.isNotBlank() }
                     result.success(country?.uppercase())
+                } else if (call.method == "freeBytes") {
+                    // Space left on the disk holding a path: the torrents
+                    // folder (see FreeSpace).
+                    try {
+                        result.success(StatFs(call.argument<String>("path")).availableBytes)
+                    } catch (e: Exception) {
+                        result.success(null)
+                    }
                 } else {
                     result.notImplemented()
                 }

@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show ValueNotifier, visibleForTesting;
 import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:libtorrent_flutter/libtorrent_flutter.dart';
 import 'download_ahead_settings.dart';
+import 'free_space.dart';
 import 'torrent_download_registry.dart';
 import 'torrent_paths.dart';
+import 'warm_owners.dart';
 
 class TorrentEngineService {
   static final TorrentEngineService _instance = TorrentEngineService._();
@@ -25,13 +28,22 @@ class TorrentEngineService {
   /// stream is allowed to buffer. See [setStreamCacheCapacity].
   static const int defaultStreamCacheBytes = 500 * 1024 * 1024; // 500 MB
 
-  Future<void> init() async {
-    if (_initialized) return;
+  // The start in progress, so callers arriving meanwhile wait for it
+  // instead of starting the engine a second time.
+  Future<void>? _initializing;
+
+  Future<void> init() {
+    if (_initialized) return Future.value();
+    return _initializing ??= _init().whenComplete(() => _initializing = null);
+  }
+
+  Future<void> _init() async {
     try {
       // Application-support dir, not the OS temp dir — see TorrentPaths for
       // why: temp can be purged by the OS independently of app logic, which
       // would silently undo the "keep downloaded data" behavior below.
       final savePath = await TorrentPaths.torrentsDir();
+      await TorrentPaths.prepare();
 
       await LibtorrentFlutter.init(
         downloadLimit: _downloadLimitBytesPerSec,
@@ -121,6 +133,11 @@ class TorrentEngineService {
   final Set<int> _streaming = {};
   // Head starts still fetching, by lowercase info hash (see warmUp).
   final Set<String> _warming = {};
+  // Who holds each head start, so coolDown ends it only for the last one.
+  final WarmOwners _warmOwners = WarmOwners();
+  // Torrents whose folder already had files when they were added: a failed
+  // start doesn't delete them (see discardFailedStart).
+  final Set<String> _hadData = {};
 
   /// Add magnet, wait for metadata, start stream, return local URL
   Future<StreamResult> streamMagnet(
@@ -132,9 +149,30 @@ class TorrentEngineService {
     try {
       return startStream(id, fileIndex: fileIndex);
     } catch (e) {
-      cleanup(id);
+      discardFailedStart(id);
       rethrow;
     }
+  }
+
+  /// For a torrent [startStream] failed on: removes it, with its files, only
+  /// when that loses nothing — nothing downloaded yet, no files there
+  /// before, no head start holding it. Otherwise just pauses it.
+  void discardFailedStart(int id) {
+    final key = _keyOf(id);
+    final hasData = (engine.torrents[id]?.totalDone ?? 0) > 0 ||
+        (key != null && (_hadData.contains(key) || _warmOwners.owns(key)));
+    if (hasData) {
+      pause(id);
+    } else {
+      cleanup(id);
+    }
+  }
+
+  String? _keyOf(int id) {
+    for (final e in _idsByHash.entries) {
+      if (e.value == id) return e.key;
+    }
+    return null;
   }
 
   /// Adds [infoHash] (or finds it already added this session), lets it run
@@ -153,6 +191,9 @@ class TorrentEngineService {
     if (!_initialized) {
       throw StateError(
           'The torrent engine failed to start on this device ($_initError)');
+    }
+    if (!isValidInfoHash(infoHash)) {
+      throw ArgumentError.value(infoHash, 'infoHash', 'Not an info hash');
     }
     final key = infoHash.toLowerCase();
     // Possibly paused (a finished head start, a closed player): resumed
@@ -202,6 +243,11 @@ class TorrentEngineService {
       // directory at a time without risking touching another torrent's
       // files.
       final savePath = await TorrentPaths.savePathFor(key);
+      if (await Directory(savePath).exists()) {
+        _hadData.add(key);
+      } else {
+        _hadData.remove(key);
+      }
       id = engine.addMagnet(magnetUri, savePath);
       _idsByHash[key] = id;
     }
@@ -228,6 +274,9 @@ class TorrentEngineService {
   /// download budget.
   StreamResult startStream(int id, {int? fileIndex}) {
     _streaming.add(id);
+    _held.remove(id); // Resumed below.
+    _liftCap(); // Playback gets the full speed, whichever head start held it.
+    _watchDisk();
 
     // Torrents stay registered after their player closes (see pause()), so
     // a resumed watch doesn't need to refetch already-cached bytes. Pause
@@ -253,6 +302,9 @@ class TorrentEngineService {
     }
 
     final videoIdx = fileIndex ?? _findLargestVideoFile(files);
+    // Play has taken it over: no head start's to clean up any more.
+    final key = _keyOf(id);
+    if (key != null) _warmOwners.clear(key);
 
     // The head start's stream, already downloading the file's start (see
     // warmUp) — when it's for this same file.
@@ -401,7 +453,14 @@ class TorrentEngineService {
   Future<void> warmUp(List<WarmTarget> targets, {double? resumeAt}) async {
     if (targets.isEmpty) return;
     final keys = [for (final t in targets) t.infoHash.toLowerCase()];
-    if (keys.any((k) => _liveId(k) != null)) return;
+    if (keys.any((k) => _liveId(k) != null)) {
+      // Already added. Those a head start holds are shared with this page
+      // (so its coolDown doesn't end it for the other); the rest —
+      // playing, or downloaded earlier — are never this page's to clean up.
+      _warmOwners.share(keys);
+      return;
+    }
+    _warmOwners.acquire(keys);
     _warming.addAll(keys);
     try {
       final winner = Completer<(WarmTarget, int)?>();
@@ -535,18 +594,58 @@ class TorrentEngineService {
 
   /// Pauses torrent [id] once it has downloaded [bytes] more — a head start
   /// on mobile data — unless Play has taken it over by then.
+  ///
+  /// The session is held to [_mobileHeadStartRate] meanwhile, so the check
+  /// (every 500 ms) can't be overshot by much at the full speed limit; the
+  /// network is looked at again on each tick, and the limit comes off if
+  /// it's no longer mobile data.
   void _capDownload(int id, int bytes) {
     final from = engine.torrents[id]?.totalDone ?? 0;
-    Timer.periodic(const Duration(milliseconds: 500), (timer) {
+    _cappedId = id;
+    try {
+      engine.setDownloadLimit(_mobileHeadStartRate);
+    } catch (e) {
+      print('Error limiting the head start: $e');
+    }
+    var checkingNetwork = false;
+    Timer.periodic(const Duration(milliseconds: 500), (timer) async {
       final t = engine.torrents[id];
       if (t == null || _streaming.contains(id) || !_warmStreams.containsKey(id)) {
         timer.cancel();
+        _liftCap(id);
       } else if (t.totalDone - from >= bytes) {
         timer.cancel();
+        _liftCap(id);
         _cancelReadAhead(id);
         engine.pauseTorrent(id);
+      } else if (!checkingNetwork) {
+        checkingNetwork = true;
+        final network = await _network();
+        checkingNetwork = false;
+        // On Wi-Fi now: not mobile data's allowance any more.
+        if (network == _Network.unmetered && timer.isActive) {
+          timer.cancel();
+          _liftCap(id);
+        }
       }
     });
+  }
+
+  /// Download speed for a head start on mobile data: with the check above
+  /// every 500 ms, at most about half a megabyte past the cap.
+  static const int _mobileHeadStartRate = 1 * 1024 * 1024; // 1 MB/s
+  // The torrent whose head start holds the speed limit down, if any.
+  int? _cappedId;
+
+  /// Takes the head start speed limit off — when it's [id]'s (null: whoever's).
+  void _liftCap([int? id]) {
+    if (_cappedId == null || (id != null && _cappedId != id)) return;
+    _cappedId = null;
+    try {
+      engine.setDownloadLimit(_downloadLimitBytesPerSec);
+    } catch (e) {
+      print('Error lifting the head start limit: $e');
+    }
   }
 
   /// Ends a [warmUp] that Play didn't take — the user left the page, or the
@@ -557,6 +656,8 @@ class TorrentEngineService {
     final known = await TorrentDownloadRegistry.loadAll();
     for (final infoHash in infoHashes) {
       final key = infoHash.toLowerCase();
+      // Not one a head start holds, or another page still wants it.
+      if (!_warmOwners.release(key)) continue;
       final stillConnecting = _warming.remove(key);
       final id = _idsByHash[key];
       if (id == null || _streaming.contains(id)) continue;
@@ -607,16 +708,31 @@ class TorrentEngineService {
     );
   }
 
-  int _findLargestVideoFile(List<FileInfo> files) {
-    int largestIndex = files.first.index;
-    int largestSize = files.first.size;
+  int _findLargestVideoFile(List<FileInfo> files) => chooseVideoFile(files);
+
+  // Bonus clips in a release, not the feature.
+  static final _bonusPattern = RegExp(
+      r'(?<![A-Za-z])(samples?|trailers?|extras)(?![A-Za-z])',
+      caseSensitive: false);
+
+  /// The file to play when the finder didn't say which: the largest video
+  /// (by the engine's own list of playable types), leaving out samples,
+  /// trailers and extras — the largest file of any kind could be a disc
+  /// image or an archive. Throws when there's none, so the next copy is
+  /// tried instead (see StreamResolver.resolveWithFallback).
+  @visibleForTesting
+  static int chooseVideoFile(List<FileInfo> files) {
+    FileInfo? best;
     for (final file in files) {
-      if (file.size > largestSize) {
-        largestSize = file.size;
-        largestIndex = file.index;
+      if (!file.isStreamable) continue;
+      if (_bonusPattern.hasMatch(file.path) ||
+          _bonusPattern.hasMatch(file.name)) {
+        continue;
       }
+      if (best == null || file.size > best.size) best = file;
     }
-    return largestIndex;
+    if (best == null) throw Exception('No video file found in torrent');
+    return best.index;
   }
 
   /// Clean up after playback — deletes the downloaded data. Only appropriate
@@ -624,8 +740,15 @@ class TorrentEngineService {
   /// episode mid-session discards the old stream on purpose), not for a
   /// normal player close.
   void cleanup(int torrentId) {
+    final key = _keyOf(torrentId);
+    if (key != null) {
+      _hadData.remove(key);
+      _warmOwners.clear(key);
+    }
     _idsByHash.removeWhere((_, id) => id == torrentId);
     _streaming.remove(torrentId);
+    if (_streaming.isEmpty) _stopWatchingDisk();
+    _held.remove(torrentId);
     _warmStreams.remove(torrentId); // Its streams go with it.
     _cancelReadAhead(torrentId);
     try {
@@ -639,6 +762,44 @@ class TorrentEngineService {
     }
   }
 
+  /// For a copy that connected but lost the race to start (see
+  /// StreamResolver.resolveWithFallback): pauses it and, unless a head
+  /// start holds it or it's a saved download, takes it out of the session
+  /// — keeping its files — so it doesn't sit there for the whole run.
+  Future<void> dropLoser(int id) async {
+    if (_streaming.contains(id)) return;
+    pause(id);
+    final key = _keyOf(id);
+    if (key == null || _warmOwners.owns(key)) return;
+    final known = await TorrentDownloadRegistry.loadAll();
+    // Things may have changed while the registry was read.
+    if (known.containsKey(key) ||
+        _streaming.contains(id) ||
+        _warmOwners.owns(key) ||
+        _keyOf(id) != key) {
+      return;
+    }
+    _idsByHash.remove(key);
+    _warmStreams.remove(id);
+    try {
+      engine.removeTorrent(id, deleteFiles: false);
+    } catch (e) {
+      print('Error removing torrent $id: $e');
+    }
+  }
+
+  /// Removes torrent [infoHash], with its files, if it was added this
+  /// session — for deleting a cached download (Settings > Storage, a wipe
+  /// after a stall). Returns whether it was there; does nothing otherwise.
+  Future<bool> forget(String infoHash) async {
+    final key = infoHash.toLowerCase();
+    _warming.remove(key);
+    final id = _idsByHash[key];
+    if (id == null) return false;
+    cleanup(id);
+    return true;
+  }
+
   /// Stop a torrent entirely — its stream and its downloading — but keep
   /// what it downloaded on disk, so resuming later only fetches the rest.
   /// For a normal player close, and a start the user abandoned (closed the
@@ -646,6 +807,8 @@ class TorrentEngineService {
   /// [streamMagnet]).
   void pause(int torrentId) {
     _streaming.remove(torrentId);
+    if (_streaming.isEmpty) _stopWatchingDisk();
+    _held.remove(torrentId);
     _warmStreams.remove(torrentId); // Stopped below.
     _cancelReadAhead(torrentId);
     try {
@@ -659,11 +822,97 @@ class TorrentEngineService {
   /// Undo the pause [streamMagnet] puts every other torrent in — for going
   /// back to what was playing when starting something else failed. Its
   /// stream was never stopped, so the player can just carry on.
+  ///
+  /// Does nothing once the torrent is no longer streaming: [pause] (the
+  /// player closing) takes it off, and a late resume from a switch that
+  /// finished after the player closed mustn't restart its download.
   void resume(int torrentId) {
+    if (!_streaming.contains(torrentId)) return;
     try {
       engine.resumeTorrent(torrentId);
     } catch (e) {
       print('Error resuming torrent $torrentId: $e');
+    }
+  }
+
+  // Streaming torrents whose download is on hold, and why (see _hold). Only
+  // these are let go again, so one paused for another reason — the old
+  // copy during a switch — isn't restarted along with them.
+  final Map<int, Set<_Hold>> _held = {};
+
+  /// Pauses the download of every streaming torrent, leaving its stream
+  /// open, until [_release] with the same [why].
+  void _hold(_Hold why) {
+    if (!_initialized) return;
+    for (final id in _streaming) {
+      final reasons = _held[id];
+      if (reasons != null) {
+        reasons.add(why);
+        continue;
+      }
+      // Already paused by something else: left to whoever did that.
+      if (engine.torrents[id]?.isPaused ?? true) continue;
+      _held[id] = {why};
+      try {
+        engine.pauseTorrent(id);
+      } catch (e) {
+        print('Error pausing torrent $id: $e');
+      }
+    }
+  }
+
+  void _release(_Hold why) {
+    for (final id in [..._held.keys]) {
+      final reasons = _held[id]!..remove(why);
+      if (reasons.isNotEmpty) continue;
+      _held.remove(id);
+      resume(id); // Nothing, if it has stopped streaming meanwhile.
+    }
+  }
+
+  /// Stops what's streaming from downloading while the app has been in the
+  /// background too long (see BackgroundDownloadService), keeping its
+  /// stream open; [resumeFromBackground] lets it carry on.
+  void pauseForBackground() => _hold(_Hold.background);
+
+  void resumeFromBackground() => _release(_Hold.background);
+
+  /// True while the device is nearly out of space (under
+  /// [FreeSpace.reserveBytes]) during playback: what's streaming has been
+  /// paused, its stream left open, until space is freed. Checked every
+  /// [_diskCheckEvery] while something streams.
+  final ValueNotifier<bool> lowDiskSpace = ValueNotifier(false);
+  static const _diskCheckEvery = Duration(seconds: 30);
+  Timer? _diskTimer;
+
+  void _watchDisk() {
+    if (_diskTimer != null) return;
+    _diskTimer = Timer.periodic(_diskCheckEvery, (_) => _checkDisk());
+    _checkDisk();
+  }
+
+  void _stopWatchingDisk() {
+    _diskTimer?.cancel();
+    _diskTimer = null;
+    lowDiskSpace.value = false;
+  }
+
+  Future<void> _checkDisk() async {
+    if (_streaming.isEmpty) {
+      _stopWatchingDisk();
+      return;
+    }
+    final free = await FreeSpace.bytes();
+    if (free == null || _streaming.isEmpty) return;
+    final low = FreeSpace.isLow(free, wasLow: lowDiskSpace.value);
+    // Also holds a stream started while it was already low.
+    if (low) _hold(_Hold.lowDisk);
+    if (low == lowDiskSpace.value) return;
+    lowDiskSpace.value = low;
+    if (low) {
+      print('Low disk space (${free ~/ (1024 * 1024)} MB free): paused');
+    } else {
+      _release(_Hold.lowDisk);
     }
   }
 
@@ -684,6 +933,7 @@ class TorrentEngineService {
   Future<void> dispose() async {
     _stateSaveTimer?.cancel();
     _lifecycle?.dispose();
+    _stopWatchingDisk();
     try {
       engine.saveSessionState();
     } catch (_) {}
@@ -694,6 +944,21 @@ class TorrentEngineService {
     } catch (e) {
       print('Error disposing Torrent Engine: $e');
     }
+    // Nothing of this session survives: a later init() starts afresh.
+    _initialized = false;
+    _idsByHash.clear();
+    _streaming.clear();
+    _warmStreams.clear();
+    for (final read in _warmReads.values) {
+      read.close(force: true);
+    }
+    _warmReads.clear();
+    _connecting.clear();
+    _warming.clear();
+    _held.clear();
+    _hadData.clear();
+    _warmOwners.clearAll();
+    _cappedId = null;
   }
 }
 
@@ -708,6 +973,10 @@ typedef WarmTarget = ({
 /// What a head start may spend: Wi-Fi or a cable, metered mobile data, or
 /// neither (offline, or unknown).
 enum _Network { unmetered, mobile, none }
+
+/// Why a streaming torrent's download is on hold: the app has been in the
+/// background too long, or the disk is nearly full.
+enum _Hold { background, lowDisk }
 
 class StreamResult {
   final int torrentId;

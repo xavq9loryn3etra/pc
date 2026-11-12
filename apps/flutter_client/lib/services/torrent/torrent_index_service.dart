@@ -1,6 +1,19 @@
 import 'dart:async';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
+import 'torrent_paths.dart' show isValidInfoHash;
+
+/// What the finders listed for a title (see TorrentIndexService.gather):
+/// [streams]; whether that's [complete] — every finder answered, none
+/// failed — and, if some were still going, [rest]: everything, once they
+/// have all answered, or null if any failed.
+typedef Gathered = ({
+  List<TorrentStream> streams,
+  bool complete,
+  Future<List<TorrentStream>?>? rest,
+});
 
 class TorrentStream {
   final String infoHash;
@@ -89,6 +102,9 @@ class TorrentStream {
     required String source,
     String? quality,
   }) {
+    if (!isValidInfoHash(infoHash)) {
+      throw ArgumentError.value(infoHash, 'infoHash', 'Not an info hash');
+    }
     final size = formatSize(sizeBytes);
     return TorrentStream(
       infoHash: infoHash.toLowerCase(),
@@ -160,7 +176,12 @@ class TorrentStream {
   factory TorrentStream.fromJson(Map<String, dynamic> json) {
     final String rawTitle = json['title'] ?? '';
     final String rawName = json['name'] ?? '';
-    final String infoHash = json['infoHash'] ?? '';
+    final Object? rawHash = json['infoHash'];
+    // Goes into a magnet link and a folder name: nothing but a real hash.
+    if (rawHash is! String || !isValidInfoHash(rawHash)) {
+      throw FormatException('Not an info hash', rawHash);
+    }
+    final infoHash = rawHash.toLowerCase();
     final int? fileIdx = json['fileIdx'] is int ? json['fileIdx'] : (json['fileIndex'] is int ? json['fileIndex'] : null);
 
     // Torrentio format:
@@ -298,12 +319,25 @@ class TorrentIndexService {
   factory TorrentIndexService() => _instance;
   TorrentIndexService._internal();
 
-  final Dio _dio = Dio();
+  // A connect timeout of its own: without one, a finder whose address
+  // doesn't answer at all held the search for minutes.
+  final Dio _dio = Dio(BaseOptions(connectTimeout: const Duration(seconds: 8)));
 
   /// Once this long has passed and some finder has answered, the rest are
   /// no longer waited for — a slow one (Torrentio on a cache miss can take
   /// 20s) shouldn't hold up what the others already found.
   static const _patience = Duration(seconds: 8);
+
+  /// The longest a search waits, whatever the finders are doing.
+  static const _cap = Duration(seconds: 30);
+
+  // Where each finder lives, tried in order until one answers: to follow
+  // a finder that moves, change or add to these lists (no trailing slash).
+  // Only addresses of the real finders belong here — each gets every title
+  // the user looks up.
+  static const _torrentioApis = [
+    'https://torrentio.strem.fun',
+  ];
 
   // YTS keeps moving its address; the old ones forward to the new.
   static const _ytsApis = [
@@ -311,32 +345,48 @@ class TorrentIndexService {
     'https://yts.lt/api/v2',
   ];
 
+  static const _pirateBayApis = [
+    'https://apibay.org',
+  ];
+
   // The Pirate Bay's video categories: movies (201, 202, 207, 209, 211)
   // and TV (205, 208, 212). Not 206 (phone-sized rips) or anything else.
   static const _pirateBayMovieCategories = {'201', '202', '207', '209', '211'};
   static const _pirateBayTvCategories = {'205', '208', '212'};
 
-  Future<List<TorrentStream>> getMovieStreams(String imdbId) => _gather([
+  Future<Gathered> getMovieStreams(String imdbId) => gather([
         _torrentio('movie/$imdbId'),
         _yts(imdbId),
         _pirateBay(imdbId),
       ]);
 
-  Future<List<TorrentStream>> getSeriesStreams(
-          String imdbId, int season, int episode) =>
-      _gather([
+  Future<Gathered> getSeriesStreams(String imdbId, int season, int episode) =>
+      gather([
         _torrentio('series/$imdbId:$season:$episode'),
         _pirateBay(imdbId, season: season, episode: episode),
       ]);
 
   /// Runs [lookups] together and combines their torrents, keeping the
   /// first lookup's copy of a torrent several of them find (Torrentio's
-  /// carries the most: file index, season-pack info, languages).
-  Future<List<TorrentStream>> _gather(
-      List<Future<List<TorrentStream>>> lookups) async {
+  /// carries the most: file index, season-pack info, languages). A lookup
+  /// gives null when it failed, as opposed to an empty list for "none".
+  ///
+  /// Returns once every lookup has answered, or [patience] has passed and
+  /// one has found something, or [cap] has passed in any case (with what
+  /// there is, possibly nothing). The result is [Gathered.complete] only when
+  /// every lookup answered without failing; otherwise [Gathered.rest], if
+  /// some were still going, gives the whole list once they have all
+  /// answered — or null if any failed.
+  @visibleForTesting
+  static Future<Gathered> gather(
+    List<Future<List<TorrentStream>?>> lookups, {
+    Duration patience = _patience,
+    Duration cap = _cap,
+  }) async {
     final found = List<List<TorrentStream>?>.filled(lookups.length, null);
     final done = Completer<void>();
     var pending = lookups.length;
+    var failed = false;
     var patienceUp = false;
     void check() {
       if (done.isCompleted) return;
@@ -344,20 +394,41 @@ class TorrentIndexService {
       if (pending == 0 || (patienceUp && anyFound)) done.complete();
     }
 
-    for (var i = 0; i < lookups.length; i++) {
-      lookups[i].then((streams) {
-        found[i] = streams;
-        pending--;
-        check();
-      });
-    }
-    final patience = Timer(_patience, () {
+    final answered = [
+      for (var i = 0; i < lookups.length; i++)
+        lookups[i].then((streams) {
+          if (streams == null) failed = true;
+          found[i] = streams;
+        }, onError: (Object _) {
+          failed = true;
+        }).whenComplete(() {
+          pending--;
+          check();
+        }),
+    ];
+    final patienceTimer = Timer(patience, () {
       patienceUp = true;
       check();
     });
+    final capTimer = Timer(cap, () {
+      if (!done.isCompleted) done.complete();
+    });
+    if (lookups.isEmpty) done.complete();
     await done.future;
-    patience.cancel();
+    patienceTimer.cancel();
+    capTimer.cancel();
 
+    final complete = pending == 0 && !failed;
+    return (
+      streams: _merge(found),
+      complete: complete,
+      rest: pending == 0
+          ? null
+          : Future.wait(answered).then((_) => failed ? null : _merge(found)),
+    );
+  }
+
+  static List<TorrentStream> _merge(List<List<TorrentStream>?> found) {
     final byHash = <String, TorrentStream>{};
     for (final streams in found) {
       for (final s in streams ?? const <TorrentStream>[]) {
@@ -369,8 +440,15 @@ class TorrentIndexService {
     return byHash.values.toList();
   }
 
-  Future<List<TorrentStream>> _torrentio(String path) async {
-    final url = 'https://torrentio.strem.fun/stream/$path.json';
+  Future<List<TorrentStream>?> _torrentio(String path) async {
+    for (final api in _torrentioApis) {
+      final streams = await _torrentioAt('$api/stream/$path.json');
+      if (streams != null) return streams;
+    }
+    return null; // Every address failed.
+  }
+
+  Future<List<TorrentStream>?> _torrentioAt(String url) async {
     try {
       final response = await _dio.get(
         url,
@@ -387,16 +465,27 @@ class TorrentIndexService {
       if (response.statusCode == 200 && response.data != null) {
         final List<dynamic> streamsJson = response.data['streams'] ?? [];
         print('Torrentio $url -> ${streamsJson.length} stream(s)');
-        return streamsJson
-            .where((json) => json['infoHash'] != null)
-            .map((json) => TorrentStream.fromJson(json))
-            .toList();
+        final streams = <TorrentStream>[];
+        for (final json in streamsJson) {
+          if (json is! Map<String, dynamic> ||
+              json['infoHash'] is! String ||
+              !isValidInfoHash(json['infoHash'])) {
+            continue;
+          }
+          // One malformed entry is skipped, not the whole answer.
+          try {
+            streams.add(TorrentStream.fromJson(json));
+          } catch (e) {
+            print('Skipping a Torrentio entry it could not read: $e');
+          }
+        }
+        return streams;
       }
       print('Torrentio $url -> unexpected status ${response.statusCode}');
     } catch (e) {
       print('Error fetching torrents from Torrentio ($url): $e');
     }
-    return [];
+    return null; // Failed, rather than found nothing.
   }
 
   Options get _quickOptions => Options(
@@ -405,7 +494,7 @@ class TorrentIndexService {
         receiveTimeout: const Duration(seconds: 8),
       );
 
-  Future<List<TorrentStream>> _yts(String imdbId) async {
+  Future<List<TorrentStream>?> _yts(String imdbId) async {
     for (final api in _ytsApis) {
       try {
         final response = await _dio.get(
@@ -420,7 +509,7 @@ class TorrentIndexService {
         final title = '${movie['title_long'] ?? movie['title']}';
         final streams = [
           for (final t in torrents)
-            if (t['hash'] is String)
+            if (t['hash'] is String && isValidInfoHash(t['hash']))
               TorrentStream.fromRelease(
                 infoHash: t['hash'],
                 name: '$title ${t['quality']} ${t['type']} '
@@ -437,14 +526,14 @@ class TorrentIndexService {
         print('Error fetching torrents from YTS ($api): $e');
       }
     }
-    return [];
+    return null; // Every address failed.
   }
 
   /// The Pirate Bay's torrents tagged with [imdbId]. For an episode
   /// ([season] and [episode] given), only torrents of that one episode:
   /// which of a season pack's files is the episode can't be told before
   /// its metadata arrives.
-  Future<List<TorrentStream>> _pirateBay(
+  Future<List<TorrentStream>?> _pirateBay(
     String imdbId, {
     int? season,
     int? episode,
@@ -456,36 +545,40 @@ class TorrentIndexService {
     final episodePattern = RegExp(
         'S0?${season}E0?$episode(?![0-9])(?!\\s*[-–]\\s*E?[0-9])(?!E[0-9])',
         caseSensitive: false);
-    try {
-      final response = await _dio.get(
-        'https://apibay.org/q.php',
-        queryParameters: {'q': imdbId},
-        options: _quickOptions,
-      );
-      final results = response.data is List ? response.data as List : const [];
-      final streams = [
-        for (final r in results)
-          // "No results returned" comes back as a single id-0 entry.
-          if (r['id'] != '0' &&
-              r['imdb'] == imdbId &&
-              categories.contains(r['category']) &&
-              r['info_hash'] is String &&
-              (!isEpisode || episodePattern.hasMatch('${r['name']}')))
-            TorrentStream.fromRelease(
-              infoHash: r['info_hash'],
-              name: '${r['name']}',
-              sizeBytes: int.tryParse('${r['size']}') ?? 0,
-              seeders: int.tryParse('${r['seeders']}') ?? 0,
-              source: 'ThePirateBay',
-            ),
-      ];
-      print('The Pirate Bay $imdbId'
-          '${isEpisode ? ' S${season}E$episode' : ''} -> '
-          '${streams.length} stream(s)');
-      return streams;
-    } catch (e) {
-      print('Error fetching torrents from The Pirate Bay ($imdbId): $e');
+    for (final api in _pirateBayApis) {
+      try {
+        final response = await _dio.get(
+          '$api/q.php',
+          queryParameters: {'q': imdbId},
+          options: _quickOptions,
+        );
+        final results =
+            response.data is List ? response.data as List : const [];
+        final streams = [
+          for (final r in results)
+            // "No results returned" comes back as a single id-0 entry.
+            if (r['id'] != '0' &&
+                r['imdb'] == imdbId &&
+                categories.contains(r['category']) &&
+                r['info_hash'] is String &&
+                isValidInfoHash(r['info_hash']) &&
+                (!isEpisode || episodePattern.hasMatch('${r['name']}')))
+              TorrentStream.fromRelease(
+                infoHash: r['info_hash'],
+                name: '${r['name']}',
+                sizeBytes: int.tryParse('${r['size']}') ?? 0,
+                seeders: int.tryParse('${r['seeders']}') ?? 0,
+                source: 'ThePirateBay',
+              ),
+        ];
+        print('The Pirate Bay $imdbId'
+            '${isEpisode ? ' S${season}E$episode' : ''} -> '
+            '${streams.length} stream(s)');
+        return streams;
+      } catch (e) {
+        print('Error fetching torrents from The Pirate Bay ($api, $imdbId): $e');
+      }
     }
-    return [];
+    return null; // Every address failed.
   }
 }

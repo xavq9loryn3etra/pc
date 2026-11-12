@@ -3,6 +3,8 @@ import 'dart:math' as math;
 
 import '../../models/movie.dart';
 import '../audio_language_service.dart';
+import 'free_space.dart';
+import 'torrent_download_registry.dart';
 import 'torrent_engine_service.dart';
 import 'torrent_index_service.dart';
 
@@ -155,11 +157,23 @@ class StreamResolver {
         ? await _indexService.getMovieStreams(imdbId)
         : await _indexService.getSeriesStreams(
             imdbId, season ?? 1, episode ?? 1);
-    // Nothing found may be a failed lookup: asked again next time.
-    if (found.isNotEmpty) {
-      _found[key] = (at: DateTime.now(), streams: List.unmodifiable(found));
+    void keep(List<TorrentStream> streams) {
+      if (streams.isEmpty) return;
+      _found[key] = (at: DateTime.now(), streams: List.unmodifiable(streams));
     }
-    return found;
+
+    // Only a full answer is kept: a finder that failed, or wasn't waited
+    // for (Torrentio can take 20s), may have had the season packs and most
+    // of the copies — asked again next time. One still going is kept when
+    // it has answered, if they all did.
+    if (found.complete) {
+      keep(found.streams);
+    } else {
+      found.rest?.then((all) {
+        if (all != null) keep(all);
+      });
+    }
+    return found.streams;
   }
 
   // Words that mark a release as filmed in a cinema: camera (CAM, HDCAM),
@@ -528,6 +542,17 @@ class StreamResolver {
     ];
   }
 
+  // AV1 in a release name: "AV1", "AV1-GROUP", not inside another word.
+  static final _av1Pattern =
+      RegExp(r'(?<![A-Za-z0-9])av1(?![A-Za-z0-9])', caseSensitive: false);
+
+  /// How hard [stream]'s video is to decode — lower is easier. For now only
+  /// AV1 is marked down (1): many phones, the S10 among them, have no AV1
+  /// decoder in hardware, and software decoding stutters. Others may follow
+  /// once tested on a device (x265 10-bit, Dolby Vision without HDR).
+  static int codecRank(TorrentStream stream) =>
+      _av1Pattern.hasMatch(stream.name) ? 1 : 0;
+
   /// "Healthy" means at least this many sharers, or a fifth of the
   /// best-shared torrent of the same quality if that's more — seed counts
   /// are only rough, so this just weeds out the barely-shared ones.
@@ -566,6 +591,10 @@ class StreamResolver {
         // A torrent of just this episode before a season pack: it starts
         // sooner, as there's only one file's metadata to fetch.
         if (sa.isPack != sb.isPack) return sa.isPack ? 1 : -1;
+        // Smallest first favours the hardest encodes to decode (see
+        // codecRank): an easier one goes before them whatever its size.
+        final ca = codecRank(sa), cb = codecRank(sb);
+        if (ca != cb) return ca.compareTo(cb);
         // Unknown sizes go after known ones.
         final ma = _sizeInMB(sa.size) ?? double.infinity;
         final mb = _sizeInMB(sb.size) ?? double.infinity;
@@ -625,6 +654,26 @@ class StreamResolver {
   /// rather than its full 20s timeout.
   static const _headStart = Duration(seconds: 3);
 
+  /// [streams] without the copies too big for the space the device has
+  /// left (see [FreeSpace.fits]); what's already downloaded of one counts
+  /// as room. Everything stays when the space can't be read.
+  Future<List<TorrentStream>> _thatFit(List<TorrentStream> streams) async {
+    final free = await FreeSpace.bytes();
+    if (free == null) return streams;
+    var registry = const <String, TorrentDownloadInfo>{};
+    try {
+      registry = await TorrentDownloadRegistry.loadAll();
+    } catch (_) {}
+    return streams.where((s) {
+      final have = registry[s.infoHash.toLowerCase()]?.downloadedBytes ?? 0;
+      return FreeSpace.fits(
+        sizeBytes: TorrentDownloadRegistry.parseSizeBytes(s.size),
+        haveBytes: have,
+        freeBytes: free,
+      );
+    }).toList();
+  }
+
   /// Resolve [selected], automatically falling back to the next-best
   /// candidates in [allStreams] if it's slow, fails or times out.
   /// Torrentio's seed counts are scraped/cached and often stale — a
@@ -646,11 +695,13 @@ class StreamResolver {
     int maxAttempts = 3,
     bool Function()? isCancelled,
   }) async {
-    final ordered = [
+    var ordered = [
       selected,
       ...allStreams.where((s) =>
           s.infoHash.toLowerCase() != selected.infoHash.toLowerCase()),
     ];
+    ordered = await _thatFit(ordered);
+    if (ordered.isEmpty) throw const NotEnoughSpaceException();
     // The copy a head start is already downloading (see warmUp) goes
     // first — it starts at once — then others it connected to, where
     // [selected] may be the one the head start found no one sharing. All
@@ -681,8 +732,9 @@ class StreamResolver {
           (id) {
         if (outcome.isCompleted) {
           // Lost the race, or the user gave up: stop it, keeping what it
-          // has, unless it's what's playing.
-          if (!_engine.isStreaming(id)) _engine.pause(id);
+          // has, unless it's what's playing; and out of the session unless
+          // it's a saved download or a head start's.
+          unawaited(_engine.dropLoser(id));
           return;
         }
         if (cancelled()) {
@@ -697,7 +749,7 @@ class StreamResolver {
           outcome.complete(
               StreamResolveResult(stream: candidate, result: result));
         } catch (e) {
-          _engine.cleanup(id);
+          _engine.discardFailedStart(id);
           failed++;
           if (failed == candidates.length) {
             outcome.completeError(e);

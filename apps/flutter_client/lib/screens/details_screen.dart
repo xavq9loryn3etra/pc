@@ -162,6 +162,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
   Season? _selectedSeason;
   int? _selectedEpisode;
   bool _loadingEpisodes = false;
+  // Counts season loads, so only the latest one's result is applied (they
+  // can finish out of order).
+  int _seasonRequest = 0;
+  // A Resume tap is being handled: another one waits for it.
+  bool _resuming = false;
 
   Future<void> _shareMovie() async {
     final m = _details ?? widget.movie;
@@ -708,12 +713,15 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   Future<void> _loadSeasonDetails(int seasonNum) async {
     if (_details == null) return;
+    final token = ++_seasonRequest;
     setState(() => _loadingEpisodes = true);
 
     final episodes = await TMDBService().getSeasonDetails(
       _details!.id,
       seasonNum,
     );
+    // A newer season was asked for meanwhile: its result is the one to show.
+    if (token != _seasonRequest || !mounted) return;
 
     // Inject history progress
     final service = SavedMoviesService();
@@ -729,12 +737,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
       return e;
     }).toList();
 
-    if (mounted) {
-      setState(() {
-        _episodes = processedEpisodes;
-        _loadingEpisodes = false;
-      });
-    }
+    setState(() {
+      _episodes = processedEpisodes;
+      _loadingEpisodes = false;
+    });
   }
 
   /// True if the movie itself, or the currently targeted TV episode, hasn't
@@ -1569,6 +1575,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                       onTap: tvUnreleased
                                                           ? null
                                                           : () async {
+                                                            if (_resuming) return;
+                                                            _resuming = true;
+                                                            try {
                                                               int s = historyMovie
                                                                       ?.currentSeason ??
                                                                   1;
@@ -1603,6 +1612,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
                                                               await _loadSeasonDetails(
                                                                   s);
+                                                              if (!mounted) return;
                                                               // The same popup as
                                                               // tapping that
                                                               // episode's card.
@@ -1618,6 +1628,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                               } else {
                                                                 _playWithTorrent();
                                                               }
+                                                            } finally {
+                                                              _resuming = false;
+                                                            }
                                                             },
                                                       borderRadius:
                                                           BorderRadius.circular(

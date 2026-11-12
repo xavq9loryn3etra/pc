@@ -74,6 +74,7 @@ class TorrentEngineService {
 
       _initialized = true;
       _initError = null;
+      _watchMetered();
     } catch (e) {
       _initError = e;
       print('Error initializing Torrent Engine: $e');
@@ -84,6 +85,32 @@ class TorrentEngineService {
 
   Timer? _stateSaveTimer;
   AppLifecycleListener? _lifecycle;
+  StreamSubscription<List<ConnectivityResult>>? _meteredWatch;
+
+  /// Tells the engine when the device moves between mobile data and
+  /// Wi-Fi/ethernet, so on mobile data it uploads little and keeps few
+  /// peers unchoked (see LibtorrentFlutter.setMetered; a no-op with an
+  /// engine build that predates it). Offline leaves the last setting.
+  void _watchMetered() {
+    void apply(List<ConnectivityResult> links) {
+      try {
+        if (links.contains(ConnectivityResult.wifi) ||
+            links.contains(ConnectivityResult.ethernet)) {
+          engine.setMetered(false);
+        } else if (links.contains(ConnectivityResult.mobile)) {
+          engine.setMetered(true);
+        }
+      } catch (e) {
+        print('Error setting the metered profile: $e');
+      }
+    }
+
+    _meteredWatch?.cancel();
+    try {
+      _meteredWatch = Connectivity().onConnectivityChanged.listen(apply);
+      Connectivity().checkConnectivity().then(apply, onError: (Object _) {});
+    } catch (_) {}
+  }
 
   /// Saves the engine's map of the network (its DHT routing table) every
   /// few minutes and whenever the app leaves the screen — mobile apps are
@@ -939,6 +966,8 @@ class TorrentEngineService {
   Future<void> dispose() async {
     _stateSaveTimer?.cancel();
     _lifecycle?.dispose();
+    _meteredWatch?.cancel();
+    _meteredWatch = null;
     _stopWatchingDisk();
     try {
       engine.saveSessionState();

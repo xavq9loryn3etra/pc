@@ -223,6 +223,15 @@ typedef _SaveSessionStateN = Int32 Function(
 typedef LtSaveSessionState = int Function(
     Pointer<LtSessionOpaque>, Pointer<Utf8>);
 
+// ─── Release and trim / metered profile (engine v4+) ─────────────────────────
+typedef _ReleaseAndTrimN = Int64 Function(
+    Pointer<LtSessionOpaque>, Int64, Int32, Int64, Int32);
+typedef LtReleaseAndTrim = int Function(
+    Pointer<LtSessionOpaque>, int, int, int, int);
+
+typedef _SetMeteredN = Void Function(Pointer<LtSessionOpaque>, Int32);
+typedef LtSetMetered = void Function(Pointer<LtSessionOpaque>, int);
+
 // ─── Utility ─────────────────────────────────────────────────────────────────
 typedef _LastErrorN = Pointer<Utf8> Function();
 typedef LtLastError = Pointer<Utf8> Function();
@@ -298,8 +307,18 @@ class TorrentBridgeBindings {
   // Windows/macOS ones): sessions then just start cold.
   late final LtCreateSessionWithState? createSessionWithState;
   late final LtSaveSessionState?       saveSessionState;
+  // Null with a native library older than engine v4 (lt_release_and_trim,
+  // lt_set_metered): callers fall back to the old behaviour.
+  late final LtReleaseAndTrim?         releaseAndTrim;
+  late final LtSetMetered?             setMetered;
 
   TorrentBridgeBindings(this._lib) {
+    releaseAndTrim = _lib.providesSymbol('lt_release_and_trim')
+        ? _lib.lookup<NativeFunction<_ReleaseAndTrimN>>('lt_release_and_trim').asFunction<LtReleaseAndTrim>()
+        : null;
+    setMetered = _lib.providesSymbol('lt_set_metered')
+        ? _lib.lookup<NativeFunction<_SetMeteredN>>('lt_set_metered').asFunction<LtSetMetered>()
+        : null;
     createSessionWithState = _lib.providesSymbol('lt_create_session_with_state')
         ? _lib.lookup<NativeFunction<_CreateSessionWithStateN>>('lt_create_session_with_state').asFunction<LtCreateSessionWithState>()
         : null;

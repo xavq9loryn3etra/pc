@@ -440,6 +440,17 @@ class LibtorrentFlutter {
   /// Set upload speed limit in bytes/sec (0 = unlimited).
   void setUploadLimit(int bps) => _b.setUploadLimit(_session, bps);
 
+  /// Tells the engine whether the device is on mobile data ([metered]: few
+  /// unchoke slots and a low upload cap) or on Wi-Fi/ethernet (normal).
+  /// Returns false, doing nothing, with a native library that predates the
+  /// call.
+  bool setMetered(bool metered) {
+    final fn = _b.setMetered;
+    if (fn == null) return false;
+    fn(_session, metered ? 1 : 0);
+    return true;
+  }
+
   // ─── Engine Configuration — port of settings/btsets.go + btserver.go ───────
 
   /// Apply TorrServer-style engine configuration.

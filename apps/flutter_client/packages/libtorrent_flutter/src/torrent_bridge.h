@@ -204,6 +204,37 @@ TORRENT_API void lt_set_upload_limit(lt_session_t session, int bytes_per_sec);
 // 0 = back to the normal settings.
 TORRENT_API void lt_set_metered(lt_session_t session, int metered);
 
+// Stops torrent `id`'s streams, pauses it, writes its resume data, and removes
+// it from the session WITHOUT deleting its files. Then shrinks what's kept on
+// disk: in file `file_index`, only bytes [keep_from, end of file) are kept;
+// in every file (including file_index) its head and tail — the same regions
+// the stream engine protects for container headers/indexes, at least one
+// piece each — are kept too. Every other piece is dropped: cleared from the
+// saved resume data so libtorrent will download it again if needed, and its
+// bytes are released from the disk (hole punched). keep_from < 0 means
+// "don't trim, just release". Blocking — up to about timeout_ms in total;
+// the caller runs it off the UI thread.
+//
+// Returns:
+//   >= 0  released (removed from the session) and trimmed: the bytes of
+//         downloaded pieces still kept on disk. With keep_from < 0: released
+//         only, and the bytes of the pieces had on disk, or 0 if unknown.
+//         (lt_last_error may still note files whose space couldn't be
+//         released; that isn't an error — their pieces are no longer
+//         trusted either way.)
+//   -1    released (removed from the session and forgotten by the engine),
+//         but nothing trimmed: the resume data couldn't be saved or read,
+//         libtorrent didn't let go of the files in time, etc. Nothing was
+//         punched. lt_last_error says why.
+//   -2    NOT released: the torrent is still in the session exactly as
+//         before (unknown id, null session, invalid file_index, or a failure
+//         before anything was changed). lt_last_error says why.
+// While it runs, lt_add_magnet / lt_add_torrent_file of the same torrent
+// wait for it (up to 15 s, then fail).
+TORRENT_API int64_t lt_release_and_trim(lt_session_t session, lt_torrent_id id,
+                                        int file_index, int64_t keep_from,
+                                        int timeout_ms);
+
 /* utility */
 TORRENT_API const char* lt_last_error(void);
 TORRENT_API const char* lt_version(void);

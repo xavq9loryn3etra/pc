@@ -17,6 +17,12 @@
   #ifndef _WIN32_WINNT
     #define _WIN32_WINNT 0x0601
   #endif
+#else
+  // fallocate64 / lseek64 (Linux, Android); clang and g++ define it for C++
+  // already, this only makes sure.
+  #ifndef _GNU_SOURCE
+    #define _GNU_SOURCE
+  #endif
 #endif
 
 #include "torrent_bridge.h"
@@ -41,6 +47,7 @@
 #ifdef _WIN32
   #include <winsock2.h>
   #include <ws2tcpip.h>
+  #include <winioctl.h>   // FSCTL_SET_SPARSE, FSCTL_SET_ZERO_DATA
   #pragma comment(lib, "ws2_32.lib")
   typedef SOCKET socket_t;
   #define SOCKET_INVALID  INVALID_SOCKET
@@ -63,6 +70,16 @@
   #include <signal.h>
   #include <poll.h>
   #include <errno.h>
+  #include <sys/stat.h>
+  #if defined(__linux__)
+    #include <linux/falloc.h>
+    #ifndef FALLOC_FL_KEEP_SIZE
+      #define FALLOC_FL_KEEP_SIZE  0x01
+    #endif
+    #ifndef FALLOC_FL_PUNCH_HOLE
+      #define FALLOC_FL_PUNCH_HOLE 0x02
+    #endif
+  #endif
   typedef int socket_t;
   #define SOCKET_INVALID  (-1)
   #define CLOSESOCKET(s)  ::close(s)
@@ -225,23 +242,93 @@ static bool same_torrent(const lt::info_hash_t& a, const lt::info_hash_t& b) {
     return false;
 }
 
+// Forces [p]'s data (or, for a directory, its entries) to the disk.
+static bool sync_path(const std::filesystem::path& p, bool directory) {
+#ifdef _WIN32
+    if (directory) return true;  // (NTFS journals the rename itself)
+    HANDLE h = ::CreateFileW(p.c_str(), GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    const BOOL ok = ::FlushFileBuffers(h);
+    ::CloseHandle(h);
+    return ok != 0;
+#else
+    (void)directory;
+    int fd;
+    do { fd = ::open(p.c_str(), O_RDONLY | O_CLOEXEC); } while (fd < 0 && errno == EINTR);
+    if (fd < 0) return false;
+    int r;
+  #if defined(__APPLE__) && defined(F_FULLFSYNC)
+    r = ::fcntl(fd, F_FULLFSYNC);
+    if (r != 0) r = ::fsync(fd);
+  #else
+    do { r = ::fsync(fd); } while (r != 0 && errno == EINTR);
+  #endif
+    ::close(fd);
+    return r == 0;
+#endif
+}
+
+// Writes [buf] to [path] through a temporary file and a rename, so a crash
+// mid-write leaves the previous file whole. [durable]: the data and the
+// rename are on the disk before this returns (for a write that later
+// steps rely on having happened).
+static bool write_file_atomic(const std::filesystem::path& path,
+                              const std::vector<char>& buf, bool durable) {
+    auto tmp = path;
+    tmp += ".tmp";
+    std::error_code ec;
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+        out.flush();
+        if (!out) {
+            out.close();
+            std::filesystem::remove(tmp, ec);
+            return false;
+        }
+    }
+    if (durable && !sync_path(tmp, false)) {
+        std::filesystem::remove(tmp, ec);
+        return false;
+    }
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) {
+        std::error_code ec2;
+        std::filesystem::remove(tmp, ec2);
+        return false;
+    }
+    if (durable) sync_path(path.parent_path(), true);
+    return true;
+}
+
+static bool read_file(const std::filesystem::path& path, std::vector<char>& out) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    return !out.empty();
+}
+
 // Writes [p] (a save_resume_data_alert's) beside the torrent's files —
 // through a temporary file, so a crash mid-write leaves the last one whole.
-static void write_resume(const lt::add_torrent_params& p) {
+static bool write_resume(const lt::add_torrent_params& p) {
     try {
-        if (p.save_path.empty()) return;
+        if (p.save_path.empty()) return false;
         const std::vector<char> buf = lt::write_resume_data_buf(p);
-        const auto path = resume_file(p.save_path, hashes_of(p));
-        auto tmp = path;
-        tmp += ".tmp";
-        {
-            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-            out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
-            if (!out) return;
-        }
-        std::error_code ec;
-        std::filesystem::rename(tmp, path, ec);
-    } catch (...) {}
+        return write_file_atomic(resume_file(p.save_path, hashes_of(p)), buf, false);
+    } catch (...) {
+        return false;
+    }
+}
+
+// Every hash the torrent is known by, as resume-file keys: what an add
+// and a trim of the same torrent are matched on.
+static std::vector<std::string> hash_keys(const lt::info_hash_t& ih) {
+    std::vector<std::string> keys;
+    if (ih.has_v1()) keys.push_back(hash_hex(lt::info_hash_t(ih.v1)));
+    if (ih.has_v2()) keys.push_back(hash_hex(lt::info_hash_t(ih.v2)));
+    return keys;
 }
 
 // [atp] with the resume data kept for its torrent in [save_path], when
@@ -1368,33 +1455,116 @@ struct SessionWrapper {
     // ── resume data writer ──
     // save_resume_data_alerts are handed to this thread, which writes the
     // files: the alert thread no longer blocks on disk I/O on every pause.
+    struct ResumeJob {
+        lt::add_torrent_params params;
+        lt::torrent_handle     handle;
+    };
     std::mutex                          rq_mu;
     std::condition_variable             rq_cv;
-    std::deque<lt::add_torrent_params>  rq;
+    std::deque<ResumeJob>               rq;
     bool                                rq_stop = false;
     std::thread                         resume_thread;
 
-    void queue_resume(lt::add_torrent_params&& p) {
+    // Held while a resume file is written, and while lt_release_and_trim
+    // reads and rewrites one. Lock order: resume_io_mu, then mu.
+    std::mutex                          resume_io_mu;
+
+    void queue_resume(lt::add_torrent_params&& p, const lt::torrent_handle& h) {
         {
             std::lock_guard<std::mutex> lk(rq_mu);
-            rq.push_back(std::move(p));
+            rq.push_back({std::move(p), h});
         }
         rq_cv.notify_one();
     }
 
+    bool is_registered(const lt::torrent_handle& h) {
+        std::lock_guard<std::mutex> lk(mu);
+        for (auto& kv : handles)
+            if (kv.second == h) return true;
+        return false;
+    }
+
     void resume_writer() {
         for (;;) {
-            lt::add_torrent_params p;
+            ResumeJob job;
             {
                 std::unique_lock<std::mutex> lk(rq_mu);
                 rq_cv.wait(lk, [&] { return rq_stop || !rq.empty(); });
                 if (rq.empty()) return;  // stopping, and all written
-                p = std::move(rq.front());
+                job = std::move(rq.front());
                 rq.pop_front();
             }
-            try { write_resume(p); } catch (...) {}
+            bool ok = false;
+            try {
+                // Only for a torrent still in the session: a write landing
+                // after lt_remove_torrent deleted the file would bring it
+                // back, and one landing after lt_release_and_trim rewrote
+                // it would restore pieces whose data it then released.
+                std::lock_guard<std::mutex> io(resume_io_mu);
+                if (is_registered(job.handle)) ok = write_resume(job.params);
+            } catch (...) {}
+            try {
+                const std::string key = hash_hex(hashes_of(job.params));
+                bump_event(key, ok ? &EventCounts::written : &EventCounts::failed);
+            } catch (...) {}
             if (resume_outstanding.load() > 0) resume_outstanding.fetch_sub(1);
         }
+    }
+
+    // ── per-torrent events lt_release_and_trim waits for ──
+    // Counts keyed by the torrent's resume key (hash_hex), bumped under
+    // ev_mu with ev_cv notified. A leaf lock: nothing is taken under it.
+    struct EventCounts {
+        uint64_t written = 0;   // its resume data written
+        uint64_t failed  = 0;   // ...couldn't be (or wasn't wanted)
+        uint64_t flushed = 0;   // cache_flushed_alert
+        uint64_t removed = 0;   // torrent_removed_alert: files released
+    };
+    std::mutex                                   ev_mu;
+    std::condition_variable                      ev_cv;
+    std::unordered_map<std::string, EventCounts> events;
+
+    void bump_event(const std::string& key, uint64_t EventCounts::* field) {
+        {
+            std::lock_guard<std::mutex> lk(ev_mu);
+            ++(events[key].*field);
+        }
+        ev_cv.notify_all();
+    }
+
+    EventCounts event_counts(const std::string& key) {
+        std::lock_guard<std::mutex> lk(ev_mu);
+        auto it = events.find(key);
+        return it == events.end() ? EventCounts{} : it->second;
+    }
+
+    // Waits until [done](counts for key) or [deadline]; its last answer.
+    template <class Pred>
+    bool wait_event(const std::string& key, chr::steady_clock::time_point deadline,
+                    Pred done) {
+        std::unique_lock<std::mutex> lk(ev_mu);
+        return ev_cv.wait_until(lk, deadline, [&] {
+            auto it = events.find(key);
+            return done(it == events.end() ? EventCounts{} : it->second);
+        });
+    }
+
+    // ── torrents being trimmed ──
+    // The hash keys of torrents inside lt_release_and_trim: an add of the
+    // same torrent waits until it's done, so it never reads the resume
+    // file before it's rewritten or uses files still being punched.
+    std::mutex                       trim_mu;
+    std::condition_variable          trim_cv;
+    std::unordered_set<std::string>  trimming;
+    int                              trims_running = 0;   // (trim_mu) destroy waits for 0
+
+    bool wait_not_trimming(const std::vector<std::string>& keys,
+                           chr::milliseconds timeout) {
+        std::unique_lock<std::mutex> lk(trim_mu);
+        return trim_cv.wait_for(lk, timeout, [&] {
+            for (auto& k : keys) if (trimming.count(k)) return false;
+            return true;
+        });
     }
 
     void start_resume_writer() {
@@ -1546,11 +1716,26 @@ struct SessionWrapper {
                         else if (auto* sra = lt::alert_cast<lt::save_resume_data_alert>(a)) {
                             // written on the resume thread, which also
                             // counts it off resume_outstanding
-                            queue_resume(std::move(sra->params));
+                            queue_resume(std::move(sra->params), sra->handle);
                         }
-                        else if (lt::alert_cast<lt::save_resume_data_failed_alert>(a)) {
+                        else if (auto* srf = lt::alert_cast<lt::save_resume_data_failed_alert>(a)) {
                             if (resume_outstanding.load() > 0)
                                 resume_outstanding.fetch_sub(1);
+                            try {
+                                bump_event(hash_hex(srf->handle.info_hashes()),
+                                           &EventCounts::failed);
+                            } catch (...) {}
+                        }
+                        else if (auto* cfa = lt::alert_cast<lt::cache_flushed_alert>(a)) {
+                            try {
+                                bump_event(hash_hex(cfa->handle.info_hashes()),
+                                           &EventCounts::flushed);
+                            } catch (...) {}
+                        }
+                        else if (auto* tra = lt::alert_cast<lt::torrent_removed_alert>(a)) {
+                            // (posted once libtorrent has stopped the
+                            // torrent's storage: its files are closed)
+                            bump_event(hash_hex(tra->info_hashes), &EventCounts::removed);
                         }
 
                         // metadata_received → pause and zero-out file priorities (stream-only)
@@ -2307,6 +2492,7 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
                 TB_LOG("SEEK DETECTED: old_head=%lld new_pos=%lld seek_piece=%d gen=%d",
                        (long long)old_head, (long long)rstart,
                        std::clamp(s->byte_to_piece(rstart), s->start_piece, s->end_piece), new_gen);
+                (void)new_gen;  // (only logged)
                 s->stream_state.store(LT_STREAM_SEEKING);
                 s->read_head.store(rstart);
 
@@ -2628,6 +2814,160 @@ static void preload_stream(StreamEngine* s, int64_t preload_bytes) {
     s->preloading.store(false);
 }
 
+// ── lt_release_and_trim helpers ─────────────────────────────────────────────────
+
+// Stops every stream of torrent [id] and waits for their threads.
+static void stop_streams_of(SessionWrapper* sw, lt_torrent_id id) {
+    std::vector<std::shared_ptr<StreamEngine>> v;
+    {
+        std::lock_guard<std::mutex> lk(sw->streams_mu);
+        for (auto it = sw->streams.begin(); it != sw->streams.end(); ) {
+            if (it->second && it->second->torrent_id == id) {
+                v.push_back(std::move(it->second));
+                it = sw->streams.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    for (auto& s : v) begin_shutdown(s.get());
+    for (auto& s : v) finish_shutdown(s.get());
+}
+
+// Marks a torrent's hash keys as being trimmed for its lifetime (see
+// SessionWrapper::wait_not_trimming).
+struct TrimGuard {
+    SessionWrapper*          sw;
+    std::vector<std::string> keys;
+
+    TrimGuard(SessionWrapper* s, std::vector<std::string> k)
+        : sw(s), keys(std::move(k)) {
+        std::lock_guard<std::mutex> lk(sw->trim_mu);
+        try {
+            for (auto& key : keys) sw->trimming.insert(key);
+        } catch (...) {
+            for (auto& key : keys) sw->trimming.erase(key);
+            throw;
+        }
+        ++sw->trims_running;
+    }
+    ~TrimGuard() {
+        // Notified under the lock: once it's released destroy may free sw.
+        std::lock_guard<std::mutex> lk(sw->trim_mu);
+        for (auto& key : keys) sw->trimming.erase(key);
+        --sw->trims_running;
+        sw->trim_cv.notify_all();
+    }
+    TrimGuard(const TrimGuard&) = delete;
+    TrimGuard& operator=(const TrimGuard&) = delete;
+};
+
+// Releases the disk space of the byte ranges [first, second) of the file at
+// [path], keeping its size: they read back as zeros. Returns how many ranges
+// couldn't be released (a file that doesn't exist has nothing to release).
+static int punch_holes(const std::filesystem::path& path,
+                       const std::vector<std::pair<int64_t, int64_t>>& ranges) {
+    if (ranges.empty()) return 0;
+#ifdef _WIN32
+    // Shared read/write/delete, so it opens even if something else still
+    // has the file open.
+    HANDLE h = ::CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        const DWORD e = ::GetLastError();
+        return (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND)
+            ? 0 : (int)ranges.size();
+    }
+    int failed = 0;
+    LARGE_INTEGER size{};
+    DWORD br = 0;
+    // Zeroed ranges of a sparse file are deallocated; of a normal one,
+    // just written with zeros — so sparse first.
+    if (!::GetFileSizeEx(h, &size)
+            || !::DeviceIoControl(h, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0,
+                                  &br, nullptr)) {
+        ::CloseHandle(h);
+        return (int)ranges.size();
+    }
+    for (auto& r : ranges) {
+        const int64_t a = r.first;
+        const int64_t b = std::min<int64_t>(r.second, size.QuadPart);
+        if (b <= a) continue;
+        FILE_ZERO_DATA_INFORMATION z{};
+        z.FileOffset.QuadPart      = a;
+        z.BeyondFinalZero.QuadPart = b;
+        if (!::DeviceIoControl(h, FSCTL_SET_ZERO_DATA, &z, sizeof(z), nullptr, 0,
+                               &br, nullptr))
+            ++failed;
+    }
+    ::CloseHandle(h);
+    return failed;
+#else
+    int fd;
+    do { fd = ::open(path.c_str(), O_WRONLY | O_CLOEXEC); } while (fd < 0 && errno == EINTR);
+    if (fd < 0) return (errno == ENOENT) ? 0 : (int)ranges.size();
+  #if defined(__APPLE__)
+    const int64_t size = (int64_t)::lseek(fd, 0, SEEK_END);
+  #else
+    const int64_t size = (int64_t)::lseek64(fd, 0, SEEK_END);  // 64-bit on armv7 too
+  #endif
+    int failed = 0;
+    for (auto& r : ranges) {
+        int64_t a = r.first;
+        int64_t b = (size >= 0) ? std::min<int64_t>(r.second, size) : r.second;
+        if (b <= a) continue;
+  #if defined(__linux__)
+        int rc;
+        do {
+            rc = ::fallocate64(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+                               (off64_t)a, (off64_t)(b - a));
+        } while (rc != 0 && errno == EINTR);
+        if (rc != 0) ++failed;
+  #elif defined(__APPLE__) && defined(F_PUNCHHOLE)
+        // Whole 4 KB blocks only: the range is shrunk inward, so nothing
+        // outside it is touched.
+        a = (a + 4095) & ~(int64_t)4095;
+        b = b & ~(int64_t)4095;
+        if (b <= a) continue;
+        fpunchhole_t ph{};
+        ph.fp_flags   = 0;
+        ph.reserved   = 0;
+        ph.fp_offset  = (off_t)a;
+        ph.fp_length  = (off_t)(b - a);
+        if (::fcntl(fd, F_PUNCHHOLE, &ph) != 0) ++failed;
+  #else
+        ++failed;
+  #endif
+    }
+    ::close(fd);
+    return failed;
+#endif
+}
+
+// The bytes of the pieces [rd] says are had.
+static int64_t had_bytes(const lt::add_torrent_params& rd, const lt::file_storage& fs) {
+    int64_t sum = 0;
+    const int n = std::min(rd.have_pieces.size(), fs.num_pieces());
+    for (int p = 0; p < n; ++p)
+        if (rd.have_pieces.get_bit(lt::piece_index_t(p)))
+            sum += fs.piece_size(lt::piece_index_t(p));
+    return sum;
+}
+
+// Where file [f] of the torrent is on disk.
+static std::filesystem::path file_on_disk(const lt::add_torrent_params& rd,
+                                          const lt::file_storage& fs,
+                                          lt::file_index_t f,
+                                          const std::string& save_path) {
+    auto it = rd.renamed_files.find(f);
+    if (it != rd.renamed_files.end()) {
+        auto p = std::filesystem::u8path(it->second);
+        return p.is_absolute() ? p : std::filesystem::u8path(save_path) / p;
+    }
+    return std::filesystem::u8path(fs.file_path(f, save_path));
+}
+
 // ── C API ───────────────────────────────────────────────────────────────────────
 // Every exported function catches everything at its edge: an exception
 // crossing extern "C" into Dart terminates the app.
@@ -2875,6 +3215,13 @@ TORRENT_API void lt_destroy_session(lt_session_t session) {
     if (!session) return;
     auto* sw = to_sw(session);
 
+    // An lt_release_and_trim still running uses sw: let it finish (it's
+    // bounded by its own timeout plus the hole punching).
+    try {
+        std::unique_lock<std::mutex> lk(sw->trim_mu);
+        sw->trim_cv.wait(lk, [&] { return sw->trims_running == 0; });
+    } catch (...) {}
+
     // Every torrent's resume data, written (by the resume thread, still
     // running) before anything stops — up to 3 s.
     try {
@@ -2959,6 +3306,11 @@ TORRENT_API lt_torrent_id lt_add_magnet(lt_session_t session,
         lt::error_code ec;
         lt::add_torrent_params atp = lt::parse_magnet_uri(uri, ec);
         if (ec) { set_err(ec.message()); return -1; }
+        // Not while lt_release_and_trim is rewriting this torrent's resume
+        // file and releasing its pieces.
+        if (!sw->wait_not_trimming(hash_keys(atp.info_hashes), chr::seconds(15))) {
+            set_err("torrent is still being released"); return -1;
+        }
         load_resume(atp, path);
         atp.save_path = path;
         atp.flags &= ~lt::torrent_flags::paused;
@@ -3019,6 +3371,10 @@ TORRENT_API lt_torrent_id lt_add_torrent_file(lt_session_t session,
         if (ec) { set_err(ec.message()); return -1; }
         lt::add_torrent_params atp;
         atp.ti = ti; atp.save_path = path;
+        // (see lt_add_magnet)
+        if (!sw->wait_not_trimming(hash_keys(ti->info_hashes()), chr::seconds(15))) {
+            set_err("torrent is still being released"); return -1;
+        }
         load_resume(atp, path);
         atp.flags &= ~lt::torrent_flags::paused;
         atp.flags &= ~lt::torrent_flags::auto_managed;
@@ -3053,20 +3409,25 @@ TORRENT_API void lt_remove_torrent(lt_session_t session,
     if (!session) return;
     auto* sw = to_sw(session);
     try {
-        std::lock_guard<std::mutex> lk(sw->mu);
-        auto it = sw->handles.find(id);
-        if (it == sw->handles.end()) return;
+        lt::torrent_handle h;
+        {
+            std::lock_guard<std::mutex> lk(sw->mu);
+            auto it = sw->handles.find(id);
+            if (it == sw->handles.end()) return;
+            h = it->second;
+            sw->handles.erase(it);
+            sw->ephemeral_torrents.erase(id);
+        }
         if (del) {
+            // Out of handles first, so the resume writer won't write the
+            // file again once it's gone (it checks under resume_io_mu).
             try {
-                const auto st = it->second.status(lt::torrent_handle::query_save_path);
+                const auto st = h.status(lt::torrent_handle::query_save_path);
+                std::lock_guard<std::mutex> io(sw->resume_io_mu);
                 std::error_code fec;
-                std::filesystem::remove(
-                    resume_file(st.save_path, it->second.info_hashes()), fec);
+                std::filesystem::remove(resume_file(st.save_path, h.info_hashes()), fec);
             } catch (...) {}
         }
-        lt::torrent_handle h = it->second;
-        sw->handles.erase(it);
-        sw->ephemeral_torrents.erase(id);
         sw->session.remove_torrent(h,
             del ? lt::session::delete_files : lt::remove_flags_t{});
     } LT_CATCH_VOID
@@ -3236,6 +3597,10 @@ TORRENT_API void lt_set_file_priorities(lt_session_t session, lt_torrent_id id,
 
 // ── streaming ───────────────────────────────────────────────────────────────────
 
+// (C++ linkage, like the other *_impl functions: under MSVC's /EHsc an
+// extern "C" function is assumed never to throw, and a try around a call
+// to one could be dropped.)
+extern "C++" {
 static lt_stream_id start_stream_impl(SessionWrapper* sw,
                                       lt_torrent_id torrent_id,
                                       int file_index,
@@ -3480,6 +3845,7 @@ static lt_stream_id start_stream_impl(SessionWrapper* sw,
 
     set_err(""); return sid;
 }
+} // extern "C++"
 
 TORRENT_API lt_stream_id lt_start_stream(lt_session_t session,
                                          lt_torrent_id torrent_id,
@@ -3674,6 +4040,7 @@ TORRENT_API const char* lt_version(void)    { return LIBTORRENT_VERSION; }
 
 // ── preload — port of torr/preload.go ───────────────────────────────────────────
 
+extern "C++" {
 static int preload_stream_impl(SessionWrapper* sw, lt_stream_id sid,
                                int64_t preload_bytes) {
     std::shared_ptr<StreamEngine> sp;
@@ -3712,6 +4079,7 @@ static int preload_stream_impl(SessionWrapper* sw, lt_stream_id sid,
     }
     return 1;
 }
+} // extern "C++"
 
 TORRENT_API int lt_preload_stream(lt_session_t session, lt_stream_id sid,
                                   int64_t preload_bytes) {
@@ -3755,6 +4123,7 @@ TORRENT_API void lt_set_cache_settings(lt_session_t session, lt_stream_id sid,
 // Maps BTSets fields → libtorrent settings_pack values, matching the
 // exact behavior of btserver.go configure().
 
+extern "C++" {
 static void configure_session_impl(SessionWrapper* sw,
                                    const lt_bt_config* config) {
 
@@ -3874,6 +4243,8 @@ static void configure_session_impl(SessionWrapper* sw,
     }
 }
 
+} // extern "C++"
+
 TORRENT_API void lt_configure_session(lt_session_t session,
                                       const lt_bt_config* config) {
     if (!session || !config) return;
@@ -3907,6 +4278,245 @@ TORRENT_API void lt_get_default_config(lt_bt_config* out) {
 TORRENT_API int lt_get_active_streams(lt_session_t session) {
     (void)session;
     return StreamEngine::active_streams.load();
+}
+
+// ── release a torrent and trim what it keeps on disk (see torrent_bridge.h) ─────
+//
+// Order, for crash safety: (1) streams stopped, torrent paused, its cache
+// flushed and resume data written; (2) removed from the session, and
+// torrent_removed_alert waited for — libtorrent posts it once the storage
+// is stopped and the files closed; (3) the resume file rewritten (durably)
+// without the dropped pieces; (4) only then the dropped pieces' bytes
+// released. A crash between 3 and 4 leaves bytes libtorrent no longer
+// trusts: harmless. Bytes of kept pieces are never touched: holes are cut
+// only in the byte runs of dropped pieces, intersected with each file.
+// While it runs, an lt_add_* of the same torrent waits (TrimGuard); the
+// resume writer won't write a file for a torrent no longer in handles.
+TORRENT_API int64_t lt_release_and_trim(lt_session_t session, lt_torrent_id id,
+                                        int file_index, int64_t keep_from,
+                                        int timeout_ms) {
+    if (!session) { set_err("null session"); return -2; }
+    auto* sw = to_sw(session);
+
+    // ── 0. what can fail while the torrent is still untouched: -2 ──
+    lt::torrent_handle h;
+    bool ephemeral = false;
+    lt::info_hash_t ih;
+    std::shared_ptr<const lt::torrent_info> ti;
+    std::string save_path, key;
+    std::unique_ptr<TrimGuard> guard;
+    try {
+        {
+            std::lock_guard<std::mutex> lk(sw->mu);
+            auto it = sw->handles.find(id);
+            if (it == sw->handles.end()) { set_err("torrent not found"); return -2; }
+            h = it->second;
+            ephemeral = sw->ephemeral_torrents.count(id) > 0;
+        }
+        if (!h.is_valid()) { set_err("invalid torrent handle"); return -2; }
+        ih        = h.info_hashes();
+        ti        = h.torrent_file();
+        save_path = h.status(lt::torrent_handle::query_save_path).save_path;
+        if (keep_from >= 0 && ti && (file_index < 0 || file_index >= ti->num_files())) {
+            set_err("invalid file index"); return -2;
+        }
+        key   = hash_hex(ih);
+        guard = std::make_unique<TrimGuard>(sw, hash_keys(ih));
+    } LT_CATCH(-2)
+
+    const auto deadline = chr::steady_clock::now()
+        + chr::milliseconds(timeout_ms > 0 ? timeout_ms : 10000);
+    using Counts = SessionWrapper::EventCounts;
+
+    // ── 1. stop, pause, flush, save resume data ──
+    // From here on the torrent is released whatever happens.
+    bool resume_ok = false;
+    try {
+        stop_streams_of(sw, id);
+        h.pause();
+        if (ti && !ephemeral) {
+            // Pending writes done and files closed (pausing alone doesn't
+            // close files a stream's reads reopened).
+            Counts before = sw->event_counts(key);
+            h.flush_cache();
+            sw->wait_event(key, deadline, [&](const Counts& e) {
+                return e.flushed > before.flushed;
+            });
+            before = sw->event_counts(key);
+            sw->resume_outstanding.fetch_add(1);
+            h.save_resume_data(lt::torrent_handle::save_info_dict);
+            sw->wait_event(key, deadline, [&](const Counts& e) {
+                return e.written > before.written || e.failed > before.failed;
+            });
+            resume_ok = sw->event_counts(key).written > before.written;
+        }
+    } catch (...) {
+        resume_ok = false;
+    }
+
+    // ── 2. remove from the session, files kept ──
+    bool removed = false;
+    try {
+        const uint64_t removed_before = sw->event_counts(key).removed;
+        {
+            std::lock_guard<std::mutex> lk(sw->mu);
+            auto it = sw->handles.find(id);
+            if (it != sw->handles.end() && it->second == h) sw->handles.erase(it);
+            sw->ephemeral_torrents.erase(id);
+        }
+        sw->session.remove_torrent(h);
+        removed = sw->wait_event(key, deadline, [&](const Counts& e) {
+            return e.removed > removed_before;
+        });
+    } catch (...) {
+        removed = false;
+    }
+    try { stop_streams_of(sw, id); } catch (...) {}  // any started meanwhile
+
+    try {
+        // keep_from < 0: released only; the bytes of had pieces, or 0.
+        if (keep_from < 0) {
+            if (!resume_ok || !ti) { set_err(""); return 0; }
+            std::lock_guard<std::mutex> io(sw->resume_io_mu);
+            std::vector<char> buf;
+            if (!read_file(resume_file(save_path, ih), buf)) return 0;
+            lt::error_code ec;
+            const lt::add_torrent_params rd = lt::read_resume_data(buf, ec);
+            if (ec || !same_torrent(hashes_of(rd), ih)) return 0;
+            set_err("");
+            return had_bytes(rd, ti->files());
+        }
+        if (!resume_ok || !ti) {
+            set_err("resume data could not be saved: released, nothing trimmed");
+            return -1;
+        }
+        if (!removed) {
+            set_err("libtorrent did not let go of the files in time: released, nothing trimmed");
+            return -1;
+        }
+
+        // ── 3. the pieces kept, and the resume file without the others ──
+        const lt::file_storage& fs = ti->files();
+        const int     np = fs.num_pieces();
+        const int64_t pl = fs.piece_length();
+        if (np <= 0 || pl <= 0) { set_err("no pieces"); return -1; }
+
+        std::vector<char> keep((size_t)np, 0);
+        auto keep_pieces = [&](int64_t lo, int64_t hi) {
+            lo = std::max<int64_t>(lo, 0);
+            hi = std::min<int64_t>(hi, np - 1);
+            for (int64_t p = lo; p <= hi; ++p) keep[(size_t)p] = 1;
+        };
+        // Every file's head and tail — what StreamEngine protects for the
+        // container's headers and index: ceil(8 MB / piece length) pieces,
+        // at least one, at each end — and, in file_index, everything from
+        // keep_from on.
+        const int64_t prot = (StreamEngine::PROTECT_BYTES + pl - 1) / pl;
+        for (lt::file_index_t f : fs.file_range()) {
+            if (fs.pad_file_at(f) || fs.file_size(f) <= 0) continue;
+            const int64_t off   = fs.file_offset(f);
+            const int64_t sz    = fs.file_size(f);
+            const int64_t first = off / pl;
+            const int64_t last  = (off + sz - 1) / pl;
+            keep_pieces(first, std::min(first + prot - 1, last));
+            keep_pieces(std::max(last - prot + 1, first), last);
+            if (static_cast<int>(f) == file_index && keep_from < sz)
+                keep_pieces((off + keep_from) / pl, last);
+        }
+
+        struct FileHoles {
+            std::filesystem::path                     path;
+            std::vector<std::pair<int64_t, int64_t>>  ranges;   // file offsets
+        };
+        std::vector<FileHoles> jobs;
+        int64_t kept = 0;
+        {
+            std::lock_guard<std::mutex> io(sw->resume_io_mu);
+            const auto rpath = resume_file(save_path, ih);
+            std::vector<char> buf;
+            if (!read_file(rpath, buf)) {
+                set_err("resume data unreadable: released, nothing trimmed");
+                return -1;
+            }
+            lt::error_code ec;
+            lt::add_torrent_params rd = lt::read_resume_data(buf, ec);
+            if (ec || !same_torrent(hashes_of(rd), ih)) {
+                set_err("resume data unreadable: released, nothing trimmed");
+                return -1;
+            }
+            for (int p = 0; p < np; ++p) {
+                if (keep[(size_t)p]) continue;
+                const lt::piece_index_t pi(p);
+                if (p < rd.have_pieces.size())     rd.have_pieces.clear_bit(pi);
+                if (p < rd.verified_pieces.size()) rd.verified_pieces.clear_bit(pi);
+                rd.unfinished_pieces.erase(pi);
+            }
+            kept = had_bytes(rd, fs);
+            const std::vector<char> out = lt::write_resume_data_buf(rd);
+            // durably: the holes below rely on this being on the disk first
+            if (!write_file_atomic(rpath, out, true)) {
+                set_err("resume data could not be rewritten: released, nothing trimmed");
+                return -1;
+            }
+
+            // ── 4. release the dropped pieces' bytes ──
+            // Byte runs of dropped pieces, in torrent offsets, merged.
+            std::vector<std::pair<int64_t, int64_t>> runs;
+            for (int p = 0; p < np; ++p) {
+                if (keep[(size_t)p]) continue;
+                const int64_t a = (int64_t)p * pl;
+                const int64_t b = a + fs.piece_size(lt::piece_index_t(p));
+                if (!runs.empty() && runs.back().second == a) runs.back().second = b;
+                else runs.emplace_back(a, b);
+            }
+            for (lt::file_index_t f : fs.file_range()) {
+                if (fs.pad_file_at(f) || fs.file_size(f) <= 0) continue;
+                if (fs.file_flags(f) & lt::file_storage::flag_symlink) continue;
+                const int64_t fo = fs.file_offset(f);
+                const int64_t fe = fo + fs.file_size(f);
+                FileHoles job;
+                auto it = std::upper_bound(runs.begin(), runs.end(), fo,
+                    [](int64_t v, const std::pair<int64_t, int64_t>& r) {
+                        return v < r.second;
+                    });
+                for (; it != runs.end() && it->first < fe; ++it) {
+                    const int64_t a = std::max(it->first, fo);
+                    const int64_t b = std::min(it->second, fe);
+                    if (b > a) job.ranges.emplace_back(a - fo, b - fo);
+                }
+                if (job.ranges.empty()) continue;
+                job.path = file_on_disk(rd, fs, f, save_path);
+                jobs.push_back(std::move(job));
+            }
+        }
+        // (Outside resume_io_mu: TrimGuard keeps an add of this torrent
+        // away until the holes are cut.)
+        {
+            std::vector<size_t> pending(jobs.size());
+            for (size_t i = 0; i < jobs.size(); ++i) pending[i] = i;
+            int failed_files = 0;
+            for (int attempt = 0; ; ++attempt) {
+                std::vector<size_t> again;
+                for (size_t i : pending)
+                    if (punch_holes(jobs[i].path, jobs[i].ranges) > 0) again.push_back(i);
+                if (again.empty() || attempt >= 4
+                        || chr::steady_clock::now() >= deadline) {
+                    failed_files = (int)again.size();
+                    break;
+                }
+                std::this_thread::sleep_for(chr::milliseconds(200));
+                pending.swap(again);
+            }
+            TB_LOG("release_and_trim: kept=%lld files_not_released=%d",
+                   (long long)kept, failed_files);
+            if (failed_files > 0)
+                set_err("trimmed; the space of " + std::to_string(failed_files)
+                        + " file(s) could not be released");
+            else
+                set_err("");
+        }
+        return kept;
+    } LT_CATCH(-1)
 }
 
 } // extern "C"

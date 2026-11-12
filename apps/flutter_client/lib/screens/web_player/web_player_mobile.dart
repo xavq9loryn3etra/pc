@@ -439,7 +439,7 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
                   ) ??
                   0.0;
             } else {
-              final m = service.getMovieFromHistory(widget.movie.id);
+              final m = service.getMovieFromHistory(widget.movie.id, type: widget.movie.type);
               if (m != null) startProgress = m.progress ?? 0.0;
             }
 

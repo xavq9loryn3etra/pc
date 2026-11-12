@@ -495,7 +495,10 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
               listenable: SavedMoviesService(),
               builder: (context, _) {
                 final liked =
-                    SavedMoviesService().isFavorite(widget.featuredMovie.id);
+                    SavedMoviesService().isFavorite(
+                          widget.featuredMovie.id,
+                          type: widget.featuredMovie.type,
+                        );
                 return GlassActionButton(
                   onTap: () =>
                       SavedMoviesService().toggleFavorite(widget.featuredMovie),

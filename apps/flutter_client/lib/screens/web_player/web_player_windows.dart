@@ -89,7 +89,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
           ) ??
           0.0;
     } else {
-      final m = service.getMovieFromHistory(widget.movie.id);
+      final m = service.getMovieFromHistory(widget.movie.id, type: widget.movie.type);
       if (m != null) startProgress = m.progress ?? 0.0;
     }
 

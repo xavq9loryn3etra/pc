@@ -57,6 +57,10 @@ class Movie {
   final int? currentEpisode;
   final double? progress; // 0.0 to 1.0
 
+  /// What history and favourites key this title by. TMDB numbers movies
+  /// and shows separately, so the id alone isn't unique.
+  String get storageKey => '${type}_$id';
+
   String? get posterUrl => image;
   String? get backdropUrl => backdrop;
   // `backdrop` is TMDB's w1280 tier — plenty for episode thumbnails, the

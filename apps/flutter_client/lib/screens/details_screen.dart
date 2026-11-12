@@ -230,7 +230,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // updates on its own without a second, full-screen rebuild.
   /// The Like button's heart: filled, in the accent, once it's liked.
   Widget _likeIcon() {
-    final liked = SavedMoviesService().isFavorite(widget.movie.id);
+    final liked = SavedMoviesService().isFavorite(widget.movie.id, type: widget.movie.type);
     return Icon(
       liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
       color: liked ? AppTheme.primaryColor : Colors.white,
@@ -437,7 +437,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     StreamResolver().warmUp(
       _warmedStreams,
       resumeAt:
-          SavedMoviesService().getMovieFromHistory(widget.movie.id)?.progress,
+          SavedMoviesService().getMovieFromHistory(widget.movie.id, type: widget.movie.type)?.progress,
     );
   }
 
@@ -1351,7 +1351,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                               listenable: SavedMoviesService(),
                               builder: (context, _) {
                                 final historyMovie = SavedMoviesService()
-                                    .getMovieFromHistory(widget.movie.id);
+                                    .getMovieFromHistory(widget.movie.id, type: widget.movie.type);
 
                                 // Whether the "quick play" target isn't out yet,
                                 // so the button can look disabled instead of
@@ -2170,7 +2170,7 @@ class _TorrentQualitySelectorSheetState
             resumeAt: s != null && e != null
                 ? SavedMoviesService().getEpisodeProgress(widget.movie.id, s, e)
                 : SavedMoviesService()
-                    .getMovieFromHistory(widget.movie.id)
+                    .getMovieFromHistory(widget.movie.id, type: widget.movie.type)
                     ?.progress,
           );
         }

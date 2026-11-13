@@ -4,7 +4,8 @@ name: Publish release
 # download page, https://github.com/popcorn-organization/popcorn, when the
 # app's version in pubspec.yaml changes on main (e.g. 3.0.0 -> 3.0.1). A
 # version already published is skipped. The new release is marked Latest;
-# earlier ones stay listed below it as the archive.
+# earlier ones stay listed below it as the archive. Once it's out, the app
+# requires that version (docs/flags.json), so older copies ask to update.
 #
 # Secrets (on this repo):
 #   RELEASES_TOKEN   fine-grained token with Contents: read and write on
@@ -148,6 +149,9 @@ jobs:
     name: Publish to the download page
     needs: [check, android, windows]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # docs/flags.json, once the release is out
+      pages: write      # republish the flags on GitHub Pages
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -193,3 +197,33 @@ jobs:
               -f content="$(base64 -w0 README.new)" \
               -f sha="$sha" > /dev/null
           fi
+
+      # Only now that the files are out: the app requires this version, so
+      # anyone older is asked to update (docs/flags.json, read by the app
+      # from GitHub Pages). Android and Windows share the top-level values;
+      # iPhone has its own entry there, as there's no iPhone release.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: pc
+      - name: Require this version in the app
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          cd pc
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          site="https://popcorn-organization.github.io/popcorn/"
+          for attempt in 1 2 3; do
+            git pull -q --rebase origin main
+            jq --arg v "$VERSION" --arg u "$site" \
+              '.min_required_version = $v | .update_url = $u' \
+              docs/flags.json > flags.tmp && mv flags.tmp docs/flags.json
+            if git diff --quiet; then echo "The app already requires $VERSION."; break; fi
+            git commit -qam "flags: require Popcorn $VERSION (published)"
+            if git push -q origin HEAD:main; then echo "The app now requires $VERSION."; break; fi
+            git reset -q --hard origin/main
+          done
+          # Publish the changed flags on GitHub Pages straight away.
+          gh api -X POST "repos/$GITHUB_REPOSITORY/pages/builds" > /dev/null || true

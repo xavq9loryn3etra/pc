@@ -28,6 +28,7 @@ import 'services/background_download_service.dart';
 import 'services/saved_movies_service.dart';
 import 'services/deep_link_service.dart';
 import 'services/feature_flags_service.dart';
+import 'services/gemini_key_service.dart';
 import 'services/torrent/download_ahead_settings.dart';
 import 'services/torrent/torrent_engine_service.dart';
 import 'services/torrent/torrent_storage_service.dart';
@@ -79,6 +80,12 @@ void main() async {
   });
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks(
+      ['Noto Sans Sinhala font'],
+      await rootBundle.loadString('assets/fonts/NotoSansSinhala-OFL.txt'),
+    );
+  });
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(
       ['Outfit font'],
       await rootBundle.loadString('assets/google_fonts/OFL.txt'),
     );
@@ -120,6 +127,7 @@ void main() async {
   await _initStep('FeatureFlagsService', FeatureFlagsService().init);
   await _initStep('VisualEffectsService', VisualEffectsService().init);
   await _initStep('DownloadAheadSettings', DownloadAheadSettings().init);
+  await _initStep('GeminiKeyService', GeminiKeyService().init);
   // A background-buffering service left running by a previous run (the
   // app swiped away mid-playback) has nothing to keep alive now. Not
   // awaited: nothing at startup depends on it.

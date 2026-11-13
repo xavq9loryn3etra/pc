@@ -9,6 +9,7 @@ import 'quality_option_list.dart';
 import '../services/subtitle_service.dart';
 import '../models/movie.dart';
 import '../services/audio_language_service.dart';
+import '../services/gemini_key_service.dart';
 
 /// How the video is scaled to the screen.
 enum VideoFit {
@@ -36,6 +37,11 @@ class PlayerSettingsPanel extends StatefulWidget {
   final bool isLoadingSubtitles;
   final ValueChanged<SubtitleTrackData?> onSubtitleSelected;
   final String Function(String) getLanguageName;
+
+  /// How far Sinhala made from English has got (0 to 1), and why it
+  /// stopped if it did; null when none's being made.
+  final double? sinhalaProgress;
+  final String? sinhalaProblem;
 
   final List<TorrentStream> availableStreams;
   final TorrentStream currentStream;
@@ -90,6 +96,8 @@ class PlayerSettingsPanel extends StatefulWidget {
     required this.isLoadingSubtitles,
     required this.onSubtitleSelected,
     required this.getLanguageName,
+    this.sinhalaProgress,
+    this.sinhalaProblem,
     required this.availableStreams,
     required this.currentStream,
     required this.onStreamSelected,
@@ -491,10 +499,13 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
     String? subtitle,
     Widget? trailing,
     required VoidCallback onTap,
+    bool enabled = true,
   }) {
-    return InkWell(
-      mouseCursor: WidgetStateMouseCursor.clickable,
-      onTap: onTap,
+    final row = InkWell(
+      mouseCursor: enabled
+          ? WidgetStateMouseCursor.clickable
+          : SystemMouseCursors.basic,
+      onTap: enabled ? onTap : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
@@ -543,6 +554,7 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
         ),
       ),
     );
+    return enabled ? row : Opacity(opacity: 0.4, child: row);
   }
 
   Widget _buildSubtitlesView() {
@@ -706,6 +718,30 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
                 for (final track in widget.availableSubtitles)
                   () {
                     final name = widget.getLanguageName(track.lang);
+                    // Sinhala made from English with the viewer's Gemini
+                    // key: greyed out until there's a key.
+                    if (track.translatedFrom != null) {
+                      final hasKey = GeminiKeyService().hasKey;
+                      final chosen = widget.selectedSubtitle?.id == track.id;
+                      final progress = widget.sinhalaProgress;
+                      final String note;
+                      if (!hasKey) {
+                        note = 'Add your Gemini key in Settings to use';
+                      } else if (chosen && widget.sinhalaProblem != null) {
+                        note = widget.sinhalaProblem!;
+                      } else if (chosen && progress != null && progress < 1) {
+                        note = 'Translating… ${(progress * 100).floor()}%';
+                      } else {
+                        note = 'Auto-translated from English';
+                      }
+                      return _buildRow(
+                        title: name,
+                        subtitle: note,
+                        enabled: hasKey,
+                        trailing: chosen ? _check : null,
+                        onTap: () => widget.onSubtitleSelected(track),
+                      );
+                    }
                     if (track.isEmbedded) {
                       final sub = (track.label != null &&
                               track.label!.isNotEmpty &&

@@ -1489,8 +1489,9 @@ class _WordRevealState extends State<_WordReveal>
       widget.text.split(RegExp(r'(?<=\s)')); // Each keeps its space.
   late final _shown = AnimationController(
     vsync: this,
-    // Each word takes [perWord]; a few more' time to fade in the last.
-    duration: _WordReveal.perWord * (_words.length + 4),
+    // Each word takes [perWord]; a few more' time to fade in the last. A
+    // long reply (a full spoiler) comes in faster, in under 5 s all told.
+    duration: _WordReveal.perWord * math.min(_words.length + 4, 120),
   );
 
   @override

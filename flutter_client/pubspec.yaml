@@ -108,6 +108,7 @@ flutter:
     - assets/welcome/music/
     - assets/welcome/books/
     - assets/fonts/Yellowtail-LICENSE.txt
+    - assets/fonts/NotoSansSinhala-OFL.txt
     # The app font (Outfit, through google_fonts) — bundled so every device
     # shows it from the first frame, offline too. See main().
     - assets/google_fonts/
@@ -119,6 +120,11 @@ flutter:
     - family: Yellowtail
       fonts:
         - asset: assets/fonts/Yellowtail-Regular.ttf
+    # Sinhala subtitles (auto-translated: see SubtitleTranslator), drawn
+    # the same on every device.
+    - family: NotoSansSinhala
+      fonts:
+        - asset: assets/fonts/NotoSansSinhala-Regular.ttf
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

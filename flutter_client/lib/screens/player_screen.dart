@@ -43,6 +43,8 @@ import 'web_player/web_player.dart';
 import '../services/scraper_service.dart';
 import '../services/skip_segments_service.dart';
 import '../services/subtitle_service.dart';
+import '../services/subtitle_translator.dart';
+import '../services/gemini_key_service.dart';
 import '../services/subtitle_retime.dart';
 import '../services/subtitle_sync.dart';
 import '../services/window_full_screen.dart';
@@ -278,6 +280,12 @@ class _PlayerScreenState extends State<PlayerScreen>
   // subtitle's corrected file; those tried, and those timed so (Auto Sync's
   // listening leaves them be); subtitles' downloaded text, by url.
   final Map<String, String> _retimedPaths = {};
+
+  // Sinhala subtitles being made from English ones (SubtitleTranslator),
+  // and the English track's id they're made from.
+  SinhalaSubtitles? _sinhala;
+  String? _sinhalaFrom;
+  Future<SinhalaSubtitles?>? _sinhalaStarting;
   final Set<String> _retimeTried = {};
   final Set<String> _referenceTimed = {};
   final Map<String, String> _subtitleTexts = {};
@@ -806,6 +814,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           // needs to react to this, not the whole screen, since this fires
           // several times a second during playback.
           _currentPosition = pos;
+          _sinhala?.watchingAt(pos.inMilliseconds / 1000);
           // The seek bar and the clock show whole seconds, and hidden
           // controls show nothing (they catch up when shown again: see
           // _controlsVisible) — so no rebuild for anything finer.
@@ -3152,6 +3161,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     WidgetsBinding.instance.removeObserver(this);
     _wakelockTimer?.cancel();
     _discardRetimedFiles();
+    _stopSinhala();
     WakelockPlus.disable();
     _screenTapTimer?.cancel();
     _bufferingRevealTimer?.cancel();
@@ -3351,6 +3361,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       case 'sin':
       case 'si':
         return 'Sinhala';
+      case 'sin':
+      case 'si':
+        return 'Sinhala';
       case 'tam':
       case 'ta':
         return 'Tamil';
@@ -3415,6 +3428,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// track stays on meanwhile. Called inside setState.
   void _forgetFileSubtitles() {
     _discardRetimedFiles();
+    _stopSinhala();
     _subtitleTimings.clear();
     _autoSyncDone.clear();
     _autoSynced.clear();
@@ -3604,7 +3618,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   Future<void> _rebuildAvailableSubtitles() async {
     // After this, whatever stays selected: retimed if it can be now.
     Future<void>.delayed(Duration.zero, _retimeSelected);
+    final sinhala = _sinhalaTrack();
     final combined = <SubtitleTrackData>[
+      if (sinhala != null) sinhala,
       ..._embeddedSubtitles,
       ..._externalSubtitles,
     ];
@@ -3643,7 +3659,13 @@ class _PlayerScreenState extends State<PlayerScreen>
         .where((s) =>
             s.url.isNotEmpty && _getLanguageName(s.lang) == targetLangName)
         .firstOrNull;
-    final bestMatch = embeddedMatch ?? externalMatch;
+    // Sinhala chosen before and none made by people: made from English,
+    // with the viewer's Gemini key.
+    final bestMatch = embeddedMatch ??
+        externalMatch ??
+        (targetLangName == 'Sinhala' && GeminiKeyService().hasKey
+            ? sinhala
+            : null);
 
     if (bestMatch?.id != _selectedSubtitle?.id) {
       await _selectSubtitle(bestMatch, remember: false);
@@ -3672,30 +3694,161 @@ class _PlayerScreenState extends State<PlayerScreen>
       await player.setSubtitleTrack(
         SubtitleTrack(track.url, track.label, track.lang),
       );
+    } else if (track.translatedFrom != null) {
+      final sinhala = await _sinhalaFor(track);
+      if (!mounted || _selectedSubtitle?.id != track.id) return;
+      if (sinhala == null) {
+        await player.setSubtitleTrack(SubtitleTrack.no());
+      } else {
+        await _showSubtitleFile(sinhala.path, track.lang);
+      }
     } else {
       // Its retimed copy, when there is one (see _retimeFromReferences).
-      final url = _retimedPaths[track.id] ?? track.url;
-      // Given to the player before (this video): pick that track again,
-      // rather than adding the file another time.
-      final added = await _addedSubtitleTracks();
-      final id = added.entries
-          .where((e) => e.value == url)
-          .map((e) => e.key)
-          .firstOrNull;
-      if (id != null) {
-        await player.setSubtitleTrack(
-          SubtitleTrack(id, _getLanguageName(track.lang), track.lang),
-        );
-      } else {
-        await player.setSubtitleTrack(
-          SubtitleTrack.uri(
-            url,
-            title: _getLanguageName(track.lang),
-            language: track.lang,
-          ),
-        );
-      }
+      await _showSubtitleFile(_retimedPaths[track.id] ?? track.url, track.lang);
     }
+  }
+
+  /// Shows the subtitle file at [url] (a download, or one written here).
+  Future<void> _showSubtitleFile(String url, String lang) async {
+    // Given to the player before (this video): pick that track again,
+    // rather than adding the file another time.
+    final added = await _addedSubtitleTracks();
+    final id =
+        added.entries.where((e) => e.value == url).map((e) => e.key).firstOrNull;
+    if (id != null) {
+      await player.setSubtitleTrack(
+        SubtitleTrack(id, _getLanguageName(lang), lang),
+      );
+    } else {
+      await player.setSubtitleTrack(
+        SubtitleTrack.uri(url, title: _getLanguageName(lang), language: lang),
+      );
+    }
+  }
+
+  // ─── Sinhala subtitles, made from English ones (SubtitleTranslator) ───
+
+  /// Sinhala made from the English subtitles, offered when there are
+  /// English ones to make it from and none in Sinhala by people. From the
+  /// English track it's being made from already, else the best one.
+  SubtitleTrackData? _sinhalaTrack() {
+    bool inSinhala(SubtitleTrackData s) => _getLanguageName(s.lang) == 'Sinhala';
+    if (_externalSubtitles.any(inSinhala) || _embeddedSubtitles.any(inSinhala)) {
+      return null;
+    }
+    final english = [
+      for (final s in _externalSubtitles)
+        if (s.url.isNotEmpty && _getLanguageName(s.lang) == 'English') s,
+    ];
+    if (english.isEmpty) return null;
+    final from =
+        english.where((s) => s.id == _sinhalaFrom).firstOrNull ?? english.first;
+    return SubtitleTrackData(
+      id: 'sinhala:${from.id}',
+      url: 'sinhala:${from.id}',
+      lang: 'sin',
+      label: 'Auto-translated',
+      translatedFrom: from,
+    );
+  }
+
+  /// The English text [from] has now: its retimed copy when there is one.
+  Future<String> _englishFor(SubtitleTrackData from) async {
+    final retimed = _retimedPaths[from.id];
+    if (retimed != null) {
+      try {
+        return await File(retimed).readAsString();
+      } catch (_) {}
+    }
+    return _subtitleText(from);
+  }
+
+  /// The Sinhala subtitles for [track], started if they aren't yet. Null
+  /// without a Gemini key, or when they can't be made (said so).
+  Future<SinhalaSubtitles?> _sinhalaFor(SubtitleTrackData track) {
+    final from = track.translatedFrom!;
+    final starting = _sinhalaStarting;
+    if (_sinhalaFrom == from.id && starting != null) return starting;
+    _stopSinhala();
+    if (!GeminiKeyService().hasKey) return Future.value(null);
+    _sinhalaFrom = from.id;
+    return _sinhalaStarting = () async {
+      final url = _streamUrl;
+      try {
+        final english = await _englishFor(from);
+        final episode = _currentSeason != null && _currentEpisode != null
+            ? ' (S$_currentSeason E$_currentEpisode)'
+            : '';
+        final job = await SubtitleTranslator.start(
+          english: english,
+          title: '${widget.details.title}$episode',
+          from: _currentPosition.inMilliseconds / 1000,
+        );
+        if (!mounted || _streamUrl != url || _sinhalaFrom != from.id) {
+          job.stop();
+          return null;
+        }
+        _sinhala = job;
+        job.updates.addListener(_onSinhalaUpdate);
+        job.problem.addListener(_onSinhalaProblem);
+        // Retimed against references if it can be: the Sinhala follows.
+        _retimeFromReferences(from);
+        return job;
+      } catch (e) {
+        print('[sinhala] $e');
+        if (mounted) {
+          showAppMessage(
+            context,
+            e is TranslationStopped
+                ? e.message
+                : "Couldn't make Sinhala subtitles for this.",
+            error: true,
+          );
+        }
+        if (_sinhalaFrom == from.id) _sinhalaStarting = null;
+        return null;
+      }
+    }();
+  }
+
+  /// More lines translated: the player reads the file again, if they're
+  /// on screen.
+  Future<void> _onSinhalaUpdate() async {
+    final job = _sinhala;
+    if (!mounted || job == null) return;
+    setState(() {}); // The menu's progress.
+    if (_selectedSubtitle?.translatedFrom?.id != _sinhalaFrom) return;
+    final added = await _addedSubtitleTracks();
+    final id = added.entries
+        .where((e) => e.value == job.path)
+        .map((e) => e.key)
+        .firstOrNull;
+    if (id == null) return;
+    try {
+      await (player.platform as NativePlayer).command(['sub-reload', id]);
+    } catch (e) {
+      print('[sinhala] reload: $e');
+    }
+  }
+
+  void _onSinhalaProblem() {
+    final problem = _sinhala?.problem.value;
+    if (problem == null || !mounted) return;
+    showAppMessage(context, problem, error: true);
+    setState(() {});
+  }
+
+  void _stopSinhala() {
+    final job = _sinhala;
+    if (job != null) {
+      job.updates.removeListener(_onSinhalaUpdate);
+      job.problem.removeListener(_onSinhalaProblem);
+      job.stop();
+      File(job.path).delete().ignore();
+    }
+    _sinhala = null;
+    _sinhalaFrom = null;
+    _sinhalaStarting = null;
   }
 
   Future<void> _applySubtitleTimingToMpv() async {
@@ -3995,6 +4148,8 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// [track]'s text (an SRT, VTT or ASS file), downloaded once.
   Future<String> _subtitleText(SubtitleTrackData track) async {
+    // Sinhala made from English: the English's lines, at the same times.
+    if (track.translatedFrom != null) return _englishFor(track.translatedFrom!);
     final cached = _subtitleTexts[track.url];
     if (cached != null) return cached;
     final response = await _subtitleDio.get<String>(
@@ -4015,6 +4170,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// and 5.6 s by the end, in steps at the ad breaks, which no one delay
   /// fits. Without references, Auto Sync's listening goes on.
   Future<void> _retimeFromReferences(SubtitleTrackData track) async {
+    // Sinhala made from English: the English is retimed, and the Sinhala
+    // follows it (see below).
+    if (track.translatedFrom != null) {
+      return _retimeFromReferences(track.translatedFrom!);
+    }
     if (track.isEmbedded ||
         _retimedPaths.containsKey(track.id) ||
         _autoSyncDone.contains(track.id) || // the viewer's own timing
@@ -4067,9 +4227,13 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (!mounted || _streamUrl != url) return;
       final file = File('${temp.path}${Platform.pathSeparator}'
           'popcorn_sub_${track.id}_${DateTime.now().millisecondsSinceEpoch}.$ext');
-      await file.writeAsString(SubtitleRetime.retime(text, map));
+      final retimed = SubtitleRetime.retime(text, map);
+      await file.writeAsString(retimed);
       if (!mounted || _streamUrl != url) return;
       _retimedPaths[track.id] = file.path;
+      // Sinhala made from it: its lines move with it.
+      if (_sinhalaFrom == track.id) await _sinhala?.retime(retimed);
+      if (!mounted || _streamUrl != url) return;
       _referenceTimed.add(track.id);
       print('[sync] retimed by references '
           '(${picked.map((r) => r.lang).join(', ')}) in '
@@ -4077,7 +4241,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       // A timing kept from listening was for the file as it came.
       SharedPreferences.getInstance()
           .then((prefs) => prefs.remove(_timingKey(track)));
-      if (_selectedSubtitle?.id == track.id) {
+      final shown = _selectedSubtitle;
+      if (shown != null &&
+          (shown.id == track.id || shown.translatedFrom?.id == track.id)) {
         // How far the lines on screen move: the map's delay here, less the
         // delay they had.
         final here = _currentPosition.inMilliseconds / 1000;
@@ -4087,7 +4253,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           _subtitleSpeed = 1;
         });
         await _applySubtitleTimingToMpv();
-        await _applySubtitleTrackToPlayer(track);
+        await _applySubtitleTrackToPlayer(shown);
         _showSyncedBadge(moved);
       } else {
         _subtitleTimings[track.id] = (delay: 0.0, speed: 1.0);
@@ -4562,6 +4728,21 @@ class _PlayerScreenState extends State<PlayerScreen>
                         curve: Curves.easeInOutCubic,
                         child: Video(
                           controller: controller,
+                          // media_kit's own look, with a font for Sinhala
+                          // (subtitles made from English: SubtitleTranslator).
+                          subtitleViewConfiguration:
+                              const SubtitleViewConfiguration(
+                            style: TextStyle(
+                              height: 1.4,
+                              fontSize: 32.0,
+                              letterSpacing: 0.0,
+                              wordSpacing: 0.0,
+                              color: Color(0xffffffff),
+                              fontWeight: FontWeight.normal,
+                              backgroundColor: Color(0xaa000000),
+                              fontFamilyFallback: ['NotoSansSinhala'],
+                            ),
+                          ),
                           controls:
                               NoVideoControls, // Pure custom controls overlay
                           fit: _videoFit.boxFit,
@@ -5625,6 +5806,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                   key: ValueKey(_settingsPanelInitialView),
                   availableSubtitles: _availableSubtitles,
                   selectedSubtitle: _selectedSubtitle,
+                  sinhalaProgress: _sinhala?.progress.value,
+                  sinhalaProblem: _sinhala?.problem.value,
                   isLoadingSubtitles: _isLoadingSubtitles,
                   onSubtitleSelected: (track) {
                     _selectSubtitle(track);

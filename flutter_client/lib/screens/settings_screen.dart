@@ -14,7 +14,9 @@ import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import '../services/backup_service.dart';
 import '../services/feature_flags_service.dart';
+import '../services/gemini_key_service.dart';
 import '../services/torrent/download_ahead_settings.dart';
+import '../widgets/gemini_key_dialog.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -67,9 +69,18 @@ class SettingsScreen extends StatelessWidget {
                   ),
                 ],
                 _SectionLabel(
-                  'BACKUP',
+                  'GEMINI',
                   topPadding:
                       AppModeService.canSwitchMode || showStorage ? 24 : 8,
+                ),
+                const _SettingsGroup(
+                  footnote: 'Your own free key from Google, for Sinhala '
+                      'subtitles translated from English, and for Popcorn '
+                      'Ask without its daily limit.',
+                  children: [_GeminiKeyRow()],
+                ),
+                const _SectionLabel(
+                  'BACKUP',
                 ),
                 _SettingsGroup(
                   footnote: 'Your favorites and watch history, saved to a '
@@ -340,6 +351,35 @@ class _SettingsRow extends StatelessWidget {
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The viewer's Gemini key (see GeminiKeyService): added or not; tapping
+/// adds, changes or removes it.
+class _GeminiKeyRow extends StatelessWidget {
+  const _GeminiKeyRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<String?>(
+      valueListenable: GeminiKeyService().key,
+      builder: (context, key, _) => _SettingsRow(
+        icon: Icons.key_rounded,
+        title: 'Gemini API key',
+        onTap: () => showGeminiKeyDialog(context),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              key == null ? 'Add' : 'Added',
+              style: const TextStyle(color: Colors.white54, fontSize: 15),
+            ),
+            const Icon(Icons.chevron_right_rounded,
+                color: Colors.white38, size: 20),
+          ],
         ),
       ),
     );

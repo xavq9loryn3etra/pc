@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'saved_movies_service.dart';
 import 'app_mode_service.dart';
 import 'feature_flags_service.dart';
+import 'gemini_key_service.dart';
 import 'search_history_service.dart';
 import 'torrent/download_ahead_settings.dart';
 
@@ -119,6 +120,9 @@ class BackupService {
       final Map<String, dynamic> allData = {backupMarker: 1};
 
       for (String key in keys) {
+        // The viewer's Gemini key stays on this device: a backup file gets
+        // passed around.
+        if (key == GeminiKeyService.prefsKey) continue;
         allData[key] = prefs.get(key);
       }
 

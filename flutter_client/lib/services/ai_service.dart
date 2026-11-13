@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/movie.dart';
+import 'gemini_key_service.dart';
 import 'tmdb_service.dart';
 
 /// What [AiService.suggest] came back with: a line or two about the picks,
@@ -67,9 +68,15 @@ class AiService {
   factory AiService() => _instance;
   AiService._();
 
-  static const _key = String.fromEnvironment('GEMINI_API_KEY');
+  static const _builtInKey = String.fromEnvironment('GEMINI_API_KEY');
 
-  /// Whether this build has a key to ask with.
+  /// The viewer's own key (Settings) when they've entered one — their own
+  /// free allowance, with no daily limit from the app — else the one built
+  /// in, shared by everyone.
+  String get _key => GeminiKeyService().key.value ?? _builtInKey;
+  bool get _ownKey => GeminiKeyService().hasKey;
+
+  /// Whether there's a key to ask with.
   bool get available => _key.isNotEmpty;
 
   /// The models tried, in order, each when the ones before it are busy or
@@ -85,6 +92,9 @@ class AiService {
 
   /// From this model on, answers take a while (see [_models]).
   static const slowFrom = 2;
+
+  /// [_models], for others asking Gemini (SubtitleTranslator).
+  static const List<String> models = _models;
 
   // A model that said it's busy (or failed), skipped until then.
   final Map<String, DateTime> _restingUntil = {};
@@ -102,13 +112,13 @@ If someone mentions self harm, suicide or being in danger, set "offTopic" to tru
 Never suggest adult or pornographic titles; offer a romance or something else instead.
 Otherwise suggest up to 9 real, existing titles that fit, or as many as they ask for up to 20 (if they ask for more, give 20 and say that's the most you can show at once), best first, with their original release year. If they name or describe a particular title ("Disney's live action Aladdin"), put that title first. Never invent a title; if you don't know one they mention, say so and suggest ones like what they describe.
 Your knowledge stops some time before today's date (given below). For new, recent or upcoming releases, suggest the newest fitting titles you know and say plainly in "message" that the very latest may be missing. Never say a title is in cinemas or just out.
-Never give away endings or twists, unless the request clearly asks for them ("how does it end", "explain the twist", "spoil it"). Then tell them plainly in "message", starting with "Spoiler ahead!", in as many sentences as it takes, naming the title; and suggest the title itself and a few like it.
+Never give away endings or twists, unless the request clearly asks for them ("how does it end", "explain the twist", "spoil it", "tell me the story"). Then spoil it properly in "message", starting with "Spoiler ahead!" and naming the title: tell the whole story from the setup to the very end, as a friend who's seen it would, in a few short paragraphs (separated by blank lines). Cover who the main characters are and what they want, each major turn, every twist and reveal and what it changes, the climax, exactly how it ends and what happens to each main character, and what the ending means. Use the real names of characters and places. Leave nothing vague: "a shocking twist changes everything" is not a spoiler, say what the twist is. For a series, spoil what they ask about (a season, an episode, or the whole show). If you don't know the story well enough to be sure, say so rather than guess. Also suggest the title itself and a few like it.
 Reply in the language the request is written in.
 Only if the request asks what's on a particular streaming service ("on Netflix", "streaming on Prime"), set "service" to its full official name ("Netflix", "Prime Video", "Disney+", "HBO Max", "Apple TV+", "Hulu"...); otherwise leave it null. A studio or brand that makes films (Disney, Marvel, Pixar, DreamWorks, Ghibli) is not a streaming service.
 Write plainly: no dashes (— or –); use commas and full stops instead.
 Earlier messages may come before the latest: use them to understand follow-ups ("something lighter", "more like the second one"), and don't suggest the same titles again unless asked.
 Reply with JSON only, no markdown:
-{"offTopic": false, "service": null, "message": "2-3 warm, chatty sentences, like a friend who loves films: why these fit what they asked for, with a little enthusiasm; no spoilers or titles by name (as some may not be shown) unless answering a question about a particular title or its ending, no lists", "titles": [{"title": "its widely known English or original title, in the Latin alphabet where one exists, whatever language the reply is in", "year": 2014, "type": "movie" or "tv", "language": "its original language as an ISO 639-1 code, e.g. en, ml, ko"}]}''';
+{"offTopic": false, "service": null, "message": "usually 2-3 warm, chatty sentences, like a friend who loves films: why these fit what they asked for, with a little enthusiasm; no spoilers or titles by name (as some may not be shown) unless answering a question about a particular title or its ending, no lists. When they asked to be spoiled, the full spoiler instead, as long as the story needs", "titles": [{"title": "its widely known English or original title, in the Latin alphabet where one exists, whatever language the reply is in", "year": 2014, "type": "movie" or "tv", "language": "its original language as an ISO 639-1 code, e.g. en, ml, ko"}]}''';
 
   final Dio _dio = Dio(BaseOptions(connectTimeout: const Duration(seconds: 10)));
 
@@ -116,8 +126,10 @@ Reply with JSON only, no markdown:
   // asked; see [_instructions]).
   static const _maxTitles = 20;
 
-  // How many earlier questions and answers go with a new one.
-  static const _historyTurns = 3;
+  // How many earlier questions and answers go with a new one: the whole of
+  // a usual chat, so a follow-up can refer back to anything in it. New
+  // chat (AskScreen) starts over.
+  static const _historyTurns = 12;
 
   /// Asks for suggestions for [request], following on from [history] —
   /// the earlier questions in the conversation and their answers, oldest
@@ -352,6 +364,7 @@ Reply with JSON only, no markdown:
 
   // Refuses a question once today's limit is used up.
   Future<void> _checkLimit() async {
+    if (_ownKey) return;
     final (_, _, count) = await _todaysCount();
     if (count >= _dailyLimit) {
       throw const AiUnavailable(
@@ -361,6 +374,7 @@ Reply with JSON only, no markdown:
 
   // Counts an answered question against today's limit.
   Future<void> _countQuestion() async {
+    if (_ownKey) return;
     final (prefs, today, count) = await _todaysCount();
     await prefs.setString(_countKey, '$today|${count + 1}');
   }

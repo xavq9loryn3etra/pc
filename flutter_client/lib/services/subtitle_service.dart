@@ -20,6 +20,10 @@ class SubtitleTrackData {
   /// made for this very file, so in time with it.
   final bool matchesFile;
 
+  /// For Sinhala made from English subtitles (SubtitleTranslator): the
+  /// English track it's translated from. Its [url] is only a name then.
+  final SubtitleTrackData? translatedFrom;
+
   SubtitleTrackData({
     required this.id,
     required this.url,
@@ -29,6 +33,7 @@ class SubtitleTrackData {
     this.releaseName,
     this.releaseGroup,
     this.matchesFile = false,
+    this.translatedFrom,
   });
 
   factory SubtitleTrackData.fromJson(Map<String, dynamic> json) {

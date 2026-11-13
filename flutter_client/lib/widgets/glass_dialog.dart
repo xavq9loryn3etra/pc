@@ -157,14 +157,14 @@ Future<bool> showGlassConfirm(
           Row(
             children: [
               Expanded(
-                child: _DialogButton(
+                child: GlassDialogButton(
                   label: cancelLabel,
                   onTap: () => Navigator.pop(dialogContext, false),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: _DialogButton(
+                child: GlassDialogButton(
                   label: confirmLabel,
                   primary: true,
                   destructive: destructive,
@@ -210,13 +210,16 @@ class GlassPanel extends StatelessWidget {
 
 /// A dialog's pill button: frosted for the secondary choice, solid white
 /// for the main one (red text when [destructive]).
-class _DialogButton extends StatelessWidget {
+/// A button in a glass dialog: plain, or [primary] (filled), or
+/// [destructive] (red).
+class GlassDialogButton extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
   final bool primary;
   final bool destructive;
 
-  const _DialogButton({
+  const GlassDialogButton({
+    super.key,
     required this.label,
     required this.onTap,
     this.primary = false,

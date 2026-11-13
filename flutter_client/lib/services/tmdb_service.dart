@@ -250,13 +250,14 @@ class TMDBService {
   // UI: those written in the Latin alphabet (e.g. Lupin's French "LUPIN"),
   // and Indian ones, whose films' logos are nearly always in English
   // letters even when tagged with the film's language (Trance, KGF,
-  // Kantara, Devara, Maharaja…).
+  // Kantara, Devara, Maharaja…). Sinhala too, for viewers in Sri Lanka:
+  // Neera's only logo is tagged Sinhala.
   static const _readableLogoLanguages = {
     'fr', 'es', 'de', 'it', 'pt', 'nl', 'sv', 'da', 'no', 'nb', 'nn', 'fi',
     'is', 'pl', 'cs', 'sk', 'sl', 'hr', 'bs', 'sr', 'hu', 'ro', 'tr', 'et',
     'lv', 'lt', 'ga', 'cy', 'ca', 'eu', 'gl', 'id', 'ms', 'tl', 'vi', 'sq',
     'af', 'sw', 'mt', 'lb',
-    'hi', 'ml', 'ta', 'te', 'kn', 'bn', 'mr', 'pa', 'gu', 'or',
+    'hi', 'ml', 'ta', 'te', 'kn', 'bn', 'mr', 'pa', 'gu', 'or', 'si',
   };
 
   /// Details are fetched with English / language-neutral images only, so a

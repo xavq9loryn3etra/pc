@@ -11,19 +11,19 @@ workflows:
     scripts:
       - name: Get dependencies
         script: |
-          cd apps/flutter_client
+          cd flutter_client
           flutter pub get
       - name: Analyze and test
         script: |
-          cd apps/flutter_client
+          cd flutter_client
           flutter analyze --no-fatal-infos
           flutter test
       - name: Build Android Release
         script: |
-          cd apps/flutter_client
+          cd flutter_client
           flutter build apk --release --dart-define=GEMINI_API_KEY=$GEMINI_API_KEY
     artifacts:
-      - apps/flutter_client/build/app/outputs/flutter-apk/*.apk
+      - flutter_client/build/app/outputs/flutter-apk/*.apk
 
   windows-workflow:
     name: Windows Release
@@ -36,14 +36,14 @@ workflows:
     scripts:
       - name: Get dependencies
         script: |
-          cd apps/flutter_client
+          cd flutter_client
           flutter pub get
       - name: Build Windows Release
         script: |
-          cd apps/flutter_client
+          cd flutter_client
           flutter build windows --release --dart-define=GEMINI_API_KEY=$GEMINI_API_KEY
     artifacts:
-      - apps/flutter_client/build/windows/runner/Release/*.exe
+      - flutter_client/build/windows/runner/Release/*.exe
 
   ios-workflow:
     name: iOS TestFlight Release
@@ -72,19 +72,19 @@ workflows:
           xcode-project use-profiles
       - name: Get dependencies
         script: |
-          cd apps/flutter_client
+          cd flutter_client
           flutter pub get
       - name: Install Pods
         script: |
-          cd apps/flutter_client/ios
+          cd flutter_client/ios
           pod install
       - name: Build IPA for TestFlight
         script: |
-          cd apps/flutter_client
+          cd flutter_client
           # This command now has the certificates it needs in the keychain
           flutter build ipa --release --export-options-plist=$HOME/export_options.plist --dart-define=GEMINI_API_KEY=$GEMINI_API_KEY
     artifacts:
-      - apps/flutter_client/build/ios/ipa/*.ipa
+      - flutter_client/build/ios/ipa/*.ipa
     publishing:
       app_store_connect:
         auth: integration

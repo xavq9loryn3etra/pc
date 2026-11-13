@@ -14,7 +14,7 @@ permissions:
 env:
   LIBTORRENT_VERSION: v2.0.11
   BOOST_VERSION: 1.86.0
-  NATIVE_DIR: apps/flutter_client/packages/libtorrent_flutter/native
+  NATIVE_DIR: flutter_client/packages/libtorrent_flutter/native
 
 jobs:
   android:

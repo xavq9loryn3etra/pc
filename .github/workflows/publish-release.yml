@@ -17,7 +17,7 @@ name: Publish release
 on:
   push:
     branches: [main]
-    paths: ['apps/flutter_client/pubspec.yaml']
+    paths: ['flutter_client/pubspec.yaml']
   workflow_dispatch:
 
 permissions:
@@ -28,7 +28,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APP_DIR: apps/flutter_client
+  APP_DIR: flutter_client
   RELEASE_REPO: popcorn-organization/popcorn
   FLUTTER_VERSION: '3.44.6'
 

@@ -1,7 +1,7 @@
 # Flutter client audit — implementation brief
 
 Scope: torrent engine, stream resolution, video player, app shell. Music and book modes are excluded.
-All paths are relative to `apps/flutter_client/`. Line numbers were correct on 2026-11-11 (build 52); re-locate by symbol name if they have drifted.
+All paths are relative to `flutter_client/`. Line numbers were correct on 2026-11-11 (build 52); re-locate by symbol name if they have drifted.
 
 **Status of this document**
 

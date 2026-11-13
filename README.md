@@ -1,28 +1,30 @@
-# Popcorn Monorepo
+# Popcorn
 
-## Versioning & Synchronization
-This project uses the Flutter app's `pubspec.yaml` as the absolute source of truth for application versioning.
+The Popcorn app for Android, Windows and iOS, built with Flutter.
 
-To update the version across **all** apps (root and Flutter app):
-1. Update the version value in `apps/flutter_client/pubspec.yaml` (e.g., `1.1.0+21`).
-2. Run the synchronization script from the terminal in the root folder (`p:\PERSONAL\IDEAS\pc`):
-   ```bash
-   npm run sync-version
-   ```
-3. The script will automatically evaluate the version, strip the build number (`+21`), and update the root `package.json` with the base version (`1.1.0`).
+## Project structure
 
-## Development Commands
+- `flutter_client/`: the Flutter app.
+- `docs/flags.json`: remote settings the app reads from GitHub Pages (required version, update link, maintenance mode).
+- `.github/workflows/`: builds, tests and releases.
 
-### 📱 Mobile (Flutter)
-Run these from the **`apps/flutter_client`** folder:
-*   **Run App**: `flutter run`
-*   **Get Packages**: `flutter pub get`
-*   **Generate Launcher Icons**: 
-    ```bash
-    dart run flutter_launcher_icons
-    ```
-    *(Generates Android, iOS, and Windows app icons from `assets/icon.png` and `assets/icon-transparent.png`)*
+The download website and published releases live in a separate public repository: [popcorn-organization/popcorn](https://github.com/popcorn-organization/popcorn) ([website](https://popcorn-organization.github.io/popcorn/)).
 
-## Project Structure
-*   `apps/flutter_client`: Flutter app (Android, iOS, Windows).
-*   `sync-version.js`: Synchronization script for monorepo versioning.
+## Releasing a new version
+
+1. Raise `version:` in `flutter_client/pubspec.yaml` (e.g. `3.0.1+53` to `3.0.2+54`).
+2. Push to `main`.
+
+GitHub then builds the Android APK and the Windows installer, publishes them as the latest release, and once that succeeds updates `docs/flags.json` so the app asks older versions to update.
+
+## Development
+
+Run these from the `flutter_client` folder:
+
+- **Run the app**: `flutter run --dart-define-from-file=secrets.json`
+- **Get packages**: `flutter pub get`
+- **Build the Android APK**: `flutter build apk --release --dart-define-from-file=secrets.json`
+- **Build the Windows installer**: `powershell -ExecutionPolicy Bypass -File windows\installer\build_installer.ps1`
+- **Generate launcher icons**: `dart run flutter_launcher_icons` (from `assets/icon.png` and `assets/icon-transparent.png`)
+
+`secrets.json` (git-ignored) holds `GEMINI_API_KEY`. Android release builds are signed with the key referenced by `android/key.properties` (git-ignored).

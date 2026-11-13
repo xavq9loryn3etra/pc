@@ -1,6 +1,6 @@
 # Builds Popcorn-Setup-<version>.exe for Windows.
 #
-# From apps/flutter_client:
+# From flutter_client:
 #   powershell -ExecutionPolicy Bypass -File windows\installer\build_installer.ps1
 # Add -SkipBuild to package the app already in build\windows\x64\runner\Release.
 #

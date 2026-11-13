@@ -159,8 +159,11 @@ jobs:
           VERSION: ${{ needs.check.outputs.version }}
         run: |
           ls -l dist
+          # When it was released, in the users' time (Sri Lanka).
+          released_day="$(TZ=Asia/Colombo date '+%-d %B %Y')"
+          released_at="$(TZ=Asia/Colombo date '+%-d %B %Y at %-I:%M %p')"
           cat > notes.md <<EOF
-          **Popcorn $VERSION**
+          **Popcorn $VERSION**, released on $released_at (Sri Lanka time).
 
           - **Android:** download **Popcorn-Android.apk** below and open it on your phone.
           - **Windows:** download **Popcorn-Windows-Setup.exe** below and run it. If Windows says it protected your PC, click **More info**, then **Run anyway**.
@@ -171,6 +174,22 @@ jobs:
           EOF
           gh release create "v$VERSION" dist/Popcorn-Android.apk dist/Popcorn-Windows-Setup.exe \
             -R "$RELEASE_REPO" \
-            --title "Popcorn $VERSION" \
+            --title "Popcorn $VERSION · $released_day" \
             --notes-file notes.md \
             --latest
+          # The download page's "Latest version" line (between its markers).
+          readme="$(gh api "repos/$RELEASE_REPO/contents/README.md")"
+          sha="$(echo "$readme" | jq -r .sha)"
+          echo "$readme" | jq -r .content | base64 -d > README.md
+          line="**Latest version: $VERSION**, released on $released_at (Sri Lanka time)."
+          awk -v line="$line" '
+            /<!-- latest -->/ { print; print line; skip = 1; next }
+            /<!-- \/latest -->/ { skip = 0 }
+            !skip { print }
+          ' README.md > README.new
+          if ! cmp -s README.md README.new; then
+            gh api -X PUT "repos/$RELEASE_REPO/contents/README.md" \
+              -f message="Latest version: $VERSION" \
+              -f content="$(base64 -w0 README.new)" \
+              -f sha="$sha" > /dev/null
+          fi

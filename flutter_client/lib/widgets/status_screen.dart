@@ -2,13 +2,14 @@ import 'package:flutter/material.dart';
 import 'glass_blur.dart';
 
 import '../theme/iridescent.dart';
-import 'poster_wall.dart';
+import 'frosted_logo_layout.dart';
 
 /// Full-screen, app-wide status page (update required, maintenance,
-/// offline). Deliberately not tied to any one mode: it sits on the welcome
-/// screen's poster wall and uses the app's iridescent finish (which blends
-/// all three mode accents) in its headline, so it fits whichever mode it
-/// appears over.
+/// offline). Deliberately not tied to any one mode: it has the welcome
+/// screen's look — the frosted poster wall with the app's icon cut out,
+/// the words beside it on a wide window (FrostedLogoLayout) — and the
+/// app's iridescent finish (which blends all three mode accents) in its
+/// headline, so it fits whichever mode it appears over.
 class StatusScreen extends StatefulWidget {
   /// Bundled (see pubspec `fonts:`), not fetched via google_fonts — the
   /// offline screen has to render it without a connection.
@@ -54,72 +55,46 @@ class _StatusScreenState extends State<StatusScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
+    return FrostedLogoLayout(
+      opacity: _fade,
+      details: (context, sideBySide, large) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment:
+            sideBySide ? CrossAxisAlignment.start : CrossAxisAlignment.center,
         children: [
-          const Positioned.fill(child: PosterWall()),
-
-          // Darker than the welcome screen's fade, so the wall reads as a
-          // backdrop and the message stays the focus.
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: 0.88),
-                    Colors.black.withValues(alpha: 0.6),
-                    Colors.black.withValues(alpha: 0.88),
-                    Colors.black.withValues(alpha: 0.98),
-                    Colors.black,
-                  ],
-                  stops: const [0.0, 0.28, 0.48, 0.66, 0.82],
-                ),
-              ),
+          Text(
+            widget.title,
+            textAlign: sideBySide ? TextAlign.start : TextAlign.center,
+            style: TextStyle(
+              fontSize: large ? 44 : 28,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+              letterSpacing: large ? -1 : -0.5,
             ),
           ),
-
-          SafeArea(
-            child: FadeTransition(
-              opacity: _fade,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(32, 24, 32, 32),
-                child: Column(
-                  children: [
-                    const Spacer(),
-                    Text(
-                      widget.title,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                    IridescentScriptText(widget.highlight),
-                    const SizedBox(height: 16),
-                    Text(
-                      widget.message,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.white.withValues(alpha: 0.6),
-                        height: 1.5,
-                      ),
-                    ),
-                    if (widget.footer != null) ...[
-                      const SizedBox(height: 32),
-                      widget.footer!,
-                    ],
-                    const SizedBox(height: 16),
-                  ],
-                ),
-              ),
+          // Pulled back beside the logo so it starts flush with the title
+          // (its padding keeps the swashes inside the colour).
+          Transform.translate(
+            offset: Offset(sideBySide ? -16 : 0, 0),
+            child: IridescentScriptText(
+              widget.highlight,
+              fontSize: large ? 64 : 44,
             ),
           ),
+          SizedBox(height: large ? 20 : 12),
+          Text(
+            widget.message,
+            textAlign: sideBySide ? TextAlign.start : TextAlign.center,
+            style: TextStyle(
+              fontSize: large ? 18 : 14,
+              color: Colors.white.withValues(alpha: 0.7),
+              height: 1.5,
+            ),
+          ),
+          if (widget.footer != null) ...[
+            SizedBox(height: large ? 40 : 32),
+            widget.footer!,
+          ],
         ],
       ),
     );
@@ -162,7 +137,9 @@ class IridescentScriptText extends StatelessWidget {
 /// screens aren't tied to any one mode's accent.
 class StatusPrimaryButton extends StatelessWidget {
   final String label;
-  final VoidCallback onPressed;
+
+  /// Null while it can't be pressed (e.g. "Downloading… 45%").
+  final VoidCallback? onPressed;
 
   const StatusPrimaryButton({
     super.key,
@@ -184,6 +161,8 @@ class StatusPrimaryButton extends StatelessWidget {
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.white,
             foregroundColor: Colors.black,
+            disabledBackgroundColor: Colors.white.withValues(alpha: 0.75),
+            disabledForegroundColor: Colors.black.withValues(alpha: 0.7),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),

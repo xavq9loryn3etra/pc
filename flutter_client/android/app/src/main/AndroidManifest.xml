@@ -9,6 +9,9 @@
          the app is backgrounded during playback; see flutter_foreground_task. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Installing an update from the app's update screen (Android asks the
+         user once to allow it; see lib/services/update_installer.dart). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application
         android:label="Popcorn"
         android:name="${applicationName}"
@@ -49,6 +52,17 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Hands the downloaded update to Android's installer. -->
+        <provider
+            android:name=".UpdateFileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_paths" />
+        </provider>
 
         <!-- flutter_foreground_task's service. Do not change the name.
              stopWithTask: swiping the app away ends it, rather than the

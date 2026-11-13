@@ -35,6 +35,7 @@ import 'services/trending_service.dart';
 import 'services/smooth_wheel_binding.dart';
 import 'services/visual_effects_service.dart';
 import 'services/window_full_screen.dart';
+import 'services/update_installer.dart';
 import 'services/windows_app_folder.dart';
 
 void main() async {
@@ -124,6 +125,8 @@ void main() async {
   // awaited: nothing at startup depends on it.
   unawaited(_initStep(
       'BackgroundDownloadService', BackgroundDownloadService.instance.stop));
+  // An update downloaded from the update screen: installed by now.
+  unawaited(_initStep('UpdateInstaller', UpdateInstaller.cleanUp));
   // Not awaited: this spins up the native libtorrent engine (DHT bootstrap,
   // tracker connections), which isn't needed until the user actually starts
   // streaming something. Awaiting it here delayed the first frame on every

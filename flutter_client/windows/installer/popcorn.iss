@@ -72,6 +72,9 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; An update started from the app's update screen runs silently and closes
+; Popcorn (lib/services/update_installer.dart): open the new version.
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: RelaunchAfterUpdate
 
 [UninstallRun]
 ; A running copy holds its files open; closed first so they can all go.
@@ -91,3 +94,10 @@ Type: filesandordirs; Name: "{%TEMP}\libCachedImageData"
 Type: files; Name: "{%TEMP}\popcorn_sub_*"
 Type: files; Name: "{%TEMP}\current_book.epub"
 Type: files; Name: "{%TEMP}\poster_*.jpg"
+
+[Code]
+// Run by the app as "/VERYSILENT ... /relaunch=yes".
+function RelaunchAfterUpdate: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:relaunch|no}') = 'yes');
+end;

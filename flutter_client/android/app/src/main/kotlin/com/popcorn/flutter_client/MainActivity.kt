@@ -4,16 +4,20 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.os.StatFs
+import android.provider.Settings
 import android.telephony.TelephonyManager
 import android.view.WindowManager
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,6 +54,44 @@ class MainActivity : FlutterActivity() {
                         result.success(StatFs(call.argument<String>("path")).availableBytes)
                     } catch (e: Exception) {
                         result.success(null)
+                    }
+                } else if (call.method == "canInstallPackages") {
+                    // Installing an update (see UpdateInstaller): Android 8+
+                    // wants the user to allow it once.
+                    result.success(
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+                            packageManager.canRequestPackageInstalls()
+                    )
+                } else if (call.method == "openInstallPermission") {
+                    try {
+                        startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:$packageName")
+                            )
+                        )
+                        result.success(null)
+                    } catch (e: Exception) {
+                        result.error("unavailable", e.message, null)
+                    }
+                } else if (call.method == "installApk") {
+                    // Android's own installer, which asks to confirm.
+                    try {
+                        val file = File(call.argument<String>("path")!!)
+                        val uri = FileProvider.getUriForFile(
+                            this, "$packageName.updates", file
+                        )
+                        startActivity(
+                            Intent(Intent.ACTION_VIEW)
+                                .setDataAndType(uri, "application/vnd.android.package-archive")
+                                .addFlags(
+                                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                        Intent.FLAG_ACTIVITY_NEW_TASK
+                                )
+                        )
+                        result.success(null)
+                    } catch (e: Exception) {
+                        result.error("install_failed", e.message, null)
                     }
                 } else {
                     result.notImplemented()

@@ -970,6 +970,12 @@ class _PlayerScreenState extends State<PlayerScreen>
       setState(() => _isMediaOpening = false);
       print('[timing] video playing ${_openingStopwatch.elapsedMilliseconds} '
           'ms after the player opened it');
+      // Started on a small read-ahead so the first pieces came first (see
+      // TorrentEngineService.startupStreamCacheBytes): now fetch ahead fully.
+      if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.paused) {
+        TorrentEngineService.instance.setStreamCacheCapacity(
+            _streamId, TorrentEngineService.defaultStreamCacheBytes);
+      }
       _fingerprintSubtitles();
       // Loaded: now the controls can start counting down to hide.
       _resetControlsTimer();

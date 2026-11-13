@@ -29,6 +29,14 @@ class TorrentEngineService {
   /// stream is allowed to buffer. See [setStreamCacheCapacity].
   static const int defaultStreamCacheBytes = 500 * 1024 * 1024; // 500 MB
 
+  /// What a stream may fetch ahead until its video is playing (or for a
+  /// head start): the engine's minimum read-ahead. At [defaultStreamCacheBytes]
+  /// from the start, a whole small file was wanted at once, and on a thin
+  /// swarm (one peer) the few pieces the player needed to begin shared the
+  /// connection with all the rest — an SD episode took ~55 s to start. The
+  /// player raises it once the video plays (see setStreamCacheCapacity).
+  static const int startupStreamCacheBytes = 16 * 1024 * 1024; // 16 MB
+
   // The start in progress, so callers arriving meanwhile wait for it
   // instead of starting the engine a second time.
   Future<void>? _initializing;
@@ -397,7 +405,7 @@ class TorrentEngineService {
     final stream = engine.startStream(
       id,
       fileIndex: fileIndex,
-      maxCacheBytes: defaultStreamCacheBytes,
+      maxCacheBytes: startupStreamCacheBytes,
     );
 
     // Preload head + tail of the file (TorrServer-style) so the player's
@@ -593,7 +601,7 @@ class TorrentEngineService {
       final stream = engine.startStream(
         id,
         fileIndex: index,
-        maxCacheBytes: defaultStreamCacheBytes,
+        maxCacheBytes: startupStreamCacheBytes,
       );
       if (!resuming && !small) engine.preloadStream(stream.id);
       _warmStreams[id] = stream;

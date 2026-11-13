@@ -171,53 +171,76 @@ class _UpdateOverlayState extends State<UpdateOverlay>
         ),
     };
 
+    final noteStyle = TextStyle(
+      fontSize: 13,
+      height: 1.4,
+      color: Colors.white.withValues(alpha: 0.6),
+    );
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         StatusPrimaryButton(label: label, onPressed: onPressed),
-        if (_step == _Step.downloading) ...[
-          const SizedBox(height: 14),
-          ConstrainedBox(
+        // Always this tall, whatever's in it (nothing, the progress bar, a
+        // note of up to two lines): the words above don't shift as it
+        // changes.
+        SizedBox(
+          height: 64,
+          child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 400),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(2),
-              child: LinearProgressIndicator(
-                value: _progress,
-                minHeight: 4,
-                color: Colors.white,
-                backgroundColor: Colors.white.withValues(alpha: 0.15),
+            child: Padding(
+              padding: const EdgeInsets.only(top: 14),
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: _step == _Step.downloading
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(2),
+                        child: LinearProgressIndicator(
+                          value: _progress,
+                          minHeight: 4,
+                          color: Colors.white,
+                          backgroundColor:
+                              Colors.white.withValues(alpha: 0.15),
+                        ),
+                      )
+                    : note == null
+                        ? const SizedBox.shrink()
+                        : Text.rich(
+                            TextSpan(children: [
+                              TextSpan(text: note),
+                              // The website, when the download failed.
+                              if (_step == _Step.failed && _hasValidUrl) ...[
+                                const TextSpan(text: ' Or '),
+                                WidgetSpan(
+                                  alignment: PlaceholderAlignment.baseline,
+                                  baseline: TextBaseline.alphabetic,
+                                  child: GestureDetector(
+                                    onTap: _openWebsite,
+                                    child: MouseRegion(
+                                      cursor: SystemMouseCursors.click,
+                                      child: Text(
+                                        'download it from the website',
+                                        style: noteStyle.copyWith(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.85),
+                                          decoration: TextDecoration.underline,
+                                          decorationColor: Colors.white
+                                              .withValues(alpha: 0.85),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const TextSpan(text: '.'),
+                              ],
+                            ]),
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            style: noteStyle,
+                          ),
               ),
             ),
           ),
-        ],
-        if (note != null) ...[
-          const SizedBox(height: 14),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 400),
-            child: Text(
-              note,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.4,
-                color: Colors.white.withValues(alpha: 0.6),
-              ),
-            ),
-          ),
-        ],
-        if (_step == _Step.failed && _hasValidUrl)
-          TextButton(
-            onPressed: _openWebsite,
-            child: Text(
-              'Or download it from the website',
-              style: TextStyle(
-                fontSize: 13,
-                color: Colors.white.withValues(alpha: 0.85),
-                decoration: TextDecoration.underline,
-                decorationColor: Colors.white.withValues(alpha: 0.85),
-              ),
-            ),
-          ),
+        ),
       ],
     );
   }

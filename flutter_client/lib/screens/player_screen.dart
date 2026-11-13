@@ -1641,8 +1641,14 @@ class _PlayerScreenState extends State<PlayerScreen>
     _controlsTimer?.cancel();
     if (_isPlaying && !_loadingVideo) {
       _controlsTimer = Timer(const Duration(seconds: 4), () {
-        // Not mid-seek either, while its ring is showing.
-        if (mounted && _isPlaying && !_loadingVideo && !_seekPending) {
+        // Not mid-seek either, while its ring is showing — nor while a
+        // menu's open: the seek bar and buttons stay with it (a mouse
+        // moving over the video restarts this timer meanwhile).
+        if (mounted &&
+            _isPlaying &&
+            !_loadingVideo &&
+            !_seekPending &&
+            !_showSettingsPanel) {
           setState(() => _controlsVisible = false);
         }
       });

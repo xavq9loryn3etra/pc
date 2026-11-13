@@ -3361,9 +3361,6 @@ class _PlayerScreenState extends State<PlayerScreen>
       case 'sin':
       case 'si':
         return 'Sinhala';
-      case 'sin':
-      case 'si':
-        return 'Sinhala';
       case 'tam':
       case 'ta':
         return 'Tamil';

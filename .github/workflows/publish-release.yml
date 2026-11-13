@@ -5,7 +5,9 @@ name: Publish release
 # app's version in pubspec.yaml changes on main (e.g. 3.0.0 -> 3.0.1). A
 # version already published is skipped. The new release is marked Latest;
 # earlier ones stay listed below it as the archive. Once it's out, the app
-# requires that version (docs/flags.json), so older copies ask to update.
+# requires that version (docs/flags.json), so older copies ask to update,
+# and this repo is tagged "v<version>", which starts the iPhone build on
+# Codemagic (codemagic.yaml).
 #
 # Secrets (on this repo):
 #   RELEASES_TOKEN   fine-grained token with Contents: read and write on
@@ -227,3 +229,19 @@ jobs:
           done
           # Publish the changed flags on GitHub Pages straight away.
           gh api -X POST "repos/$GITHUB_REPOSITORY/pages/builds" > /dev/null || true
+
+      # The iPhone build: Codemagic's iOS workflow starts on a "v…" tag (see
+      # codemagic.yaml) and sends it to TestFlight.
+      - name: Start the iPhone build
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          cd pc
+          git fetch -q --tags origin
+          if git rev-parse -q --verify "refs/tags/v$VERSION" > /dev/null; then
+            echo "v$VERSION is tagged already."
+          else
+            git tag "v$VERSION" "$GITHUB_SHA"
+            git push -q origin "v$VERSION"
+            echo "Tagged v$VERSION: Codemagic builds it for TestFlight."
+          fi

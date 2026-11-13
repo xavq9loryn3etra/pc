@@ -48,6 +48,16 @@ workflows:
   ios-workflow:
     name: iOS TestFlight Release
     max_build_duration: 120
+    # Started by a release: .github/workflows/publish-release.yml tags this
+    # repo "v<version>" once Android and Windows are published (each
+    # release raises the build number after "+" in pubspec.yaml, which
+    # TestFlight needs new every time). Can still be started by hand.
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: 'v*'
+          include: true
     instance_type: mac_mini_m1
     integrations:
       app_store_connect: "popcorn"

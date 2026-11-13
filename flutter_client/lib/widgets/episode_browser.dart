@@ -564,6 +564,8 @@ class _EpisodeSourcePickerState extends State<_EpisodeSourcePicker> {
   // (what's playing) until another is picked to look at. Only saved once
   // a quality is picked in it (see _choose) — looking changes nothing.
   AudioLanguage? _language;
+  // Audio languages with no copy: greyed out in the picker.
+  Set<AudioLanguage> _noCopiesIn = const {};
 
   @override
   void initState() {
@@ -655,9 +657,33 @@ class _EpisodeSourcePickerState extends State<_EpisodeSourcePicker> {
         title: widget.details,
         audioLanguage: _language,
       );
+      // A language with no copy can't be picked (greyed out in the
+      // picker); listed in one, the qualities move to the other.
+      var noCopiesIn = <AudioLanguage>{};
+      if (AudioLanguageService.appliesTo(widget.details)) {
+        final shown = _language!;
+        final other = shown == AudioLanguage.original
+            ? AudioLanguage.english
+            : AudioLanguage.original;
+        final inOther = await widget.resolver.getAvailableStreams(
+          imdbId: widget.imdbId,
+          type: 'tv',
+          season: widget.season,
+          episode: widget.episode,
+          title: widget.details,
+          audioLanguage: other,
+        );
+        if (!mounted) return;
+        if (list.isEmpty && inOther.isNotEmpty) {
+          _language = other;
+          return _load();
+        }
+        noCopiesIn = {if (list.isEmpty) shown, if (inOther.isEmpty) other};
+      }
       if (mounted) {
         setState(() {
           _streams = list;
+          _noCopiesIn = noCopiesIn;
           _options = StreamResolver.qualityOptions(list,
               preferHash: widget.playingStream?.infoHash);
           _loading = false;
@@ -709,6 +735,7 @@ class _EpisodeSourcePickerState extends State<_EpisodeSourcePicker> {
             AudioLanguagePicker(
               title: widget.details,
               selected: _language,
+              unavailable: _noCopiesIn,
               enabled: !_loading,
               onChanged: _showLanguage,
             ),

@@ -308,12 +308,18 @@ class AudioLanguagePicker extends StatelessWidget {
   final bool enabled;
   final ValueChanged<AudioLanguage> onChanged;
 
+  /// Languages with no copy to play in: shown greyed out, and can't be
+  /// picked (it never plays in another — see
+  /// StreamResolver.getAvailableStreams).
+  final Set<AudioLanguage> unavailable;
+
   const AudioLanguagePicker({
     super.key,
     required this.title,
     required this.onChanged,
     this.selected,
     this.enabled = true,
+    this.unavailable = const {},
   });
 
   @override
@@ -322,27 +328,33 @@ class AudioLanguagePicker extends StatelessWidget {
     final original = AudioLanguageService.originalOf(title);
     Widget chip(AudioLanguage choice, String label) {
       final selected = choice == current;
-      return Material(
-        color: selected
-            ? Colors.white.withValues(alpha: 0.22)
-            : Colors.white.withValues(alpha: 0.06),
-        shape: StadiumBorder(
-          side: BorderSide(
-            color: Colors.white.withValues(alpha: selected ? 0.35 : 0.12),
+      final available = !unavailable.contains(choice);
+      return Opacity(
+        opacity: available ? 1 : 0.35,
+        child: Material(
+          color: selected
+              ? Colors.white.withValues(alpha: 0.22)
+              : Colors.white.withValues(alpha: 0.06),
+          shape: StadiumBorder(
+            side: BorderSide(
+              color: Colors.white.withValues(alpha: selected ? 0.35 : 0.12),
+            ),
           ),
-        ),
-        child: InkWell(
-          mouseCursor: WidgetStateMouseCursor.clickable,
-          customBorder: const StadiumBorder(),
-          onTap: enabled && !selected ? () => onChanged(choice) : null,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: selected ? Colors.white : Colors.white70,
+          child: InkWell(
+            mouseCursor: WidgetStateMouseCursor.clickable,
+            customBorder: const StadiumBorder(),
+            onTap: enabled && available && !selected
+                ? () => onChanged(choice)
+                : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: selected ? Colors.white : Colors.white70,
+                ),
               ),
             ),
           ),
@@ -363,7 +375,8 @@ class AudioLanguagePicker extends StatelessWidget {
               runSpacing: 8,
               // The original first: it's the default, and the title's own.
               children: [
-                chip(AudioLanguage.original,
+                chip(
+                    AudioLanguage.original,
                     original.name == 'Original'
                         ? 'Original'
                         : '${original.name} · Original'),

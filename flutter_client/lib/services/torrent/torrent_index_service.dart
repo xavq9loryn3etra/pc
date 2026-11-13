@@ -30,10 +30,9 @@ class TorrentStream {
   // Part of a season pack (or other multi-file torrent) rather than a
   // torrent of its own — slower to start: its metadata covers every file.
   final bool isPack;
-  // The flags of the audio language wanted (see StreamResolver.
-  // languageRank): null for English, the usual; empty when the language
-  // shouldn't count at all (one the app doesn't know).
-  final Set<String>? wantedFlags;
+  // The audio language wanted, and the title's own (see StreamResolver.
+  // languageRank): null for English, a title made in English.
+  final WantedAudio? wantedAudio;
   // Trackers the finder lists for this particular torrent (Torrentio's
   // "sources") — added to the magnet next to our own general ones, so the
   // engine also asks where this torrent's sharers are known to gather.
@@ -50,13 +49,12 @@ class TorrentStream {
     this.seeders,
     this.languages = '',
     this.isPack = false,
-    this.wantedFlags,
+    this.wantedAudio,
     this.trackers = const [],
   });
 
-  /// This stream, ranked for audio in the language with [flags] (see
-  /// [wantedFlags]).
-  TorrentStream wantingLanguage(Set<String> flags) => TorrentStream(
+  /// This stream, ranked for audio as [wanted] says (see [wantedAudio]).
+  TorrentStream wantingLanguage(WantedAudio wanted) => TorrentStream(
         infoHash: infoHash,
         title: title,
         name: name,
@@ -67,7 +65,7 @@ class TorrentStream {
         seeders: seeders,
         languages: languages,
         isPack: isPack,
-        wantedFlags: flags,
+        wantedAudio: wanted,
         trackers: trackers,
       );
 
@@ -87,7 +85,7 @@ class TorrentStream {
             : seeders,
         languages: languages,
         isPack: isPack,
-        wantedFlags: wantedFlags,
+        wantedAudio: wantedAudio,
         trackers: {...trackers, ...other.trackers}.toList(),
       );
 
@@ -581,4 +579,20 @@ class TorrentIndexService {
     }
     return null; // Every address failed.
   }
+}
+
+/// The audio language a stream is wanted in, for StreamResolver.languageRank:
+/// TMDB codes ("en", "ml") for it and for the language the title was made
+/// in, and the title's name — its words in a release name ("English
+/// Vinglish") don't say what language the audio is in.
+class WantedAudio {
+  final String language;
+  final String titleLanguage;
+  final String titleName;
+
+  const WantedAudio({
+    required this.language,
+    required this.titleLanguage,
+    this.titleName = '',
+  });
 }

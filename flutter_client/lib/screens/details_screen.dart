@@ -2094,6 +2094,8 @@ class _TorrentQualitySelectorSheetState
   // title until another is picked to look at. Only saved once a quality
   // is picked in it (see _selectQuality).
   AudioLanguage? _language;
+  // Audio languages with no copy: greyed out in the picker.
+  Set<AudioLanguage> _noCopiesIn = const {};
 
   @override
   void initState() {
@@ -2155,6 +2157,31 @@ class _TorrentQualitySelectorSheetState
               audioLanguage: _language,
             );
 
+      // A language with no copy can't be picked (greyed out in the
+      // picker); listed in one, the qualities move to the other.
+      var noCopiesIn = <AudioLanguage>{};
+      if (AudioLanguageService.appliesTo(widget.details)) {
+        final shown = _language ?? AudioLanguageService().of(widget.details);
+        final other = shown == AudioLanguage.original
+            ? AudioLanguage.english
+            : AudioLanguage.original;
+        final inOther = await widget.resolver.getAvailableStreams(
+          imdbId: widget.imdbId,
+          type: widget.type,
+          season: widget.season,
+          episode: widget.episode,
+          title: widget.details,
+          audioLanguage: other,
+        );
+        if (!mounted) return;
+        if (list.isEmpty && inOther.isNotEmpty) {
+          _language = other;
+          _languageChanged = true;
+          return _loadStreams();
+        }
+        noCopiesIn = {if (list.isEmpty) shown, if (inOther.isEmpty) other};
+      }
+
       if (mounted) {
         // The resolver sorts its overall pick first — that's the quality
         // to recommend. (Read before the last-played reordering below.)
@@ -2172,6 +2199,7 @@ class _TorrentQualitySelectorSheetState
 
         setState(() {
           _streams = list;
+          _noCopiesIn = noCopiesIn;
           _options = StreamResolver.qualityOptions(
             list,
             preferHash: _lastPlayedHash,
@@ -2551,6 +2579,7 @@ class _TorrentQualitySelectorSheetState
               child: AudioLanguagePicker(
                 title: widget.details,
                 selected: _language,
+                unavailable: _noCopiesIn,
                 enabled: !_loading && _startingOption == null,
                 onChanged: _showLanguage,
               ),

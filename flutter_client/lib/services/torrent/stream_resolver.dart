@@ -100,37 +100,34 @@ class StreamResolver {
     // Fan edits only when there's nothing else.
     final unedited = streams.where((s) => !_isCustomEdit(s, title)).toList();
     if (unedited.isNotEmpty) streams = unedited;
-    // English audio is preferred for titles made in English. For one made
-    // in another language, the audio chosen for it (AudioLanguageService,
-    // the original by default): for, say, a Tamil film, an untagged
-    // (assumed English) copy with 11 sharers otherwise outranked the Tamil
-    // one with 235, and every fallback attempt went to barely-shared
-    // copies.
-    if (title != null && AudioLanguageService.appliesTo(title)) {
+    // English audio for titles made in English. For one made in another
+    // language, the audio chosen for it (AudioLanguageService, the
+    // original by default): for, say, a Tamil film, an untagged (assumed
+    // English) copy with 11 sharers otherwise outranked the Tamil one with
+    // 235, and every fallback attempt went to barely-shared copies.
+    if (title != null) {
       final languages = AudioLanguageService();
       await languages.ensureLoaded();
-      // Set either way, English included: for such a title, a copy that
-      // doesn't say its language isn't assumed to be in the one wanted
-      // (see languageRank) — so one that says it is comes first.
-      final flags =
-          (audioLanguage ?? languages.of(title)) == AudioLanguage.original
-              ? AudioLanguageService.originalOf(title).flags
-              : SpokenLanguage.english.flags;
-      streams = [for (final s in streams) s.wantingLanguage(flags)];
+      final choice = AudioLanguageService.appliesTo(title);
+      final own = choice ? title.originalLanguage! : 'en';
+      final wanted = choice &&
+              (audioLanguage ?? languages.of(title)) == AudioLanguage.original
+          ? own
+          : 'en';
+      final audio = WantedAudio(
+          language: wanted, titleLanguage: own, titleName: title.title);
+      streams = [for (final s in streams) s.wantingLanguage(audio)];
     }
 
-    // A quality whose every copy is in another language isn't offered —
-    // when there are copies in the wanted one at all: The Mentalist's only
-    // SD copies were Russian, French and Italian ones, and SD played
-    // Russian.
-    final tiersInLanguage = {
-      for (final s in streams)
-        if (languageRank(s) < 2) tierOf(s),
-    };
-    if (tiersInLanguage.isNotEmpty) {
-      streams =
-          streams.where((s) => tiersInLanguage.contains(tierOf(s))).toList();
-    }
+    // Never a copy in another language — as on Netflix, it plays in the
+    // language chosen or not at all. Every pick is made from this list (a
+    // quality, a start's fallbacks, stall recovery, the next episode, the
+    // copy last played when resuming), so none can land on a dub: The
+    // Mentalist's only SD copies were Russian, French and Italian ones, and
+    // SD played Russian; Back to the Future Part II, its English copies
+    // short of disk space, fell back to a dub and kept resuming in it.
+    // No copy in the language: nothing to play.
+    streams = streams.where((s) => languageRank(s) < 2).toList();
 
     final recommendedTier = _recommendedTierRank(streams);
     streams.sort((a, b) =>
@@ -389,9 +386,85 @@ class StreamResolver {
         sizePenalty;
   }
 
-  /// Flags that mean English audio. Change these to prefer another
-  /// language.
-  static const _preferredFlags = {'🇬🇧', '🇺🇸'};
+  /// Flags that say which language the audio is in, by TMDB code. Not
+  /// India's or China's: those stand for several (Torrentio marks Hindi,
+  /// Tamil and Telugu all with India's — see [_maybeByFlag]).
+  static const _flagLanguages = {
+    '🇬🇧': 'en', '🇺🇸': 'en', '🇩🇪': 'de', '🇫🇷': 'fr', '🇪🇸': 'es',
+    '🇲🇽': 'es', '🇮🇹': 'it', '🇵🇹': 'pt', '🇧🇷': 'pt', '🇷🇺': 'ru',
+    '🇯🇵': 'ja', '🇰🇷': 'ko', '🇱🇰': 'si',
+  };
+
+  /// Flags that stand for one of several languages.
+  static const _maybeByFlag = {
+    '🇮🇳': {'hi', 'ta', 'te'},
+    '🇨🇳': {'zh', 'cn'},
+    '🇹🇼': {'zh', 'cn'},
+    '🇭🇰': {'zh', 'cn'},
+  };
+
+  /// Words in release names that say which language the audio is in, by
+  /// TMDB code: the full name anywhere, any case; the short code ("HIN",
+  /// "MAL") in capitals, or any case inside brackets ("[ Hin Mal ]").
+  static const _audioNames = <(String, String, String?)>[
+    ('en', 'English', 'ENG'),
+    ('hi', 'Hindi', 'HIN'),
+    ('ml', 'Malayalam', 'MAL'),
+    ('ta', 'Tamil', 'TAM'),
+    ('te', 'Telugu', 'TEL'),
+    ('kn', 'Kannada', 'KAN'),
+    ('bn', 'Bengali', null),
+    ('mr', 'Marathi', null),
+    ('si', 'Sinhala', null),
+    ('de', 'German|Deutsch', 'GER'),
+    ('fr', 'French|TrueFrench|VFF|VFQ|VF2', 'FRE'),
+    ('es', 'Spanish|Castellano|Latino', 'SPA|ESP'),
+    ('it', 'Italian', 'ITA'),
+    ('pt', 'Portuguese', 'POR'),
+    ('ru', 'Russian', 'RUS'),
+    ('ja', 'Japanese', 'JPN|JAP'),
+    ('ko', 'Korean', 'KOR'),
+    ('zh', 'Chinese|Mandarin', 'CHI'),
+    ('cn', 'Cantonese', null),
+  ];
+
+  static RegExp _word(String words, {bool anyCase = true}) => RegExp(
+      // Not when it's the subtitles' language ("English Subs", "ENG-SUB").
+      '(?<![A-Za-z])(?:$words)(?![A-Za-z])(?![ ._-]?[Ss][Uu][Bb])',
+      caseSensitive: !anyCase);
+
+  static final _audioPatterns = [
+    for (final (code, full, short) in _audioNames)
+      (
+        code,
+        _word(full),
+        short == null ? null : _word(short, anyCase: false),
+        short == null ? null : _word(short),
+      ),
+  ];
+
+  static final _bracketed = RegExp(r'\[[^\]]*\]|\([^)]*\)');
+  static final _multiInName =
+      RegExp(r'(?<![A-Za-z])(multi|dual)[ ._-]?audio', caseSensitive: false);
+
+  /// The languages [stream]'s release name says its audio is in (TMDB
+  /// codes) — leaving out the title's own words.
+  static Set<String> audioNamedIn(TorrentStream stream) {
+    var name = stream.name.replaceAll(RegExp(r'[._]'), ' ');
+    final titleName = stream.wantedAudio?.titleName.trim() ?? '';
+    if (titleName.isNotEmpty) {
+      name = name.replaceAll(
+          RegExp(RegExp.escape(titleName), caseSensitive: false), ' ');
+    }
+    final bracketed = _bracketed.allMatches(name).map((m) => m[0]!).join(' ');
+    return {
+      for (final (code, full, short, shortAnyCase) in _audioPatterns)
+        if (full.hasMatch(name) ||
+            (short?.hasMatch(name) ?? false) ||
+            (shortAnyCase?.hasMatch(bracketed) ?? false))
+          code,
+    };
+  }
 
   static final _flagPattern =
       RegExp(r'[\u{1F1E6}-\u{1F1FF}]{2}', unicode: true);
@@ -419,31 +492,56 @@ class StreamResolver {
     return flagsOf(stream).length == 1 || !isAvi(stream);
   }
 
-  /// How well [stream]'s audio suits the language wanted (English, or the
-  /// one in [TorrentStream.wantedFlags]), from Torrentio's languages line
-  /// ([TorrentStream.languages]) — lower is better:
-  ///  0 — that language only: only its flags — or unmarked, for a title
-  ///      made in English (the usual case: unmarked means English)
-  ///  1 — that language among others, which may play by default (the
-  ///      player asks for it first, see PlayerScreen); or unmarked, for a
-  ///      title made in another language ([TorrentStream.wantedFlags]
-  ///      set): it might be in either. Dark's unmarked Full HD copy was
-  ///      the pick in German and in English alike, over ones marked
-  ///      "German" or "Dual Audio German + English"
-  ///  2 — not that language at all — or among others in an AVI file,
-  ///      whose soundtracks the player can't tell apart (The Mentalist's
-  ///      Russian "rus + eng" DVD rip played its Russian dub)
+  /// How well [stream]'s audio suits the language wanted
+  /// ([TorrentStream.wantedAudio]: English, unless it's a title made in
+  /// another language and that's the one chosen) — lower is better. What
+  /// it's in comes from its flags (Torrentio's languages line) and the
+  /// languages its release name names ([audioNamedIn]):
+  ///  0 — that language only — or, saying nothing, the title's own
+  ///  1 — that language among others, the player picking it (see
+  ///      PlayerScreen's 'alang'); or India's flag alone, wanting Hindi,
+  ///      Tamil or Telugu, which it stands for
+  ///  2 — not that language, or not one the player can pick: several
+  ///      soundtracks in an AVI file. Never offered (see
+  ///      [getAvailableStreams])
   static int languageRank(TorrentStream stream) {
-    final wanted = stream.wantedFlags ?? _preferredFlags;
-    if (wanted.isEmpty) return 0;
+    final wanted = stream.wantedAudio?.language ?? 'en';
+    final own = stream.wantedAudio?.titleLanguage ?? 'en';
     final flags = flagsOf(stream);
-    final multiAudio = _multiAudioPattern.hasMatch(stream.languages);
-    final matching = flags.intersection(wanted);
-    if (flags.isEmpty && !multiAudio) {
-      return stream.wantedFlags == null ? 0 : 1;
+    // The languages it says it's in, by its flags and its name.
+    final heard = {
+      ...audioNamedIn(stream),
+      for (final f in flags)
+        if (_flagLanguages[f] != null) _flagLanguages[f]!,
+    };
+    // One of several, by a flag that stands for more than one — unless
+    // its name says which.
+    final maybe = <String>{
+      for (final f in flags)
+        if (_maybeByFlag[f] case final some? when !heard.any(some.contains))
+          ...some,
+    };
+    final multi = _multiAudioPattern.hasMatch(stream.languages) ||
+        _multiInName.hasMatch(stream.name);
+    // Several soundtracks in an AVI file: the player can't tell which is
+    // which (The Mentalist's Russian "rus + eng" DVD rip played Russian).
+    final several = multi || heard.length + (maybe.isEmpty ? 0 : 1) > 1;
+    final pickable = !(several && isAvi(stream));
+
+    // Says nothing: in the title's own language — or, marked as having
+    // several soundtracks, it among them. Never another: Aavesham's
+    // unmarked Malayalam copies played when English was picked.
+    if (heard.isEmpty && maybe.isEmpty) {
+      if (wanted != own) return 2;
+      if (!multi) return 0;
+      return pickable ? 1 : 2;
     }
-    if (!multiAudio && matching.length == flags.length) return 0;
-    if ((matching.isNotEmpty || multiAudio) && !isAvi(stream)) return 1;
+    if (heard.contains(wanted)) {
+      if (!several) return 0;
+      return pickable ? 1 : 2;
+    }
+    // India's flag, wanting Hindi, Tamil or Telugu: it may well be.
+    if (maybe.contains(wanted)) return pickable ? 1 : 2;
     return 2;
   }
 

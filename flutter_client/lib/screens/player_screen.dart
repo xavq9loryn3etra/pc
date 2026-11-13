@@ -47,6 +47,13 @@ import '../services/subtitle_retime.dart';
 import '../services/subtitle_sync.dart';
 import '../services/window_full_screen.dart';
 
+/// No copy of an episode in the language it plays in: it isn't played in
+/// another (see StreamResolver.getAvailableStreams).
+class _NotInLanguageException implements Exception {
+  final String language;
+  const _NotInLanguageException(this.language);
+}
+
 class PlayerScreen extends StatefulWidget {
   final String url;
   final int torrentId;
@@ -2670,7 +2677,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (!mounted) return;
 
       if (streams.isEmpty) {
-        throw Exception('No streams found for this episode.');
+        throw _NotInLanguageException(
+            AudioLanguageService().nameFor(widget.details));
       }
 
       // 3. Resolve the likely pick — the copy played of this episode
@@ -2741,6 +2749,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       context,
       e is NotEnoughSpaceException
           ? e.toString()
+          : e is _NotInLanguageException
+          ? "S$seasonNumber E${targetEp.episodeNumber} isn't available in "
+              "${e.language} yet, so you're still on the episode you were "
+              'watching.'
           : "Couldn't play S$seasonNumber E${targetEp.episodeNumber}, so "
               "you're still on the episode you were watching.",
       error: true,

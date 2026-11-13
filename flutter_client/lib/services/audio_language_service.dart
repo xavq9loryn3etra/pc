@@ -38,6 +38,7 @@ class SpokenLanguage {
     'te': SpokenLanguage('Telugu', {'🇮🇳'}, ['tel', 'te']),
     'ml': SpokenLanguage('Malayalam', {'🇮🇳'}, ['mal', 'ml']),
     'kn': SpokenLanguage('Kannada', {'🇮🇳'}, ['kan', 'kn']),
+    'si': SpokenLanguage('Sinhala', {'🇱🇰'}, ['sin', 'si']),
     'bn': SpokenLanguage('Bengali', {'🇮🇳', '🇧🇩'}, ['ben', 'bn']),
     'mr': SpokenLanguage('Marathi', {'🇮🇳'}, ['mar', 'mr']),
     'nl': SpokenLanguage('Dutch', {'🇳🇱'}, ['dut', 'nld', 'nl']),
@@ -131,6 +132,13 @@ class AudioLanguageService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key(m), choice.name);
   }
+
+  /// The name of the language [m] plays in with [choice] (by default, the
+  /// one saved for it) — "English" for a title made in English.
+  String nameFor(Movie m, [AudioLanguage? choice]) =>
+      !appliesTo(m) || (choice ?? of(m)) == AudioLanguage.english
+          ? SpokenLanguage.english.name
+          : originalOf(m).name;
 
   /// The order the player should look for soundtracks in for [m]: its
   /// language first, then the other one.

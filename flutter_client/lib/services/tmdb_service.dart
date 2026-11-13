@@ -92,6 +92,7 @@ class TMDBService {
         queryParameters: {'api_key': _apiKey},
       );
       final movies = (response.data['results'] as List)
+          .where((m) => !isUnsuitable(m as Map))
           .map((m) => _formatMovie(m))
           .whereType<Movie>()
           .toList();
@@ -119,7 +120,9 @@ class TMDBService {
         },
       );
       final results = (response.data['results'] as List)
-          .where((r) => r['media_type'] == 'movie' || r['media_type'] == 'tv')
+          .where((r) =>
+              (r['media_type'] == 'movie' || r['media_type'] == 'tv') &&
+              !isUnsuitable(r as Map))
           .toList();
       final movies =
           results.map((m) => _formatMovie(m)).whereType<Movie>().toList();
@@ -188,7 +191,8 @@ class TMDBService {
         Movie? best;
         var bestMatch = 0;
         for (final r in response.data['results'] as List) {
-          final titleMatch = match(r as Map);
+          if (isUnsuitable(r as Map)) continue;
+          final titleMatch = match(r);
           if (titleMatch == 0) continue;
           final score = titleMatch * 2 +
               (language != null && r['original_language'] == language ? 1 : 0);
@@ -233,7 +237,9 @@ class TMDBService {
 
       // Filter out people, only Movies and TV (like Electron app does)
       final results = (response.data['results'] as List)
-          .where((r) => r['media_type'] == 'movie' || r['media_type'] == 'tv')
+          .where((r) =>
+              (r['media_type'] == 'movie' || r['media_type'] == 'tv') &&
+              !isUnsuitable(r as Map))
           .toList();
 
       final movies =
@@ -498,6 +504,7 @@ class TMDBService {
           if (c is Map<String, dynamic> &&
               c['poster_path'] != null &&
               (c['media_type'] == 'movie' || c['media_type'] == 'tv') &&
+              !isUnsuitable(c) &&
               // Not talk shows, news and the like (TMDB genre ids).
               !((c['genre_ids'] as List?)?.any(
                       (g) => g == 10767 || g == 10763 || g == 10764) ??
@@ -551,6 +558,44 @@ class TMDBService {
       print('Error fetching person $id: $e');
       return null;
     }
+  }
+
+  // Words in a title that mark it as pornographic, whatever TMDB says.
+  // Not "MILF": it also names real, mainstream titles (MILF of Norway, a
+  // comedy-drama rated 12; the French comedy MILF), so those are left to
+  // the other checks in [isUnsuitable]. "Busty" and "horny" stay: titles
+  // with them are almost all unlabelled softcore.
+  static final _explicitTitle = RegExp(
+    r'(?<![A-Za-z])(porn|porno|pornographic|xxx|x\.x\.x|boob|boobs|tits|titty|titties|'
+    r'hentai|nsfw|blowjob|gangbang|creampie|bukkake|busty|horny|'
+    r'camgirl|onlyfans)(?![A-Za-z])',
+    caseSensitive: false,
+  );
+
+  /// TMDB's genres for talk shows, news and reality TV (Jimmy Kimmel
+  /// Live!, The Daily Show, Survivor): not what the app is for.
+  static const _talkNewsAndReality = {10767, 10763, 10764};
+
+  /// A TMDB result never to show: one marked adult, one with an explicit
+  /// word in its title, a talk, news or reality show, or an upload with no genre, no
+  /// release date and no ratings at all — "Super Boobs: Volume 1" and its
+  /// sequels aren't marked adult, so `include_adult: false` let them into
+  /// search. Real titles, however small (Neera), have at least one of
+  /// those.
+  static bool isUnsuitable(Map m) {
+    if (m['adult'] == true) return true;
+    final titles = [
+      m['title'], m['name'], m['original_title'], m['original_name'],
+    ].whereType<String>().join(' ');
+    if (_explicitTitle.hasMatch(titles)) return true;
+    final genres = m['genre_ids'] ?? m['genres'];
+    if (genres is List &&
+        genres.any((g) => _talkNewsAndReality.contains(g is Map ? g['id'] : g))) {
+      return true;
+    }
+    final date = (m['release_date'] ?? m['first_air_date'] ?? '').toString();
+    final votes = (m['vote_count'] as num?) ?? 0;
+    return (genres is! List || genres.isEmpty) && date.isEmpty && votes == 0;
   }
 
   Movie? _formatMovie(Map<String, dynamic> m) {

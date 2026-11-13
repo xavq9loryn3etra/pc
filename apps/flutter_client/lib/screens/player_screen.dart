@@ -1050,6 +1050,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// Requiring *both* to be flat (not just position) avoids false-triggering
   /// on a decoder-side hiccup that has nothing to do with missing torrent
   /// data — wiping and re-downloading wouldn't fix that anyway.
+  /// A download at least this fast is making progress, finished pieces or
+  /// not (see _checkForStall).
+  static const int _stillReceivingBytesPerSecond = 8 * 1024;
+
   void _checkForStall() {
     // Deliberately runs while the media is still opening too: a stream that
     // never connects (no download progress for 20s) is exactly what this
@@ -1104,9 +1108,18 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
 
     final positionStuck = _currentPosition == _lastWatchdogPosition;
-    final downloadStuck = _lastWatchdogDownloadedBytes == null ||
-        downloadedBytes == null ||
-        downloadedBytes <= _lastWatchdogDownloadedBytes!;
+    // totalDone counts only finished pieces: on a slow copy (two sharers at
+    // ~50 KB/s, 4 MB pieces) it stays flat for over a minute while data is
+    // arriving, and recovery — which deletes what's downloaded — kept
+    // restarting it from nothing. Data still coming in isn't a stall.
+    final receiving = (LibtorrentFlutter.instance.torrents[_torrentId]
+                ?.downloadRate ??
+            0) >=
+        _stillReceivingBytesPerSecond;
+    final downloadStuck = !receiving &&
+        (_lastWatchdogDownloadedBytes == null ||
+            downloadedBytes == null ||
+            downloadedBytes <= _lastWatchdogDownloadedBytes!);
 
     _stallTicks = (positionStuck && downloadStuck) ? _stallTicks + 1 : 0;
     _lastWatchdogPosition = _currentPosition;

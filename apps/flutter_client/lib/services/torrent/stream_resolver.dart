@@ -88,15 +88,22 @@ class StreamResolver {
     print('[timing] found ${found.length} copies in '
         '${stopwatch.elapsedMilliseconds} ms');
     final cinemaOnly = title?.isCinemaOnly ?? false;
-    var streams = found
-        .where((s) =>
-            tierOf(s) > 0 &&
-            !_isCamRecording(s, title) &&
-            (!cinemaOnly || _isHomeRelease(s, title)) &&
-            !_isExtra(s, title) &&
-            !(type != 'movie' && (season ?? 1) > 0 && _isSpecial(s, title)) &&
-            _fitsTitle(s, title))
-        .toList();
+    bool usable(TorrentStream s, {required bool unknownQuality}) =>
+        (tierOf(s) > 0 ||
+            (unknownQuality && (s.quality?.toUpperCase() ?? '') != 'CAM')) &&
+        !_isCamRecording(s, title) &&
+        (!cinemaOnly || _isHomeRelease(s, title)) &&
+        !_isExtra(s, title) &&
+        !(type != 'movie' && (season ?? 1) > 0 && _isSpecial(s, title)) &&
+        _fitsTitle(s, title);
+    var streams =
+        found.where((s) => usable(s, unknownQuality: false)).toList();
+    // Only copies that don't say their quality — common for older shows
+    // (The Famous Five, 1995: one unlabelled .avi): offered as "Other"
+    // rather than nothing at all. Never while there's a labelled copy.
+    if (streams.isEmpty) {
+      streams = found.where((s) => usable(s, unknownQuality: true)).toList();
+    }
     // Fan edits only when there's nothing else.
     final unedited = streams.where((s) => !_isCustomEdit(s, title)).toList();
     if (unedited.isNotEmpty) streams = unedited;

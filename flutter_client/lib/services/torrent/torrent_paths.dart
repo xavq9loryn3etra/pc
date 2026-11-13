@@ -16,7 +16,8 @@ bool isValidInfoHash(String h) => _infoHashPattern.hasMatch(h);
 class TorrentPaths {
   /// Application-support dir, not the OS temp dir — temp can be purged by the
   /// OS independently of app logic, which would silently break resuming a
-  /// partially-downloaded torrent.
+  /// partially-downloaded torrent. On Windows that's the install folder's
+  /// `data`, on the drive the app was installed to (see WindowsAppFolder).
   static Future<String> torrentsDir() async {
     final base = await getApplicationSupportDirectory();
     return '${base.path}/torrents';

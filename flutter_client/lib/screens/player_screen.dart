@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../widgets/app_message.dart';
 import '../widgets/player_route.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:media_kit/media_kit.dart' hide WebPlayer;
 import 'package:media_kit_video/media_kit_video.dart';
@@ -4050,7 +4051,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           : text.trimLeft().startsWith('WEBVTT')
               ? 'vtt'
               : 'srt';
-      final file = File('${Directory.systemTemp.path}${Platform.pathSeparator}'
+      final temp = await getTemporaryDirectory();
+      if (!mounted || _streamUrl != url) return;
+      final file = File('${temp.path}${Platform.pathSeparator}'
           'popcorn_sub_${track.id}_${DateTime.now().millisecondsSinceEpoch}.$ext');
       await file.writeAsString(SubtitleRetime.retime(text, map));
       if (!mounted || _streamUrl != url) return;

@@ -8,7 +8,6 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'dart:async';
@@ -36,6 +35,7 @@ import 'services/trending_service.dart';
 import 'services/smooth_wheel_binding.dart';
 import 'services/visual_effects_service.dart';
 import 'services/window_full_screen.dart';
+import 'services/windows_app_folder.dart';
 
 void main() async {
   // Errors nothing else caught: logged, never the end of the app.
@@ -60,6 +60,11 @@ void main() async {
           ),
         );
   }
+
+  // On Windows, saved videos and caches go beside Popcorn.exe — on the
+  // drive it was installed to — rather than on C:. Before anything asks
+  // where to save.
+  WindowsAppFolder.init();
 
   // Smooth mouse-wheel scrolling on Windows; the stock binding elsewhere.
   SmoothWheelBinding.ensureInitialized();
@@ -162,8 +167,9 @@ Future<void> _recoverCorruptPrefs() async {
     await SharedPreferences.getInstance();
   } on FormatException catch (e) {
     debugPrint('Settings file unreadable ($e); moving it aside');
-    final dir = await getApplicationSupportDirectory();
-    final file = File('${dir.path}${Platform.pathSeparator}shared_preferences.json');
+    final dir = await WindowsAppFolder.settingsDir();
+    if (dir == null) return;
+    final file = File('$dir${Platform.pathSeparator}shared_preferences.json');
     if (await file.exists()) {
       await file.rename('${file.path}.bak');
     }

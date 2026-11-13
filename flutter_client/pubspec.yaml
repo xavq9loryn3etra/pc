@@ -55,6 +55,8 @@ dependencies:
   ffi: ^2.1.5
   animations: ^2.1.1
   path_provider: ^2.1.5
+  # Points path_provider at the install folder on Windows (windows_app_folder.dart).
+  path_provider_platform_interface: ^2.1.2
   internet_file: ^1.2.0
   package_info_plus: ^9.0.0
   lottie: ^3.3.2

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_windows/webview_windows.dart';
+import '../services/windows_app_folder.dart';
 import '../widgets/shimmer_loader.dart';
 
 class EpubPlayerScreenWindows extends StatefulWidget {
@@ -28,6 +29,7 @@ class _EpubPlayerScreenWindowsState extends State<EpubPlayerScreenWindows> {
 
   Future<void> _initWebview() async {
     try {
+      await WindowsAppFolder.prepareWebView();
       await _controller.initialize();
       await _controller.setBackgroundColor(Colors.transparent);
 

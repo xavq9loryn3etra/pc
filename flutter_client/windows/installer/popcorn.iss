@@ -72,3 +72,22 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; A running copy holds its files open; closed first so they can all go.
+Filename: "{sys}\taskkill.exe"; Parameters: "/f /t /im {#AppExe}"; Flags: runhidden; RunOnceId: "ClosePopcorn"
+
+[UninstallDelete]
+; Everything the app saved, so uninstalling leaves nothing behind.
+; Downloaded videos, caches and the web view's files (lib/services/windows_app_folder.dart):
+Type: filesandordirs; Name: "{app}\data"
+; Settings — and, from versions before the data folder (or when the
+; install folder can't be written to), the downloads and caches too:
+Type: filesandordirs; Name: "{userappdata}\com.popcorn"
+Type: filesandordirs; Name: "{localappdata}\com.popcorn"
+Type: filesandordirs; Name: "{localappdata}\flutter_webview_windows\Popcorn"
+Type: dirifempty; Name: "{localappdata}\flutter_webview_windows"
+Type: filesandordirs; Name: "{%TEMP}\libCachedImageData"
+Type: files; Name: "{%TEMP}\popcorn_sub_*"
+Type: files; Name: "{%TEMP}\current_book.epub"
+Type: files; Name: "{%TEMP}\poster_*.jpg"

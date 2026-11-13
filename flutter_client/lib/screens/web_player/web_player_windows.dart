@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:webview_windows/webview_windows.dart';
 import 'web_player_platform_interface.dart';
 import '../../services/saved_movies_service.dart';
+import '../../services/windows_app_folder.dart';
 import '../../widgets/shimmer_loader.dart';
 
 class WebPlayerWindows extends WebPlayerPlatform {
@@ -41,6 +42,7 @@ class _WebPlayerWindowsState extends State<WebPlayerWindows> {
 
   Future<void> _initWebview() async {
     try {
+      await WindowsAppFolder.prepareWebView();
       await _controller.initialize();
       await _controller.setBackgroundColor(Colors.transparent);
       await _controller.setPopupWindowPolicy(WebviewPopupWindowPolicy.deny);

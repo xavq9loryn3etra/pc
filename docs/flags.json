@@ -1,5 +1,5 @@
 {
-  "min_required_version": "3.0.3",
+  "min_required_version": "3.0.4",
   "update_url": "https://popcorn-organization.github.io/popcorn/",
   "update_required_message": "A new version of Popcorn is available. Update now to keep watching.",
   "maintenance_mode_enabled": false,

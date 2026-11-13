@@ -1,11 +1,13 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/movie.dart';
 import 'gemini_key_service.dart';
 import 'tmdb_service.dart';
+import 'wikipedia_plot.dart';
 
 /// What [AiService.suggest] came back with: a line or two about the picks,
 /// and the picks themselves, each a title the app can open. [offTopic] when
@@ -44,6 +46,17 @@ class AiAnswer {
     this.leftOut = 0,
     this.noneOnService = false,
   });
+
+  AiAnswer withMessage(String message) => AiAnswer(
+        noneFound: noneFound,
+        offTopic: offTopic,
+        message: message,
+        titles: titles,
+        reply: reply,
+        service: service,
+        leftOut: leftOut,
+        noneOnService: noneOnService,
+      );
 }
 
 /// Why [AiService.suggest] couldn't answer, in words for the user.
@@ -112,13 +125,14 @@ If someone mentions self harm, suicide or being in danger, set "offTopic" to tru
 Never suggest adult or pornographic titles; offer a romance or something else instead.
 Otherwise suggest up to 9 real, existing titles that fit, or as many as they ask for up to 20 (if they ask for more, give 20 and say that's the most you can show at once), best first, with their original release year. If they name or describe a particular title ("Disney's live action Aladdin"), put that title first. Never invent a title; if you don't know one they mention, say so and suggest ones like what they describe.
 Your knowledge stops some time before today's date (given below). For new, recent or upcoming releases, suggest the newest fitting titles you know and say plainly in "message" that the very latest may be missing. Never say a title is in cinemas or just out.
-Never give away endings or twists, unless the request clearly asks for them ("how does it end", "explain the twist", "spoil it", "tell me the story"). Then spoil it properly in "message", starting with "Spoiler ahead!" and naming the title: tell the whole story from the setup to the very end, as a friend who's seen it would, in a few short paragraphs (separated by blank lines). Cover who the main characters are and what they want, each major turn, every twist and reveal and what it changes, the climax, exactly how it ends and what happens to each main character, and what the ending means. Use the real names of characters and places. Leave nothing vague: "a shocking twist changes everything" is not a spoiler, say what the twist is. For a series, spoil what they ask about (a season, an episode, or the whole show). If you don't know the story well enough to be sure, say so rather than guess. Also suggest the title itself and a few like it.
+Never give away endings or twists, unless the request clearly asks for them ("how does it end", "explain the twist", "spoil it", "tell me the story"). Then, only if you truly know that story in detail, spoil it properly in "message", starting with "Spoiler ahead!" and naming the title: tell what happens from the setup to the very end, as a friend who's seen it would. Cover who the main characters are, each major turn, every twist and reveal, the climax, and exactly how it ends for each main character. Use the real names of characters and places. Only what happens: no themes, no meaning, no review, no "it's a moving journey". Leave nothing vague: "a shocking twist changes everything" is not a spoiler, say what the twist is. For a series, spoil what they ask about (a season, an episode, or the whole show). If you don't know the actual story of that title in detail (a little-known, regional or recent title is often one you don't), never make one up: say plainly in "message" that you don't know its story well enough to spoil it. With a spoiler, put the title itself in "titles", and add others only if you're sure they're real and truly like it (the same kind of story and tone).
 Reply in the language the request is written in.
 Only if the request asks what's on a particular streaming service ("on Netflix", "streaming on Prime"), set "service" to its full official name ("Netflix", "Prime Video", "Disney+", "HBO Max", "Apple TV+", "Hulu"...); otherwise leave it null. A studio or brand that makes films (Disney, Marvel, Pixar, DreamWorks, Ghibli) is not a streaming service.
 Write plainly: no dashes (— or –); use commas and full stops instead.
 Earlier messages may come before the latest: use them to understand follow-ups ("something lighter", "more like the second one"), and don't suggest the same titles again unless asked.
+Only when they ask to be spoiled about a particular title, set "spoiler" to {"title": "its widely known English or original title", "year": 2025, "type": "movie" or "tv"}; otherwise leave it null.
 Reply with JSON only, no markdown:
-{"offTopic": false, "service": null, "message": "usually 2-3 warm, chatty sentences, like a friend who loves films: why these fit what they asked for, with a little enthusiasm; no spoilers or titles by name (as some may not be shown) unless answering a question about a particular title or its ending, no lists. When they asked to be spoiled, the full spoiler instead, as long as the story needs", "titles": [{"title": "its widely known English or original title, in the Latin alphabet where one exists, whatever language the reply is in", "year": 2014, "type": "movie" or "tv", "language": "its original language as an ISO 639-1 code, e.g. en, ml, ko"}]}''';
+{"offTopic": false, "service": null, "spoiler": null, "message": "usually 2-3 warm, chatty sentences, like a friend who loves films: why these fit what they asked for, with a little enthusiasm; no spoilers or titles by name (as some may not be shown) unless answering a question about a particular title or its ending, no lists. When they asked to be spoiled, the full spoiler instead, as long as the story needs", "titles": [{"title": "its widely known English or original title, in the Latin alphabet where one exists, whatever language the reply is in", "year": 2014, "type": "movie" or "tv", "language": "its original language as an ISO 639-1 code, e.g. en, ml, ko"}]}''';
 
   final Dio _dio = Dio(BaseOptions(connectTimeout: const Duration(seconds: 10)));
 
@@ -157,7 +171,11 @@ Reply with JSON only, no markdown:
         final reply =
             await _ask(model, request, history: history, slow: i >= slowFrom);
         if (reply != null) {
-          final answer = await _answerFrom(reply);
+          var answer = await _answerFrom(reply);
+          // A spoiler: retold from the film's plot on Wikipedia, not from
+          // the model's memory (which made up a little-known one's).
+          final spoiler = await _spoilerFromWikipedia(reply, request, answer);
+          if (spoiler != null) answer = answer.withMessage(spoiler);
           await _countQuestion();
           return answer;
         }
@@ -239,6 +257,134 @@ Reply with JSON only, no markdown:
 
   // The model's JSON made into an answer, each title looked up on TMDB so
   // it's one that exists and can be opened.
+  static const _spoilerInstructions =
+      '''You retell a film's story as a spoiler for a friend who asked for it, from the plot summary given. Use only what the summary says: never add events, names or details that aren't in it.
+Write it like this: the first line is just "Spoiler ahead!". Then 3 to 6 numbered parts in story order, each a short heading on its own line ("1. The Pen Pal Beginning") followed by a paragraph or two of what happens. Cover every major turn, every twist and reveal, and exactly how it ends for each main character; the last part is the ending. Where the summary gives an actor's name, keep it in brackets after the character the first time.
+Only what happens: no themes, no meaning, no review, no opinions.
+Write plainly: no dashes (— or –), no markdown (no **, #, or bullet points).
+Reply in the language their request is written in.''';
+
+  /// The movie [reply] said they want spoiled, retold from its plot on
+  /// Wikipedia (see WikipediaPlot); null when it isn't a spoiler, or
+  /// there's no plot to go from (the model's own reply stands then — told
+  /// to say so rather than guess).
+  Future<String?> _spoilerFromWikipedia(
+      String reply, String request, AiAnswer answer) async {
+    try {
+      final start = reply.indexOf('{'), end = reply.lastIndexOf('}');
+      final json = jsonDecode(reply.substring(start, end + 1));
+      final spoiler = json is Map ? json['spoiler'] : null;
+      if (spoiler is! Map || spoiler['title'] is! String) return null;
+      // Series: their articles keep episodes elsewhere, if at all.
+      if (spoiler['type'] == 'tv') return null;
+      final title = spoiler['title'] as String;
+      final year = spoiler['year'] is int ? spoiler['year'] as int : null;
+      String plain(String t) =>
+          t.toLowerCase().replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '');
+      final movie = answer.titles
+              .where((m) => m.type == 'movie' && plain(m.title) == plain(title))
+              .firstOrNull ??
+          await TMDBService().findTitle(title, year: year, type: 'movie');
+      if (movie == null) return null;
+      final plot = await WikipediaPlot.forMovie(movie.id);
+      if (plot == null) return null;
+      for (final model in _models.take(slowFrom)) {
+        try {
+          final response = await _dio.post(
+            'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent',
+            options: Options(
+              headers: {'x-goog-api-key': _key},
+              sendTimeout: const Duration(seconds: 15),
+              receiveTimeout: const Duration(seconds: 40),
+            ),
+            data: {
+              'systemInstruction': {
+                'parts': [
+                  {'text': _spoilerInstructions}
+                ]
+              },
+              'contents': [
+                {
+                  'role': 'user',
+                  'parts': [
+                    {
+                      'text': 'Their request: $request\n'
+                          'The film: ${movie.title} (${movie.year})\n'
+                          'Plot summary:\n$plot'
+                    }
+                  ]
+                }
+              ],
+              'generationConfig': {'temperature': 0.4},
+            },
+          );
+          final parts = (response.data['candidates'] as List?)
+              ?.firstOrNull?['content']?['parts'] as List?;
+          final text = parts
+              ?.where((p) => p['thought'] != true)
+              .map((p) => p['text'] ?? '')
+              .join()
+              .replaceAll(RegExp(r'\*\*|^#+\s*', multiLine: true), '')
+              .replaceAll(RegExp(r'\s*[—–]\s*'), ', ')
+              .trim();
+          if (text != null && text.isNotEmpty) return text;
+        } catch (e) {
+          print('[spoiler] $model: $e');
+        }
+      }
+    } catch (e) {
+      print('[spoiler] $e');
+    }
+    return null;
+  }
+
+  /// A long reply (a spoiler) broken into paragraphs of a few sentences,
+  /// "Spoiler ahead!" on its own: the models leave the breaks out, asked
+  /// or not, and a wall of text is hard to read. One with breaks already,
+  /// or a short one, is left as it is.
+  static String _inParagraphs(String message) {
+    if (message.contains('\n') ||
+        message.split(RegExp(r'\s+')).length < 70) {
+      return message;
+    }
+    final sentences = RegExp(r'[^.!?]+[.!?]+["\u201d\u2019)]*\s*')
+        .allMatches(message)
+        .map((m) => m[0]!.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+    if (sentences.join(' ').length < message.length * 0.9) return message;
+    final paragraphs = <String>[];
+    var current = <String>[];
+    var words = 0;
+    for (final sentence in sentences) {
+      if (paragraphs.isEmpty &&
+          current.isEmpty &&
+          sentence.toLowerCase() == 'spoiler ahead!') {
+        paragraphs.add(sentence);
+        continue;
+      }
+      current.add(sentence);
+      words += sentence.split(RegExp(r'\s+')).length;
+      if (words >= 55) {
+        paragraphs.add(current.join(' '));
+        current = [];
+        words = 0;
+      }
+    }
+    if (current.isNotEmpty) {
+      // A short last bit joins the paragraph before.
+      if (words < 20 && paragraphs.length > 1) {
+        paragraphs[paragraphs.length - 1] += ' ${current.join(' ')}';
+      } else {
+        paragraphs.add(current.join(' '));
+      }
+    }
+    return paragraphs.join('\n\n');
+  }
+
+  @visibleForTesting
+  static String inParagraphs(String message) => _inParagraphs(message);
+
   Future<AiAnswer> _answerFrom(String reply) async {
     // Some models wrap it in a ```json block anyway.
     final start = reply.indexOf('{'), end = reply.lastIndexOf('}');
@@ -256,10 +402,10 @@ Reply with JSON only, no markdown:
 
     // Without dashes, which the app's writing doesn't use: models put
     // them in anyway, now and then.
-    final message = (json['message'] ?? '')
+    final message = _inParagraphs((json['message'] ?? '')
         .toString()
         .trim()
-        .replaceAll(RegExp(r'\s*[—–]\s*'), ', ');
+        .replaceAll(RegExp(r'\s*[—–]\s*'), ', '));
     if (json['offTopic'] == true) {
       return AiAnswer(
         reply: reply,

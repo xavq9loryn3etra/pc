@@ -146,6 +146,22 @@ class TMDBService {
   /// up Spider-Man: No Way Home, and four other films called Home, before
   /// the Malayalam film #Home. [language] (its original language, as
   /// ISO 639-1: "ml") picks between titles the same.
+  /// The Wikidata entry (Q…) of the title with TMDB id [id], if it has
+  /// one: how its Wikipedia articles are found (see WikipediaPlot).
+  Future<String?> wikidataId(String id, {required bool isTv}) async {
+    try {
+      final response = await _dio.get(
+        '$_baseUrl/${isTv ? 'tv' : 'movie'}/$id/external_ids',
+        queryParameters: {'api_key': _apiKey},
+      );
+      final q = response.data['wikidata_id'];
+      return q is String && q.isNotEmpty ? q : null;
+    } catch (e) {
+      print('TMDB external ids error: $e');
+      return null;
+    }
+  }
+
   Future<Movie?> findTitle(String title,
       {int? year, String? type, String? language}) async {
     final isTv = type == 'tv';
@@ -194,6 +210,13 @@ class TMDBService {
           if (isUnsuitable(r as Map)) continue;
           final titleMatch = match(r);
           if (titleMatch == 0) continue;
+          // Only partly the same: not unless it's in the language asked
+          // for — "Neera" (Sinhala) isn't "Neeraja" (Malayalam).
+          if (titleMatch == 1 &&
+              language != null &&
+              r['original_language'] != language) {
+            continue;
+          }
           final score = titleMatch * 2 +
               (language != null && r['original_language'] == language ? 1 : 0);
           if (score <= bestMatch) continue;

@@ -1487,6 +1487,28 @@ class _WordRevealState extends State<_WordReveal>
     with SingleTickerProviderStateMixin {
   late final List<String> _words =
       widget.text.split(RegExp(r'(?<=\s)')); // Each keeps its space.
+
+  // A spoiler's headings ("1. The Pen Pal Beginning") and its "Spoiler
+  // ahead!": lines of their own, shown bold.
+  static final _heading = RegExp(r'^(\d{1,2}\.\s+\S.{0,70}|Spoiler ahead!)$');
+  late final Set<int> _bold = () {
+    final bold = <int>{};
+    var lineStart = 0;
+    final line = StringBuffer();
+    for (var i = 0; i < _words.length; i++) {
+      line.write(_words[i]);
+      if (_words[i].contains('\n') || i == _words.length - 1) {
+        if (_heading.hasMatch(line.toString().trim())) {
+          for (var j = lineStart; j <= i; j++) {
+            bold.add(j);
+          }
+        }
+        lineStart = i + 1;
+        line.clear();
+      }
+    }
+    return bold;
+  }();
   late final _shown = AnimationController(
     vsync: this,
     // Each word takes [perWord]; a few more' time to fade in the last. A
@@ -1524,6 +1546,7 @@ class _WordRevealState extends State<_WordReveal>
                   style: TextStyle(
                     color: color.withValues(
                         alpha: color.a * ((shown - i) / 4).clamp(0.0, 1.0)),
+                    fontWeight: _bold.contains(i) ? FontWeight.w700 : null,
                   ),
                 ),
             ],

@@ -406,13 +406,15 @@ class StreamResolver {
   /// Words in release names that say which language the audio is in, by
   /// TMDB code: the full name anywhere, any case; the short code ("HIN",
   /// "MAL") in capitals, or any case inside brackets ("[ Hin Mal ]").
+  /// With the misspellings release names use: Trance's best-shared
+  /// Malayalam copy says "[ Hin Tel Malyalam ]", and was never offered.
   static const _audioNames = <(String, String, String?)>[
     ('en', 'English', 'ENG'),
     ('hi', 'Hindi', 'HIN'),
-    ('ml', 'Malayalam', 'MAL'),
+    ('ml', 'Malayalam|Malyalam|Malayalm|Malyalm|Malayallam', 'MAL'),
     ('ta', 'Tamil', 'TAM'),
-    ('te', 'Telugu', 'TEL'),
-    ('kn', 'Kannada', 'KAN'),
+    ('te', 'Telugu|Telgu|Telegu', 'TEL'),
+    ('kn', 'Kannada|Kanada', 'KAN'),
     ('bn', 'Bengali', null),
     ('mr', 'Marathi', null),
     ('si', 'Sinhala', null),
@@ -790,7 +792,10 @@ class StreamResolver {
   Future<StreamResolveResult> resolveWithFallback(
     TorrentStream selected,
     List<TorrentStream> allStreams, {
-    int maxAttempts = 3,
+    // Six, not three: a regional film's copies are thinly shared and their
+    // seed counts stale — Trance's first three HD copies all had no one
+    // sharing them. A hopeless case now gives up after ~35 s, not ~26.
+    int maxAttempts = 6,
     bool Function()? isCancelled,
   }) async {
     var ordered = [

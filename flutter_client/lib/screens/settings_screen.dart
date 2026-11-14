@@ -16,7 +16,7 @@ import '../services/backup_service.dart';
 import '../services/feature_flags_service.dart';
 import '../services/gemini_key_service.dart';
 import '../services/torrent/download_ahead_settings.dart';
-import '../widgets/gemini_key_dialog.dart';
+import '../widgets/gemini_key_form.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -34,77 +34,121 @@ class SettingsScreen extends StatelessWidget {
             FeatureFlagsService().hidePlayback,
           ]),
           builder: (context, _) {
+            // Playback's one setting is about mobile data: phones and
+            // tablets only — a computer's on Wi-Fi or a cable, where the
+            // head start always downloads.
             final showStorage =
                 AppModeService().currentMode.value == AppMode.movies &&
-                    !FeatureFlagsService().hidePlayback.value;
+                    !FeatureFlagsService().hidePlayback.value &&
+                    !isComputer;
 
             // Grouped like Apple's settings: each section's rows on one
             // card, a short note under it, ordered by how often they're
             // likely to be used.
             // On a wide window the rows keep to a readable width in the
             // middle, with the scroll bar still at the window's edge.
-            final side = math.max(
-                0.0, (MediaQuery.sizeOf(context).width - 720) / 2);
-            return ListView(
-              padding: padding.copyWith(
-                  top: ScreenScaffold.contentTop(context),
-                  left: side,
-                  right: side),
-              children: [
-                // No modes in the desktop app (see AppModeService).
-                if (AppModeService.canSwitchMode) ...[
-                  const _SectionLabel('SWITCH MODE', topPadding: 8),
-                  const ModeSwitchRow(),
-                ],
-                if (showStorage) ...[
-                  _SectionLabel(
-                    'PLAYBACK',
-                    topPadding: AppModeService.canSwitchMode ? 24 : 8,
-                  ),
-                  const _SettingsGroup(
-                    footnote: 'Gets a head start of about 6 MB on what '
-                        "you'll likely play, so it starts sooner. On Wi-Fi "
-                        'it always does.',
-                    children: [_DownloadAheadRow()],
-                  ),
-                ],
-                _SectionLabel(
-                  'GEMINI',
-                  topPadding:
-                      AppModeService.canSwitchMode || showStorage ? 24 : 8,
-                ),
-                const _SettingsGroup(
-                  footnote: 'Your own free key from Google, for Sinhala '
-                      'subtitles translated from English, and for Popcorn '
-                      'Ask without its daily limit.',
-                  children: [_GeminiKeyRow()],
-                ),
-                const _SectionLabel(
-                  'BACKUP',
-                ),
-                _SettingsGroup(
-                  footnote: 'Your favorites and watch history, saved to a '
-                      'file you can bring back later.',
-                  children: [
-                    _SettingsRow(
-                      icon: Icons.file_upload_outlined,
-                      title: 'Export favorites & history',
-                      onTap: () => _exportBackup(context),
+            final side =
+                math.max(0.0, (MediaQuery.sizeOf(context).width - 720) / 2);
+            final listPadding = padding.copyWith(
+                // None in a wide window's side column.
+                top: SideColumnScope.inColumn(context)
+                    ? 0
+                    : ScreenScaffold.contentTop(context),
+                left: side,
+                right: side);
+            // The settings, then the credit and version at the tab's foot
+            // (further down, if the settings are longer than the screen).
+            return CustomScrollView(
+              slivers: [
+                SliverPadding(
+                  padding: listPadding.copyWith(bottom: 0),
+                  sliver: SliverList.list(children: [
+                    // No modes in the desktop app (see AppModeService).
+                    if (AppModeService.canSwitchMode) ...[
+                      const _SectionLabel('SWITCH MODE', topPadding: 8),
+                      const ModeSwitchRow(),
+                    ],
+                    if (showStorage) ...[
+                      _SectionLabel(
+                        'PLAYBACK',
+                        topPadding: AppModeService.canSwitchMode ? 24 : 8,
+                      ),
+                      const _SettingsGroup(
+                        footnote: 'Gets a head start of about 6 MB on what '
+                            "you'll likely play, so it starts sooner. On Wi-Fi "
+                            'it always does.',
+                        children: [_DownloadAheadRow()],
+                      ),
+                    ],
+                    _SectionLabel(
+                      'GEMINI',
+                      topPadding:
+                          AppModeService.canSwitchMode || showStorage ? 24 : 8,
                     ),
-                    _SettingsRow(
-                      icon: Icons.file_download_outlined,
-                      title: 'Import from a backup',
-                      onTap: () => _importBackup(context),
+                    const _SettingsGroup(
+                      footnote: 'A free code from Google, needed for Popcorn '
+                          'Ask and for Sinhala subtitles on anything you '
+                          'watch.',
+                      children: [_GeminiKeySection()],
                     ),
-                  ],
+                    const _SectionLabel(
+                      'BACKUP',
+                    ),
+                    _SettingsGroup(
+                      footnote: 'Your favorites and watch history, saved to a '
+                          'file you can bring back later.',
+                      children: [
+                        _SettingsRow(
+                          icon: Icons.file_upload_outlined,
+                          title: 'Export favorites & history',
+                          onTap: () => _exportBackup(context),
+                        ),
+                        _SettingsRow(
+                          icon: Icons.file_download_outlined,
+                          title: 'Import from a backup',
+                          onTap: () => _importBackup(context),
+                        ),
+                      ],
+                    ),
+                  ]),
                 ),
-                // At the foot instead of the app bar's corner, where the
-                // title (and so the app bar) is left out: the side column.
-                if (ScreenScaffold.hidesTitle(context))
-                  const Padding(
-                    padding: EdgeInsets.only(top: 24, bottom: 8),
-                    child: _AppVersionLabel(),
+                SliverPadding(
+                  padding: EdgeInsets.only(
+                      left: side, right: side, bottom: listPadding.bottom),
+                  sliver: SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        // Where the films' and series' details and images come
+                        // from, as TMDB's terms ask (the website says it too).
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(32, 32, 32, 0),
+                          child: Text(
+                            'Film and series details and images come from TMDB. '
+                            'This product uses the TMDB API but is not endorsed or '
+                            'certified by TMDB.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white24,
+                              fontSize: 12,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                        // At the foot instead of the app bar's corner, where the
+                        // title (and so the app bar) is left out: the side column.
+                        if (ScreenScaffold.hidesTitle(context))
+                          const Padding(
+                            padding: EdgeInsets.only(top: 24, bottom: 8),
+                            child: _AppVersionLabel(),
+                          )
+                        else
+                          const SizedBox(height: 16),
+                      ],
+                    ),
                   ),
+                ),
               ],
             );
           },
@@ -130,7 +174,8 @@ Future<bool?> _runWithLoadingDialog(
   );
   final success = await action();
   if (!context.mounted) return null;
-  Navigator.of(context, rootNavigator: true).pop(); // dismiss the loading dialog
+  Navigator.of(context, rootNavigator: true)
+      .pop(); // dismiss the loading dialog
   return success;
 }
 
@@ -235,8 +280,10 @@ class _SectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      // In line with the rows' content, inside their card.
-      padding: EdgeInsets.fromLTRB(32, topPadding, 16, 8),
+      // In line with the rows' content, inside their card (whose own
+      // margin is none in a wide window's side column).
+      padding: EdgeInsets.fromLTRB(
+          SideColumnScope.inColumn(context) ? 16 : 32, topPadding, 16, 8),
       child: Text(
         text,
         style: const TextStyle(
@@ -264,7 +311,9 @@ class _SettingsGroup extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      // None in a wide window's side column (the cards to its edges).
+      padding: EdgeInsets.symmetric(
+          horizontal: SideColumnScope.inColumn(context) ? 0 : 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -357,31 +406,58 @@ class _SettingsRow extends StatelessWidget {
   }
 }
 
-/// The viewer's Gemini key (see GeminiKeyService): added or not; tapping
-/// adds, changes or removes it.
-class _GeminiKeyRow extends StatelessWidget {
-  const _GeminiKeyRow();
+/// The viewer's Gemini key (see GeminiKeyService): added or not. Tapping
+/// opens the steps to get one and the field for it right under the row
+/// (GeminiKeyForm), and again closes them.
+class _GeminiKeySection extends StatefulWidget {
+  const _GeminiKeySection();
+
+  @override
+  State<_GeminiKeySection> createState() => _GeminiKeySectionState();
+}
+
+class _GeminiKeySectionState extends State<_GeminiKeySection> {
+  bool _open = false;
+
+  void _toggle() => setState(() => _open = !_open);
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<String?>(
-      valueListenable: GeminiKeyService().key,
-      builder: (context, key, _) => _SettingsRow(
-        icon: Icons.key_rounded,
-        title: 'Gemini API key',
-        onTap: () => showGeminiKeyDialog(context),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              key == null ? 'Add' : 'Added',
-              style: const TextStyle(color: Colors.white54, fontSize: 15),
+    return Column(
+      children: [
+        ValueListenableBuilder<String?>(
+          valueListenable: GeminiKeyService().key,
+          builder: (context, key, _) => _SettingsRow(
+            icon: Icons.key_rounded,
+            title: 'Gemini key',
+            onTap: _toggle,
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  key == null ? 'Add' : 'Added',
+                  style: const TextStyle(color: Colors.white54, fontSize: 15),
+                ),
+                AnimatedRotation(
+                  turns: _open ? 0.25 : 0,
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeOutCubic,
+                  child: const Icon(Icons.chevron_right_rounded,
+                      color: Colors.white38, size: 20),
+                ),
+              ],
             ),
-            const Icon(Icons.chevron_right_rounded,
-                color: Colors.white38, size: 20),
-          ],
+          ),
         ),
-      ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: _open
+              ? GeminiKeyForm(onDone: () => setState(() => _open = false))
+              : const SizedBox(width: double.infinity),
+        ),
+      ],
     );
   }
 }

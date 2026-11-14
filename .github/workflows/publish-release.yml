@@ -12,7 +12,6 @@ name: Publish release
 # Secrets (on this repo):
 #   RELEASES_TOKEN   fine-grained token with Contents: read and write on
 #                    popcorn-organization/popcorn
-#   GEMINI_API_KEY   for Popcorn Ask
 #   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
 #   ANDROID_KEY_PASSWORD   the release signing key: every APK must be signed
 #                    with it, or it won't install over the one before it.
@@ -94,9 +93,10 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        # No Gemini key in the app: Ask and Sinhala subtitles use the
+        # viewer's own (Settings).
         run: |
-          flutter build apk --release --dart-define=GEMINI_API_KEY="$GEMINI_API_KEY"
+          flutter build apk --release
           mkdir -p "$RUNNER_TEMP/out"
           cp build/app/outputs/flutter-apk/app-release.apk "$RUNNER_TEMP/out/Popcorn-Android.apk"
       - name: Check it's signed with the release key
@@ -129,9 +129,7 @@ jobs:
       - run: flutter config --enable-windows-desktop
       - run: flutter pub get
       - name: Build
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: flutter build windows --release "--dart-define=GEMINI_API_KEY=$env:GEMINI_API_KEY"
+        run: flutter build windows --release
       - name: Inno Setup
         run: |
           $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ }

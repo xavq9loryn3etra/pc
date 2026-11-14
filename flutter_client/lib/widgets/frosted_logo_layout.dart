@@ -81,7 +81,7 @@ class FrostedLogoLayout extends StatelessWidget {
               child: ValueListenableBuilder<bool>(
                 valueListenable: VisualEffectsService().reduceGlass,
                 builder: (context, reduced, _) => reduced
-                    ? ColoredBox(color: Colors.black.withValues(alpha: 0.75))
+                    ? ColoredBox(color: Colors.black.withValues(alpha: 0.9))
                     : BackdropFilter(
                         filter: ui.ImageFilter.blur(sigmaX: 36, sigmaY: 36),
                         child: ColoredBox(

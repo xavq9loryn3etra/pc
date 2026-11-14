@@ -106,13 +106,19 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
           );
         }
 
-        final horizontalPadding = isDesktop ? 60.0 : 16.0;
+        // None in a wide window's side column (its content to its edges).
+        final horizontalPadding =
+            isDesktop ? 60.0 : (SideColumnScope.inColumn(context) ? 0.0 : 16.0);
         return GridView.builder(
           controller: _scrollController,
           padding: padding.copyWith(
             left: horizontalPadding,
             right: horizontalPadding,
-            top: ScreenScaffold.contentTop(context),
+            // In a wide window's side column, just clear of its rounded
+            // top corners, which clipped the first posters.
+            top: SideColumnScope.inColumn(context)
+                ? 12
+                : ScreenScaffold.contentTop(context),
           ),
           gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
             maxCrossAxisExtent: isDesktop ? 200 : 150,

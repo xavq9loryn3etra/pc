@@ -51,7 +51,7 @@ class GlassBlur extends StatefulWidget {
     // a 60 Hz frame's 16.7 ms several times a second while scrolling.
     this.sigma = 12,
     this.grouped = false,
-    this.reducedTint = const Color(0x4D000000), // black, 30%
+    this.reducedTint = const Color(0xE6000000), // black, 90%
     this.paused = false,
     required this.child,
   });
@@ -243,7 +243,7 @@ class GlassCircleButton extends StatelessWidget {
     return ClipOval(
       child: GlassBlur(
         grouped: grouped,
-        reducedTint: Colors.black.withValues(alpha: 0.45),
+        reducedTint: Colors.black.withValues(alpha: 0.9),
         child: Material(
           color: kGlassTint,
           shape: CircleBorder(
@@ -291,7 +291,7 @@ class GlassActionButton extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(30),
         child: GlassBlur(
-          reducedTint: Colors.black.withValues(alpha: 0.45),
+          reducedTint: Colors.black.withValues(alpha: 0.9),
           child: Material(
             color: kGlassTint,
             shape: _shape.copyWith(side: BorderSide(color: kGlassEdge)),
@@ -339,7 +339,7 @@ class GlassSwitch extends StatelessWidget {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(16),
             child: GlassBlur(
-              reducedTint: Colors.black.withValues(alpha: 0.45),
+              reducedTint: Colors.black.withValues(alpha: 0.9),
               child: AnimatedContainer(
                 duration: _duration,
                 curve: Curves.easeOut,
@@ -439,7 +439,7 @@ class GlassPillButton extends StatelessWidget {
             borderRadius: BorderRadius.circular(wide ? 24 : 20),
             child: GlassBlur(
               grouped: grouped,
-              reducedTint: Colors.black.withValues(alpha: 0.45),
+              reducedTint: Colors.black.withValues(alpha: 0.9),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 180),
                 curve: Curves.easeOut,

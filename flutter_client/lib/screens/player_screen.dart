@@ -45,6 +45,7 @@ import '../services/skip_segments_service.dart';
 import '../services/subtitle_service.dart';
 import '../services/subtitle_translator.dart';
 import '../services/gemini_key_service.dart';
+import '../widgets/gemini_key_form.dart';
 import '../services/subtitle_retime.dart';
 import '../services/subtitle_sync.dart';
 import '../services/window_full_screen.dart';
@@ -650,6 +651,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _setUpPlayer() async {
     _loadSubtitles();
+    _checkAudioLanguages();
     _loadApiSkipSegments();
     // Configure MPV for torrent streaming — P2P data arrives in bursts,
     // so we tune the cache to fill a sensible buffer before starting playback
@@ -666,11 +668,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     for (final p in {
       'cache': 'yes',
       'cache-secs': '60', // Keep up to 60s of video cached ahead
-      'demuxer-readahead-secs': '10', // Fetch 10s ahead (not 30) to start sooner
+      'demuxer-readahead-secs':
+          '10', // Fetch 10s ahead (not 30) to start sooner
       // Demuxer cache ahead, and back-buffer for seeking.
       'demuxer-max-bytes': phone ? '64M' : '150M',
       'demuxer-max-back-bytes': phone ? '16M' : '50M',
-      'cache-pause-initial': 'yes', // Pause at startup until initial cache fills
+      'cache-pause-initial':
+          'yes', // Pause at startup until initial cache fills
       'cache-pause-wait': '5', // Re-pause if buffer drops below 5s
       // Seeks land on the nearest keyframe rather than the exact second: an
       // exact seek first downloads and decodes everything from the keyframe
@@ -749,7 +753,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       // Where a slow start's time goes (with the position lines in
       // _checkOpeningFinished).
       if (_isMediaOpening) {
-        print('[timing] opening: ' + (isBuffering ? 'waiting for data' : 'has enough data') +
+        print('[timing] opening: ' +
+            (isBuffering ? 'waiting for data' : 'has enough data') +
             ' at ${_openingStopwatch.elapsedMilliseconds} ms');
       }
       setState(() => _isBuffering = isBuffering);
@@ -826,6 +831,13 @@ class _PlayerScreenState extends State<PlayerScreen>
         if (_isMediaOpening) _checkOpeningFinished(pos);
         if (_seekPending) _checkSeekFinished(pos);
         _updateActiveSkipSegment(pos);
+        // A season's last episode: the next season's looked up from the
+        // start (once), so Next works all through it.
+        if (_nextSeasonLookedUpFrom != (_currentSeason ?? 1) &&
+            !_nextSeasonLoading &&
+            _isLastOfSeason) {
+          unawaited(_loadNextSeason());
+        }
         _maybeReadyNextEpisode(pos);
         _updateUpNext(pos);
         _maybeAutoSync(pos);
@@ -1112,7 +1124,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       } else if (DateTime.now().difference(baseline.at) >= _openingDataWait &&
           downloadedBytes - baseline.bytes < _openingMinBytes &&
           StreamResolver.sameQuality(_currentStream, _availableStreams).any(
-              (s) => !_triedStartHashes.contains(s.infoHash.toLowerCase()) &&
+              (s) =>
+                  !_triedStartHashes.contains(s.infoHash.toLowerCase()) &&
                   s.infoHash.toLowerCase() !=
                       _currentStream.infoHash.toLowerCase())) {
         _openingBaseline = null;
@@ -1129,10 +1142,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     // ~50 KB/s, 4 MB pieces) it stays flat for over a minute while data is
     // arriving, and recovery — which deletes what's downloaded — kept
     // restarting it from nothing. Data still coming in isn't a stall.
-    final receiving = (LibtorrentFlutter.instance.torrents[_torrentId]
-                ?.downloadRate ??
-            0) >=
-        _stillReceivingBytesPerSecond;
+    final receiving =
+        (LibtorrentFlutter.instance.torrents[_torrentId]?.downloadRate ?? 0) >=
+            _stillReceivingBytesPerSecond;
     final downloadStuck = !receiving &&
         (_lastWatchdogDownloadedBytes == null ||
             downloadedBytes == null ||
@@ -1142,9 +1154,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     _lastWatchdogPosition = _currentPosition;
     _lastWatchdogDownloadedBytes = downloadedBytes;
 
-    final threshold = _isMediaOpening
-        ? _openingStallTicksThreshold
-        : _stallTicksThreshold;
+    final threshold =
+        _isMediaOpening ? _openingStallTicksThreshold : _stallTicksThreshold;
     if (_stallTicks >= threshold) {
       _stallTicks = 0;
       _attemptStreamRecovery(
@@ -1382,13 +1393,15 @@ class _PlayerScreenState extends State<PlayerScreen>
   int _backgroundCacheBytes() {
     const flatFallback = 20 * 1024 * 1024; // 20 MB
     const twoMinutes = Duration(minutes: 2);
-    final totalBytes = TorrentDownloadRegistry.parseSizeBytes(_currentStream.size);
+    final totalBytes =
+        TorrentDownloadRegistry.parseSizeBytes(_currentStream.size);
     if (totalBytes == null || totalBytes <= 0 || _duration.inSeconds <= 0) {
       return flatFallback;
     }
     final bytesPerSecond = totalBytes / _duration.inSeconds;
     final bytes = (bytesPerSecond * twoMinutes.inSeconds).round();
-    return bytes.clamp(flatFallback, TorrentEngineService.defaultStreamCacheBytes);
+    return bytes.clamp(
+        flatFallback, TorrentEngineService.defaultStreamCacheBytes);
   }
 
   Future<void> _initMediaSession() async {
@@ -1537,8 +1550,8 @@ class _PlayerScreenState extends State<PlayerScreen>
           e,
         );
       } else {
-        final histMovie =
-            SavedMoviesService().getMovieFromHistory(widget.movie.id, type: widget.movie.type);
+        final histMovie = SavedMoviesService()
+            .getMovieFromHistory(widget.movie.id, type: widget.movie.type);
         progress = histMovie?.progress;
       }
 
@@ -1668,8 +1681,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// Whether the episode browser covers the video (the whole screen): not
   /// as a computer's side panel, beside which the video's still in view —
   /// its keys then still work.
-  bool get _episodeCoversVideo =>
-      _showEpisodeDrawer && !playerIsWide(context);
+  bool get _episodeCoversVideo => _showEpisodeDrawer && !playerIsWide(context);
 
   bool _onHardwareKey(KeyEvent event) {
     if (!mounted || !(ModalRoute.of(context)?.isCurrent ?? true)) {
@@ -1759,6 +1771,33 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// The bottom bar (seek bar, buttons, times), for [_inBottomBand].
   final GlobalKey _bottomBarKey = GlobalKey();
 
+  /// The video, for moving its subtitles above the controls (see
+  /// _placeSubtitles).
+  final GlobalKey<VideoState> _videoKey = GlobalKey<VideoState>();
+
+  /// The subtitles' space below them now, so they're moved only on a
+  /// change.
+  double _subtitleBottom = 24;
+
+  /// Subtitles just above the seek bar while the controls are up (they
+  /// were under it), at the foot again once they're gone — moved smoothly.
+  void _placeSubtitles() {
+    var bottom = 24.0;
+    if (_controlsVisible && !_showSettingsPanel) {
+      final box = _bottomBarKey.currentContext?.findRenderObject();
+      if (box is RenderBox && box.hasSize && box.attached) {
+        final barTop = box.localToGlobal(Offset.zero).dy;
+        bottom = MediaQuery.sizeOf(context).height - barTop + 12;
+      }
+    }
+    if ((bottom - _subtitleBottom).abs() < 1) return;
+    _subtitleBottom = bottom;
+    _videoKey.currentState?.setSubtitleViewPadding(
+      EdgeInsets.fromLTRB(16, 0, 16, bottom),
+      duration: const Duration(milliseconds: 250),
+    );
+  }
+
   /// Whether the last click landed in [_inBottomBand] (so a double-click
   /// there doesn't toggle full screen either).
   bool _lastTapInBottomBand = false;
@@ -1806,8 +1845,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
 
     final width = MediaQuery.of(context).size.width;
-    final inMiddle =
-        position.dx > width / 3 && position.dx < width * 2 / 3;
+    final inMiddle = position.dx > width / 3 && position.dx < width * 2 / 3;
     _screenTapTimer?.cancel();
     _screenTapTimer = Timer(
       const Duration(milliseconds: 320),
@@ -1853,7 +1891,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     final s = _currentSeason, e = _currentEpisode;
     if (s == null || e == null || length.inSeconds < 60) return;
     SavedMoviesService().saveEpisodeLength(widget.movie.id, s, e, length);
-    final minutes = SavedMoviesService().getEpisodeMinutes(widget.movie.id, s, e);
+    final minutes =
+        SavedMoviesService().getEpisodeMinutes(widget.movie.id, s, e);
     List<Episode> updated(List<Episode> eps) => [
           for (final ep in eps)
             ep.episodeNumber == e ? ep.withRuntime(minutes) : ep,
@@ -1916,7 +1955,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             child: ClipRRect(
               borderRadius: BorderRadius.circular(20),
               child: GlassBlur(
-                reducedTint: Colors.black.withValues(alpha: 0.45),
+                reducedTint: Colors.black.withValues(alpha: 0.9),
                 child: Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
@@ -2032,9 +2071,8 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _toggleMute({bool flash = false}) {
     final current = _volumeNotifier.value;
-    final next = current > 0
-        ? 0.0
-        : (_volumeBeforeMute > 0 ? _volumeBeforeMute : 100.0);
+    final next =
+        current > 0 ? 0.0 : (_volumeBeforeMute > 0 ? _volumeBeforeMute : 100.0);
     _setVolume(next, showSlider: true, flash: flash);
   }
 
@@ -2127,7 +2165,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     setState(() {
       _switchingQuality = true;
       _switchingMessage = message ??
-          'Switching to ${QualityOption(StreamResolver.tierOf(newStream), [newStream]).name}…';
+          'Switching to ${QualityOption(StreamResolver.tierOf(newStream), [
+                newStream
+              ]).name}…';
       // Kept up until the new video is playing (see
       // _resetControlsTimer).
       _controlsVisible = true;
@@ -2271,6 +2311,41 @@ class _PlayerScreenState extends State<PlayerScreen>
         });
       } catch (_) {}
     }
+  }
+
+  /// Audio languages with no copy of what's playing (see
+  /// _checkAudioLanguages): greyed out in the Audio menu.
+  Set<AudioLanguage> _noAudioIn = const {};
+
+  /// Which of the title's audio languages have a copy of what's playing
+  /// (this episode, for a series) — the details page's check
+  /// (StreamResolver.getAvailableStreams in each), so the Audio menu
+  /// doesn't offer English for a film with none (Aavesham).
+  Future<void> _checkAudioLanguages() async {
+    final title = widget.details;
+    if (!AudioLanguageService.appliesTo(title)) return;
+    final season = _currentSeason, episode = _currentEpisode;
+    final isTv = title.type == 'tv';
+    final none = <AudioLanguage>{};
+    for (final language in AudioLanguage.values) {
+      try {
+        final streams = await _resolver.getAvailableStreams(
+          imdbId: title.imdbId ?? title.id,
+          type: title.type,
+          season: isTv ? season : null,
+          episode: isTv ? episode : null,
+          title: title,
+          audioLanguage: language,
+        );
+        if (streams.isEmpty) none.add(language);
+      } catch (_) {
+        return; // Couldn't tell: nothing greyed out.
+      }
+    }
+    if (!mounted || _currentSeason != season || _currentEpisode != episode) {
+      return;
+    }
+    setState(() => _noAudioIn = none);
   }
 
   /// Whether a change of audio language is being carried out (finding a
@@ -2461,8 +2536,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _pausedForEpisodeBrowser = false;
         setState(() => _showEpisodeDrawer = false);
         _animateEpisodeDrawerClosed();
-        _playEpisodeWithChosenStream(
-            ep, season, stream, allStreams);
+        _playEpisodeWithChosenStream(ep, season, stream, allStreams);
       },
       onWebPlayerChosen: (ep, season, provider) {
         _pausedForEpisodeBrowser = false;
@@ -2475,7 +2549,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       return [
         Positioned.fill(
           key: const ValueKey('episode-browser-layer'),
-          child: SlideTransition(position: _episodeDrawerOffset, child: browser),
+          child:
+              SlideTransition(position: _episodeDrawerOffset, child: browser),
         ),
       ];
     }
@@ -2500,48 +2575,48 @@ class _PlayerScreenState extends State<PlayerScreen>
           groupId: EpisodeBrowser.panelTapGroup,
           onTapOutside: (_) => _dismissEpisodePanel(),
           child: SlideTransition(
-          position: _episodePanelOffset,
-          // Painted once, then just moved as it slides — not the episodes
-          // and their pictures drawn again every frame of it.
-          child: RepaintBoundary(
-          child: DecoratedBox(
-            position: DecorationPosition.foreground,
-            decoration: BoxDecoration(
-              borderRadius: radius,
-              border: Border.all(color: kGlassEdge),
-            ),
-            child: ClipRRect(
-              borderRadius: radius,
-              // The settings popup's glass (PlayerSettingsPanel): the
-              // video frosted under a dark tint. Resting while the panel
-              // slides in or out (GlassBlur.paused) — re-blurring a whole
-              // panel's worth of moving video every frame of the slide
-              // stuttered — darker meanwhile to make up for it.
-              child: AnimatedBuilder(
-                animation: _episodeDrawerController,
-                builder: (context, child) => GlassBlur(
-                  sigma: 16,
-                  paused: _episodeDrawerController.isAnimating,
-                  reducedTint: Colors.black.withValues(alpha: 0.35),
-                  child: child!,
+            position: _episodePanelOffset,
+            // Painted once, then just moved as it slides — not the episodes
+            // and their pictures drawn again every frame of it.
+            child: RepaintBoundary(
+              child: DecoratedBox(
+                position: DecorationPosition.foreground,
+                decoration: BoxDecoration(
+                  borderRadius: radius,
+                  border: Border.all(color: kGlassEdge),
                 ),
-                child: ColoredBox(
-                  color: kGlassSheetTint,
-                  // A phone-sized screen of its own, as the home's side
-                  // column.
-                  child: MediaQuery(
-                    data: MediaQuery.of(context).copyWith(
-                      size: panelSize,
-                      padding: EdgeInsets.zero,
-                      viewPadding: EdgeInsets.zero,
+                child: ClipRRect(
+                  borderRadius: radius,
+                  // The settings popup's glass (PlayerSettingsPanel): the
+                  // video frosted under a dark tint. Resting while the panel
+                  // slides in or out (GlassBlur.paused) — re-blurring a whole
+                  // panel's worth of moving video every frame of the slide
+                  // stuttered — darker meanwhile to make up for it.
+                  child: AnimatedBuilder(
+                    animation: _episodeDrawerController,
+                    builder: (context, child) => GlassBlur(
+                      sigma: 16,
+                      paused: _episodeDrawerController.isAnimating,
+                      reducedTint: Colors.black.withValues(alpha: 0.9),
+                      child: child!,
                     ),
-                    child: browser,
+                    child: ColoredBox(
+                      color: kGlassSheetTint,
+                      // A phone-sized screen of its own, as the home's side
+                      // column.
+                      child: MediaQuery(
+                        data: MediaQuery.of(context).copyWith(
+                          size: panelSize,
+                          padding: EdgeInsets.zero,
+                          viewPadding: EdgeInsets.zero,
+                        ),
+                        child: browser,
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-          ),
           ),
         ),
       ),
@@ -2765,11 +2840,11 @@ class _PlayerScreenState extends State<PlayerScreen>
       e is NotEnoughSpaceException
           ? e.toString()
           : e is _NotInLanguageException
-          ? "S$seasonNumber E${targetEp.episodeNumber} isn't available in "
-              "${e.language} yet, so you're still on the episode you were "
-              'watching.'
-          : "Couldn't play S$seasonNumber E${targetEp.episodeNumber}, so "
-              "you're still on the episode you were watching.",
+              ? "S$seasonNumber E${targetEp.episodeNumber} isn't available in "
+                  "${e.language} yet, so you're still on the episode you were "
+                  'watching.'
+              : "Couldn't play S$seasonNumber E${targetEp.episodeNumber}, so "
+                  "you're still on the episode you were watching.",
       error: true,
     );
   }
@@ -2867,7 +2942,13 @@ class _PlayerScreenState extends State<PlayerScreen>
       setState(() {
         // Picked from another season in the browser: that season's
         // episodes are now the playing ones.
-        if (seasonNumber == _browsingSeason) _episodes = _browsingEpisodes;
+        if (seasonNumber == _browsingSeason) {
+          _episodes = _browsingEpisodes;
+        } else if (seasonNumber == _nextSeasonNumber &&
+            _nextSeasonEpisodes.isNotEmpty) {
+          // Next Episode on into the next season.
+          _episodes = _nextSeasonEpisodes;
+        }
         _currentEpisode = targetEp.episodeNumber;
         _currentSeason = seasonNumber;
         // The old episode's subtitles don't fit the new one, and opening
@@ -2978,20 +3059,91 @@ class _PlayerScreenState extends State<PlayerScreen>
       });
       _subscribeToTorrent(_torrentId);
       _loadSubtitles();
+      _checkAudioLanguages();
       _loadApiSkipSegments();
       _updateMediaSessionMetadata();
     }
   }
 
-  /// The episode after the playing one this season, if any.
-  Episode? get _nextEpisode {
+  // The next season's episodes, looked up while the last episode of this
+  // one plays (see _loadNextSeason): Next Episode goes on into it — Ghosts'
+  // season 1 finale offered nothing, or Next did nothing.
+  int? _nextSeasonNumber;
+  List<Episode> _nextSeasonEpisodes = const [];
+  // The season the next one was looked up from, so it's done once.
+  int? _nextSeasonLookedUpFrom;
+  bool _nextSeasonLoading = false;
+  // After a failed lookup: not tried again before this.
+  DateTime? _nextSeasonRetryAt;
+
+  /// The season after the playing one, by the show's seasons (not the
+  /// specials, season 0).
+  int? get _followingSeason {
+    final current = _currentSeason ?? 1;
+    final later = [
+      for (final s in widget.details.seasons ?? const <Season>[])
+        if (s.seasonNumber > current) s.seasonNumber,
+    ]..sort();
+    return later.firstOrNull;
+  }
+
+  /// Whether the playing episode is its season's last.
+  bool get _isLastOfSeason {
+    if (_currentEpisode == null || _episodes.isEmpty) return false;
+    return _episodes.indexWhere((e) => e.episodeNumber == _currentEpisode) ==
+        _episodes.length - 1;
+  }
+
+  /// The episode after the playing one — this season's next, or, after its
+  /// last, the next season's first — and its season.
+  ({Episode episode, int season})? get _nextUp {
     if (_currentEpisode == null || _episodes.isEmpty) return null;
     final currentIndex =
         _episodes.indexWhere((e) => e.episodeNumber == _currentEpisode);
-    if (currentIndex == -1 || currentIndex >= _episodes.length - 1) {
+    if (currentIndex == -1) return null;
+    if (currentIndex < _episodes.length - 1) {
+      return (episode: _episodes[currentIndex + 1], season: _currentSeason ?? 1);
+    }
+    final nextSeason = _nextSeasonNumber;
+    if (nextSeason == null ||
+        nextSeason != _followingSeason ||
+        _nextSeasonEpisodes.isEmpty) {
       return null;
     }
-    return _episodes[currentIndex + 1];
+    return (episode: _nextSeasonEpisodes.first, season: nextSeason);
+  }
+
+  Episode? get _nextEpisode => _nextUp?.episode;
+
+  /// On a season's last episode: the next season's episodes, for Next
+  /// Episode. Once per season.
+  Future<void> _loadNextSeason() async {
+    if (widget.details.type != 'tv' || !_isLastOfSeason) return;
+    final from = _currentSeason ?? 1;
+    if (_nextSeasonLookedUpFrom == from || _nextSeasonLoading) return;
+    if (_nextSeasonRetryAt?.isAfter(DateTime.now()) ?? false) return;
+    final following = _followingSeason;
+    _nextSeasonLookedUpFrom = from;
+    if (following == null) return;
+    _nextSeasonLoading = true;
+    try {
+      final eps = await TMDBService().getSeasonDetails(
+        widget.details.id,
+        following,
+      );
+      if (!mounted) return;
+      setState(() {
+        _nextSeasonNumber = following;
+        _nextSeasonEpisodes = eps;
+      });
+    } catch (e) {
+      debugPrint('Next season lookup failed: $e');
+      // Tried again later in the episode.
+      _nextSeasonLookedUpFrom = null;
+      _nextSeasonRetryAt = DateTime.now().add(const Duration(seconds: 30));
+    } finally {
+      _nextSeasonLoading = false;
+    }
   }
 
   /// Up next, at an episode's end: Watch Credits, and Next Episode filling
@@ -3053,16 +3205,19 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// Netflix Auto Play Next Episode Feature
   Future<void> _playNextEpisode() async {
-    final nextEp = _nextEpisode;
-    if (nextEp == null) return;
-    _playEpisode(nextEp, _currentSeason ?? 1);
+    final next = _nextUp;
+    if (next == null) return;
+    _playEpisode(next.episode, next.season);
   }
 
   // The next episode, readied near the end of this one (see
   // _maybeReadyNextEpisode): which one, its torrents (_playEpisode uses
   // them rather than looking them up again), and its head start's.
-  ({int season, int episode, Future<List<TorrentStream>> streams})?
-      _readiedNext;
+  ({
+    int season,
+    int episode,
+    Future<List<TorrentStream>> streams
+  })? _readiedNext;
   List<TorrentStream> _nextHeadStart = const [];
   // The episode ("season:episode") the next one was readied from, so it's
   // done once per episode.
@@ -3088,10 +3243,19 @@ class _PlayerScreenState extends State<PlayerScreen>
         !creditsSoon) {
       return;
     }
+    // The season's last: readied once the next season's episodes are in.
+    if (_isLastOfSeason && _nextUp == null) {
+      unawaited(_loadNextSeason());
+      if (_nextSeasonLoading ||
+          _nextSeasonLookedUpFrom != (_currentSeason ?? 1)) {
+        return;
+      }
+    }
     _readiedFrom = from;
-    final next = _nextEpisode;
-    if (next == null || next.isUnreleased) return;
-    final season = _currentSeason ?? 1;
+    final nextUp = _nextUp;
+    if (nextUp == null || nextUp.episode.isUnreleased) return;
+    final next = nextUp.episode;
+    final season = nextUp.season;
     final imdbId = widget.details.imdbId ?? widget.details.id;
     final streams = _resolver.getAvailableStreams(
       imdbId: imdbId,
@@ -3209,8 +3373,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       TorrentDownloadRegistry.updateProgress(
         _currentStream.infoHash,
         downloadedBytes: finalTorrentInfo.totalDone,
-        totalBytes:
-            finalTorrentInfo.totalWanted > 0 ? finalTorrentInfo.totalWanted : null,
+        totalBytes: finalTorrentInfo.totalWanted > 0
+            ? finalTorrentInfo.totalWanted
+            : null,
       );
     }
 
@@ -3716,8 +3881,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     // Given to the player before (this video): pick that track again,
     // rather than adding the file another time.
     final added = await _addedSubtitleTracks();
-    final id =
-        added.entries.where((e) => e.value == url).map((e) => e.key).firstOrNull;
+    final id = added.entries
+        .where((e) => e.value == url)
+        .map((e) => e.key)
+        .firstOrNull;
     if (id != null) {
       await player.setSubtitleTrack(
         SubtitleTrack(id, _getLanguageName(lang), lang),
@@ -3731,21 +3898,70 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   // ─── Sinhala subtitles, made from English ones (SubtitleTranslator) ───
 
-  /// Sinhala made from the English subtitles, offered when there are
-  /// English ones to make it from and none in Sinhala by people. From the
-  /// English track it's being made from already, else the best one.
+  /// Languages Sinhala is made from when there are no English subtitles
+  /// (nor ones in the title's own language), most used first.
+  static const _otherSources = [
+    'Japanese',
+    'Korean',
+    'Chinese',
+    'Hindi',
+    'Tamil',
+    'Malayalam',
+    'Telugu',
+    'Kannada',
+    'Bengali',
+    'Spanish',
+    'French',
+    'German',
+    'Italian',
+    'Portuguese',
+    'Portuguese (Brazil)',
+    'Russian',
+    'Arabic',
+    'Turkish',
+    'Indonesian',
+    'Thai',
+    'Vietnamese',
+  ];
+
+  /// The language [widget.details] was made in, by name ("Malayalam").
+  String get _titleLanguage => AudioLanguageService.appliesTo(widget.details)
+      ? AudioLanguageService.originalOf(widget.details).name
+      : 'English';
+
+  /// Sinhala made from downloaded subtitles, offered when there are some
+  /// to make it from and none in Sinhala by people: from English ones
+  /// first (the most common, and the most carefully made), else ones in
+  /// the title's own language (a Japanese film's Japanese), else another
+  /// widely used language, else whatever there is. From the track it's
+  /// being made from already, if there's one.
   SubtitleTrackData? _sinhalaTrack() {
-    bool inSinhala(SubtitleTrackData s) => _getLanguageName(s.lang) == 'Sinhala';
-    if (_externalSubtitles.any(inSinhala) || _embeddedSubtitles.any(inSinhala)) {
+    bool inSinhala(SubtitleTrackData s) =>
+        _getLanguageName(s.lang) == 'Sinhala';
+    if (_externalSubtitles.any(inSinhala) ||
+        _embeddedSubtitles.any(inSinhala)) {
       return null;
     }
-    final english = [
+    final usable = [
       for (final s in _externalSubtitles)
-        if (s.url.isNotEmpty && _getLanguageName(s.lang) == 'English') s,
+        if (s.url.isNotEmpty) s,
     ];
-    if (english.isEmpty) return null;
-    final from =
-        english.where((s) => s.id == _sinhalaFrom).firstOrNull ?? english.first;
+    if (usable.isEmpty) return null;
+    final own = _titleLanguage;
+    int rank(SubtitleTrackData s) {
+      final name = _getLanguageName(s.lang);
+      if (name == 'English') return 0;
+      if (name == own) return 1;
+      final i = _otherSources.indexOf(name);
+      return i < 0 ? 100 : 2 + i;
+    }
+
+    // The best ranked, the list's own order (best match first) among equals.
+    var best = usable.first;
+    for (final s in usable) {
+      if (rank(s) < rank(best)) best = s;
+    }
+    final from = usable.where((s) => s.id == _sinhalaFrom).firstOrNull ?? best;
     return SubtitleTrackData(
       id: 'sinhala:${from.id}',
       url: 'sinhala:${from.id}',
@@ -3755,7 +3971,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
-  /// The English text [from] has now: its retimed copy when there is one.
+  /// The text [from] has now: its retimed copy when there is one.
   Future<String> _englishFor(SubtitleTrackData from) async {
     final retimed = _retimedPaths[from.id];
     if (retimed != null) {
@@ -3785,6 +4001,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         final job = await SubtitleTranslator.start(
           english: english,
           title: '${widget.details.title}$episode',
+          sourceLanguage: _getLanguageName(from.lang),
+          titleLanguage: _titleLanguage,
           from: _currentPosition.inMilliseconds / 1000,
         );
         if (!mounted || _streamUrl != url || _sinhalaFrom != from.id) {
@@ -3812,6 +4030,33 @@ class _PlayerScreenState extends State<PlayerScreen>
         return null;
       }
     }();
+  }
+
+  /// How much the subtitles' size is scaled: media_kit's own measure (the
+  /// screen's area against a 1920 x 1080 one), but never under 55% — on a
+  /// phone on its side that came to 42%, the lines small to read. With the
+  /// size raised to 38 from 32: about 21 on a phone (13.5 before), 30 on a
+  /// laptop (25.6), 38 on a big screen (32).
+  TextScaler _subtitleScaler(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final area = size.width * size.height / (1920 * 1080);
+    return TextScaler.linear(math.max(0.55, math.sqrt(area.clamp(0.0, 1.0))));
+  }
+
+  /// The Sinhala row's "Add key": the Gemini key's steps and paste box
+  /// (GeminiKeyForm) over the film, paused meanwhile. Saved, Sinhala
+  /// subtitles start at once, and the film carries on.
+  Future<void> _addGeminiKey() async {
+    final wasPlaying = _isPlaying;
+    if (wasPlaying) await player.pause();
+    if (!mounted) return;
+    await showGeminiKeyDialog(context, title: 'Sinhala subtitles');
+    if (!mounted) return;
+    if (GeminiKeyService().hasKey) {
+      final sinhala = _sinhalaTrack();
+      if (sinhala != null) await _selectSubtitle(sinhala);
+    }
+    if (wasPlaying && mounted) await player.play();
   }
 
   /// More lines translated: the player reads the file again, if they're
@@ -4068,8 +4313,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           end: end,
         ));
       }
-      final take = agreed ||
-          (result.sure && delay.abs() <= _autoSyncBigShift);
+      final take = agreed || (result.sure && delay.abs() <= _autoSyncBigShift);
       if (!take) {
         checkFrom = Duration(milliseconds: (end * 1000).round());
         print(result.sure
@@ -4331,7 +4575,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     final t = timing ?? (delay: _subtitleDelaySeconds, speed: _subtitleSpeed);
     final key = _timingKey(track);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(key, '${t.delay}|${t.speed}|${byViewer ? 'viewer' : 'sync'}');
+    await prefs.setString(
+        key, '${t.delay}|${t.speed}|${byViewer ? 'viewer' : 'sync'}');
   }
 
   /// [track]'s timing kept from an earlier visit (see _rememberTiming).
@@ -4355,8 +4600,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     double start,
     List<SubtitleCue> cues,
   ) =>
-      Isolate.run(
-          () => SubtitleSync.find(pcm, windowStart: start, cues: cues));
+      Isolate.run(() => SubtitleSync.find(pcm, windowStart: start, cues: cues));
 
   /// Shows [track] (null = subtitles off). A choice the viewer made
   /// ([remember]) becomes their preference for every video after this
@@ -4523,8 +4767,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     for (final ch in _mkvChapters) {
       // Not inside a highlighted part: a chapter starting partway through
       // the credits cut them in two, which read as two credit sections.
-      final inside = _skipSegments.any((s) =>
-          s.end != null && ch.start > s.start && ch.start < s.end!);
+      final inside = _skipSegments
+          .any((s) => s.end != null && ch.start > s.start && ch.start < s.end!);
       if (inside) continue;
       final f = ch.start.inMilliseconds / totalMs;
       if (f > 0.008 && f < 0.992) rawPoints.add(f);
@@ -4610,9 +4854,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// The playing episode's details, when it's in [_episodes] (TV only).
   Episode? get _playingEpisode => _currentEpisode == null
       ? null
-      : _episodes
-          .where((e) => e.episodeNumber == _currentEpisode)
-          .firstOrNull;
+      : _episodes.where((e) => e.episodeNumber == _currentEpisode).firstOrNull;
 
   String _formatDuration(Duration duration) {
     final hours = duration.inHours;
@@ -4623,30 +4865,20 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Once laid out: the subtitles above the controls, or at the foot.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _placeSubtitles();
+    });
     final size = MediaQuery.of(context).size;
     final wide = playerIsWide(context);
     // Camera cutout (punch hole / notch) — the video draws under it (see
     // MainActivity), but the controls stay clear of it.
     final safe = MediaQuery.of(context).padding;
-    bool nextEpisodePlayable = false;
-    if (widget.details.type == 'tv' &&
-        _currentEpisode != null &&
-        _episodes.isNotEmpty) {
-      final currentIndex =
-          _episodes.indexWhere((e) => e.episodeNumber == _currentEpisode);
-      if (currentIndex >= 0 && currentIndex < _episodes.length - 1) {
-        final nextEp = _episodes[currentIndex + 1];
-        nextEpisodePlayable = true;
-        if (nextEp.airDate != null) {
-          try {
-            final date = DateTime.parse(nextEp.airDate!);
-            if (date.isAfter(DateTime.now())) {
-              nextEpisodePlayable = false;
-            }
-          } catch (_) {}
-        }
-      }
-    }
+    // This season's next, or the next season's first (see _nextUp), once
+    // it's out.
+    final nextForButton = widget.details.type == 'tv' ? _nextEpisode : null;
+    final nextEpisodePlayable =
+        nextForButton != null && !nextForButton.isUnreleased;
 
     return PopScope(
       // Back closes a panel, or else the player — via _close, to turn the
@@ -4670,1195 +4902,1448 @@ class _PlayerScreenState extends State<PlayerScreen>
       child: _closing
           ? const ColoredBox(color: Colors.black)
           : Focus(
-        autofocus: true,
-        descendantsAreFocusable: false,
-        child: Scaffold(
-        backgroundColor: Colors.black,
-        body: MouseRegion(
-          cursor: (!_controlsVisible &&
-                  _isPlaying &&
-                  !_showEpisodeDrawer &&
-                  !_showSettingsPanel)
-              ? SystemMouseCursors.none
-              : MouseCursor.defer,
-          onHover: _onMouseHover,
-          child: Stack(
-          children: [
-            // Layer 1: PlayerGestureOverlay + Video + Controls
-            PlayerGestureOverlay(
-              enabled: !_episodeCoversVideo && !_showSettingsPanel,
-              onTapAt: _onScreenTap,
-              suppressDoubleTap: () => _pointerWasOnControls,
-              // No seeking until the video has loaded (see _loadingVideo).
-              onDoubleTapSeek: _loadingVideo
-                  ? null
-                  : (isForward) {
-                      // The double tap's first tap already scheduled a
-                      // pause.
-                      _screenTapTimer?.cancel();
-                      if (isForward) {
-                        _skipForward();
-                      } else {
-                        _skipBackward();
-                      }
-                    },
-              onDoubleClick: WindowFullScreen.supported
-                  ? () {
-                      // The double-click's first click already scheduled
-                      // a pause or the controls.
-                      _screenTapTimer?.cancel();
-                      // Not in the controls' strip, where clicks do
-                      // nothing (see _inBottomBand), nor on a button.
-                      if (_lastTapInBottomBand || _pointerWasOnControls) {
-                        return;
-                      }
-                      WindowFullScreen.toggle();
-                    }
-                  : null,
-              onSwipeUp: widget.movie.type == 'tv' ? _openEpisodeBrowser : null,
-              onHoldStart: _startSpeedBoost,
-              onHoldEnd: _endSpeedBoost,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  // Video Player (fills entire screen)
-                  SizedBox.expand(
-                    child: Hero(
-                      tag: 'player_hero',
-                      child: AnimatedScale(
-                        scale: _isPlaying ? 1.0 : 1.04,
-                        duration: const Duration(milliseconds: 350),
-                        curve: Curves.easeInOutCubic,
-                        child: Video(
-                          controller: controller,
-                          // media_kit's own look, with a font for Sinhala
-                          // (subtitles made from English: SubtitleTranslator).
-                          subtitleViewConfiguration:
-                              const SubtitleViewConfiguration(
-                            style: TextStyle(
-                              height: 1.4,
-                              fontSize: 32.0,
-                              letterSpacing: 0.0,
-                              wordSpacing: 0.0,
-                              color: Color(0xffffffff),
-                              fontWeight: FontWeight.normal,
-                              backgroundColor: Color(0xaa000000),
-                              fontFamilyFallback: ['NotoSansSinhala'],
-                            ),
-                          ),
-                          controls:
-                              NoVideoControls, // Pure custom controls overlay
-                          fit: _videoFit.boxFit,
-                          width: double.infinity,
-                          height: double.infinity,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  // Play/pause flash: pops in, then fades as it grows
-                  IgnorePointer(
-                    child: Center(
-                      child: AnimatedBuilder(
-                        animation: _playPauseFlash,
-                        builder: (context, child) {
-                          final t = _playPauseFlash.value;
-                          final fade =
-                              t < 0.3 ? 1.0 : 1 - (t - 0.3) / 0.7;
-                          return Opacity(
-                            opacity: fade.clamp(0.0, 1.0),
-                            child: Transform.scale(
-                              scale: 0.85 +
-                                  0.3 * Curves.easeOut.transform(t),
-                              child: child,
-                            ),
-                          );
-                        },
-                        child: Container(
-                          width: wide ? 96 : 84,
-                          height: wide ? 96 : 84,
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.45),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(_flashIcon,
-                              color: Colors.white, size: wide ? 56 : 48),
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  // Switching (quality, episode, season, recovery): the
-                  // video stays visible, softly darkened, under a small
-                  // spinner and one quiet line.
-                  if (_switchingQuality || _loadingSeason)
-                    ColoredBox(
-                      color: Colors.black.withValues(alpha: 0.6),
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
+              autofocus: true,
+              descendantsAreFocusable: false,
+              child: Scaffold(
+                backgroundColor: Colors.black,
+                body: MouseRegion(
+                  cursor: (!_controlsVisible &&
+                          _isPlaying &&
+                          !_showEpisodeDrawer &&
+                          !_showSettingsPanel)
+                      ? SystemMouseCursors.none
+                      : MouseCursor.defer,
+                  onHover: _onMouseHover,
+                  child: Stack(
+                    children: [
+                      // Layer 1: PlayerGestureOverlay + Video + Controls
+                      PlayerGestureOverlay(
+                        enabled: !_episodeCoversVideo && !_showSettingsPanel,
+                        onTapAt: _onScreenTap,
+                        suppressDoubleTap: () => _pointerWasOnControls,
+                        // No seeking until the video has loaded (see _loadingVideo).
+                        onDoubleTapSeek: _loadingVideo
+                            ? null
+                            : (isForward) {
+                                // The double tap's first tap already scheduled a
+                                // pause.
+                                _screenTapTimer?.cancel();
+                                if (isForward) {
+                                  _skipForward();
+                                } else {
+                                  _skipBackward();
+                                }
+                              },
+                        onDoubleClick: WindowFullScreen.supported
+                            ? () {
+                                // The double-click's first click already scheduled
+                                // a pause or the controls.
+                                _screenTapTimer?.cancel();
+                                // Not in the controls' strip, where clicks do
+                                // nothing (see _inBottomBand), nor on a button.
+                                if (_lastTapInBottomBand ||
+                                    _pointerWasOnControls) {
+                                  return;
+                                }
+                                WindowFullScreen.toggle();
+                              }
+                            : null,
+                        onSwipeUp: widget.movie.type == 'tv'
+                            ? _openEpisodeBrowser
+                            : null,
+                        onHoldStart: _startSpeedBoost,
+                        onHoldEnd: _endSpeedBoost,
+                        child: Stack(
+                          fit: StackFit.expand,
                           children: [
-                            const SizedBox(
-                              width: 28,
-                              height: 28,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            ),
-                            const SizedBox(height: 14),
-                            Text(
-                              _switchingMessage ?? 'Loading…',
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-
-                  // Netflix-Style Interface Overlay
-                  AnimatedOpacity(
-                    opacity: _controlsVisible ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 300),
-                    child: IgnorePointer(
-                      ignoring: !_controlsVisible,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          // Cinematic gradient — heavier on bottom for the seek bar
-                          Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  Colors.black.withOpacity(0.7),
-                                  Colors.transparent,
-                                  Colors.transparent,
-                                  Colors.black
-                                      .withOpacity(_isPlaying ? 0.8 : 0.92),
-                                ],
-                                stops: const [0.0, 0.18, 0.6, 1.0],
-                              ),
-                            ),
-                          ),
-
-                          // When paused: left-side cinematic gradient for metadata (animates in/out)
-                          Positioned.fill(
-                            child: IgnorePointer(
-                              child: AnimatedOpacity(
-                                duration: const Duration(milliseconds: 350),
-                                opacity: !_isPlaying ? 1.0 : 0.0,
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      begin: Alignment.centerLeft,
-                                      end: Alignment.centerRight,
-                                      colors: [
-                                        Colors.black.withOpacity(0.85),
-                                        Colors.black.withOpacity(0.4),
-                                        Colors.transparent,
-                                      ],
-                                      stops: const [0.0, 0.35, 0.65],
+                            // Video Player (fills entire screen)
+                            SizedBox.expand(
+                              child: Hero(
+                                tag: 'player_hero',
+                                child: AnimatedScale(
+                                  scale: _isPlaying ? 1.0 : 1.04,
+                                  duration: const Duration(milliseconds: 350),
+                                  curve: Curves.easeInOutCubic,
+                                  child: Video(
+                                    key: _videoKey,
+                                    controller: controller,
+                                    // media_kit's own look, with a font for Sinhala
+                                    // (subtitles made from English: SubtitleTranslator),
+                                    // bigger: see _subtitleScaler.
+                                    subtitleViewConfiguration:
+                                        SubtitleViewConfiguration(
+                                      textScaler: _subtitleScaler(context),
+                                      style: TextStyle(
+                                        // Sinhala in its own font throughout,
+                                        // spaces and commas too: switching
+                                        // fonts between words left gaps in
+                                        // the black behind the line.
+                                        fontFamily: _selectedSubtitle != null &&
+                                                _getLanguageName(
+                                                        _selectedSubtitle!
+                                                            .lang) ==
+                                                    'Sinhala'
+                                            ? 'NotoSansSinhala'
+                                            : null,
+                                        height: 1.4,
+                                        fontSize: 38.0,
+                                        letterSpacing: 0.0,
+                                        wordSpacing: 0.0,
+                                        // Out of sight while paused: clear,
+                                        // not removed, so the line on
+                                        // screen comes back with play.
+                                        color: _isPlaying
+                                            ? const Color(0xffffffff)
+                                            : Colors.transparent,
+                                        fontWeight: FontWeight.normal,
+                                        backgroundColor: _isPlaying
+                                            ? const Color(0xaa000000)
+                                            : Colors.transparent,
+                                        fontFamilyFallback: ['NotoSansSinhala'],
+                                      ),
                                     ),
+                                    controls:
+                                        NoVideoControls, // Pure custom controls overlay
+                                    fit: _videoFit.boxFit,
+                                    width: double.infinity,
+                                    height: double.infinity,
                                   ),
                                 ),
                               ),
                             ),
-                          ),
 
-                          // ─── TOP BAR ───
-                          Positioned(
-                            top: (wide ? 20 : 8) +
-                                MediaQuery.of(context).padding.top,
-                            left: (wide ? 28 : 16) + safe.left,
-                            right: (wide ? 28 : 16) + safe.right,
-                            child: Listener(
-                              onPointerDown: _markControlsPointer,
-                              child: Row(
-                                children: [
-                                  // The details screen's back button with
-                                  // the title's logo in a bubble grown out
-                                  // of it (GlassBubbleBar) — out while
-                                  // playing, back in when paused, where the
-                                  // left panel shows the big logo instead.
-                                  Expanded(
-                                    child: Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: TweenAnimationBuilder<double>(
-                                        tween: Tween<double>(
-                                            end: _isPlaying ? 1.0 : 0.0),
-                                        duration:
-                                            const Duration(milliseconds: 300),
-                                        builder: (context, reveal, _) =>
-                                            GlassBubbleBar(
-                                          reveal: reveal,
-                                          leading: CircleAvatar(
-                                            backgroundColor: Colors.transparent,
-                                            child: IconButton(
-                                              icon: const Icon(
-                                                GlassCircleButton.backIcon,
-                                                color: Colors.white,
-                                              ),
-                                              tooltip: MaterialLocalizations.of(
-                                                      context)
-                                                  .backButtonTooltip,
-                                              onPressed: () =>
-                                                  Navigator.maybePop(context),
-                                              iconSize: wide
-                                                  ? 28
-                                                  : GlassCircleButton
-                                                      .backIconSize,
-                                              padding: EdgeInsets.zero,
-                                            ),
-                                          ),
-                                          title: MovieTitleLogo(
-                                              movie: widget.details),
-                                        ),
+                            // Play/pause flash: pops in, then fades as it grows
+                            IgnorePointer(
+                              child: Center(
+                                child: AnimatedBuilder(
+                                  animation: _playPauseFlash,
+                                  builder: (context, child) {
+                                    final t = _playPauseFlash.value;
+                                    final fade =
+                                        t < 0.3 ? 1.0 : 1 - (t - 0.3) / 0.7;
+                                    return Opacity(
+                                      opacity: fade.clamp(0.0, 1.0),
+                                      child: Transform.scale(
+                                        scale: 0.85 +
+                                            0.3 * Curves.easeOut.transform(t),
+                                        child: child,
                                       ),
+                                    );
+                                  },
+                                  child: Container(
+                                    width: wide ? 96 : 84,
+                                    height: wide ? 96 : 84,
+                                    decoration: BoxDecoration(
+                                      color:
+                                          Colors.black.withValues(alpha: 0.45),
+                                      shape: BoxShape.circle,
                                     ),
+                                    child: Icon(_flashIcon,
+                                        color: Colors.white,
+                                        size: wide ? 56 : 48),
                                   ),
-                                  // Download speed — a quiet line of meta
-                                  // text, in its own ValueListenableBuilder
-                                  // so the ~1/sec libtorrent update only
-                                  // rebuilds this, not the whole screen.
-                                  Padding(
-                                    padding: const EdgeInsets.only(right: 12),
-                                    child: ValueListenableBuilder<double>(
-                                      valueListenable: _downloadSpeedNotifier,
-                                      builder: (context, speed, _) => Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(
-                                              Icons.arrow_downward_rounded,
-                                              color: Colors.white38,
-                                              size: wide ? 15 : 12),
-                                          const SizedBox(width: 4),
-                                          Text(
-                                            '${speed.toStringAsFixed(1)} MB/s',
-                                            style: TextStyle(
-                                                color: Colors.white54,
-                                                fontWeight: FontWeight.w500,
-                                                fontSize: wide ? 13.5 : 11),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ],
+                                ),
                               ),
                             ),
-                          ),
 
-                          // ─── LEFT METADATA PANEL ───
-                          Positioned(
-                            top: 0,
-                            bottom: 0,
-                            left: (wide ? 56 : 32) + safe.left,
-                            width: size.width * (wide ? 0.42 : 0.38),
-                            child: IgnorePointer(
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: AnimatedOpacity(
-                                  duration: const Duration(milliseconds: 350),
-                                  opacity:
-                                      (!_isPlaying && _controlsVisible) ? 1.0 : 0.0,
+                            // Switching (quality, episode, season, recovery): the
+                            // video stays visible, softly darkened, under a small
+                            // spinner and one quiet line.
+                            if (_switchingQuality || _loadingSeason)
+                              ColoredBox(
+                                color: Colors.black.withValues(alpha: 0.6),
+                                child: Center(
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      // Title or Logo
-                                      if (widget.details.logoUrl != null &&
-                                          widget.details.logoUrl!.isNotEmpty)
-                                        Padding(
-                                          padding: EdgeInsets.only(
-                                              bottom: wide ? 10 : 6),
-                                          child: CachedNetworkImage(
-                                            imageUrl: widget.details.logoUrl!,
-                                            height: wide ? 120 : 64,
-                                            fit: BoxFit.contain,
-                                            alignment: Alignment.centerLeft,
-                                            errorWidget:
-                                                (context, url, error) {
-                                              return Text(
-                                                widget.movie.title,
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: wide ? 38 : 22,
-                                                  fontWeight: FontWeight.w800,
-                                                  height: 1.15,
-                                                ),
-                                              );
-                                            },
-                                          ),
-                                        )
-                                      else
-                                        Text(
-                                          widget.movie.title,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            color: Colors.white,
-                                            fontSize: wide ? 38 : 22,
-                                            fontWeight: FontWeight.w800,
-                                            height: 1.15,
-                                          ),
+                                      const SizedBox(
+                                        width: 28,
+                                        height: 28,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
                                         ),
-                                      // TV episode info, in the episode cards'
-                                      // style: a small "S1 · E3" label over the
-                                      // episode's name.
-                                      if (widget.details.type == 'tv' &&
-                                          _currentEpisode != null) ...[
-                                        SizedBox(height: wide ? 16 : 10),
-                                        Text(
-                                          'S$_currentSeason · E$_currentEpisode',
-                                          style: TextStyle(
-                                            color: Colors.white54,
-                                            fontSize: wide ? 16 : 12,
-                                            height: 1.2,
-                                            fontWeight: FontWeight.w600,
-                                            letterSpacing: 0.5,
-                                          ),
-                                        ),
-                                        if (_playingEpisode?.name
-                                            case final name?
-                                            when name.isNotEmpty) ...[
-                                          SizedBox(height: wide ? 4 : 2),
-                                          Text(
-                                            name,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              color: Colors.white,
-                                              fontSize: wide ? 24 : 15,
-                                              height: 1.25,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ],
-                                      ],
-                                      SizedBox(height: wide ? 14 : 10),
-                                      // Description
+                                      ),
+                                      const SizedBox(height: 14),
                                       Text(
-                                        (_playingEpisode?.overview ?? '')
-                                                .isNotEmpty
-                                            ? _playingEpisode!.overview
-                                            : widget.movie.description,
-                                        maxLines: wide ? 4 : 3,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          color: wide
-                                              ? Colors.white70
-                                              : Colors.white60,
-                                          fontSize: wide ? 18 : 13,
-                                          height: 1.5,
+                                        _switchingMessage ?? 'Loading…',
+                                        style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
                                         ),
                                       ),
                                     ],
                                   ),
                                 ),
                               ),
-                            ),
-                          ),
 
-                          // ─── BOTTOM BAR ───
-                          Positioned(
-                            bottom: (wide ? 24 : 16) +
-                                MediaQuery.of(context).padding.bottom,
-                            left: (wide ? 32 : 24) + safe.left,
-                            right: (wide ? 32 : 24) + safe.right,
-                            child: Listener(
-                              key: _bottomBarKey,
-                              onPointerDown: _markControlsPointer,
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  // Seek slider — scoped to a ListenableBuilder over the
-                                  // position/duration/buffer notifiers so playback ticks
-                                  // (several times/sec) only rebuild this, not the screen.
-                                  ListenableBuilder(
-                                    listenable: Listenable.merge([
-                                      _positionNotifier,
-                                      _durationNotifier,
-                                      _bufferNotifier,
-                                      _seekHoverFractionNotifier,
-                                      _timelinePartitionRevision,
-                                    ]),
-                                    builder: (context, _) {
-                                      final dur = _durationNotifier.value;
-                                      final totalSeconds =
-                                          dur.inSeconds.toDouble();
-                                      final hoverFraction =
-                                          _seekHoverFractionNotifier.value;
-                                      final dragFraction = (_isDragging &&
-                                              totalSeconds > 0)
-                                          ? (_positionNotifier.value.inSeconds /
-                                                  totalSeconds)
-                                              .clamp(0.0, 1.0)
-                                          : null;
-                                      final activeFraction =
-                                          dragFraction ?? hoverFraction;
-                                      final showTooltip = !_loadingVideo &&
-                                          totalSeconds > 0 &&
-                                          activeFraction != null;
-                                      final tooltipDuration = showTooltip
-                                          ? Duration(
-                                              seconds: (activeFraction *
-                                                      totalSeconds)
-                                                  .round()
-                                                  .clamp(0, dur.inSeconds),
-                                            )
-                                          : Duration.zero;
-                                      final tooltipLabel = showTooltip
-                                          ? _segmentLabelAt(
-                                              tooltipDuration,
-                                              dur,
-                                            )
-                                          : null;
-                                      final skipRanges = _skipRanges;
-                                      final partitions = _partitions;
-                                      final pad = wide ? 16.0 : 14.0;
+                            // Netflix-Style Interface Overlay
+                            AnimatedOpacity(
+                              opacity: _controlsVisible ? 1.0 : 0.0,
+                              duration: const Duration(milliseconds: 300),
+                              child: IgnorePointer(
+                                ignoring: !_controlsVisible,
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    // Cinematic gradient — heavier on bottom for the seek bar
+                                    Container(
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: [
+                                            Colors.black.withOpacity(0.7),
+                                            Colors.transparent,
+                                            Colors.transparent,
+                                            Colors.black.withOpacity(
+                                                _isPlaying ? 0.8 : 0.92),
+                                          ],
+                                          stops: const [0.0, 0.18, 0.6, 1.0],
+                                        ),
+                                      ),
+                                    ),
 
-                                      return LayoutBuilder(
-                                        builder: (context, constraints) {
-                                          final trackWidth = math.max(
-                                            1.0,
-                                            constraints.maxWidth - pad * 2,
-                                          );
-                                          final f = activeFraction ?? 0.0;
-                                          final targetX =
-                                              pad + f * trackWidth;
-                                          final halfPill = tooltipLabel != null
-                                              ? 110.0
-                                              : 44.0;
-                                          final clampedCenter = targetX.clamp(
-                                            halfPill,
-                                            math.max(
-                                              halfPill,
-                                              constraints.maxWidth - halfPill,
+                                    // When paused: left-side cinematic gradient for metadata (animates in/out)
+                                    Positioned.fill(
+                                      child: IgnorePointer(
+                                        child: AnimatedOpacity(
+                                          duration:
+                                              const Duration(milliseconds: 350),
+                                          opacity: !_isPlaying ? 1.0 : 0.0,
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              gradient: LinearGradient(
+                                                begin: Alignment.centerLeft,
+                                                end: Alignment.centerRight,
+                                                colors: [
+                                                  Colors.black
+                                                      .withOpacity(0.85),
+                                                  Colors.black.withOpacity(0.4),
+                                                  Colors.transparent,
+                                                ],
+                                                stops: const [0.0, 0.35, 0.65],
+                                              ),
                                             ),
-                                          );
+                                          ),
+                                        ),
+                                      ),
+                                    ),
 
-                                          return Stack(
-                                            clipBehavior: Clip.none,
-                                            children: [
-                                              if (showTooltip)
-                                                Positioned(
-                                                  left:
-                                                      clampedCenter - halfPill,
-                                                  width: halfPill * 2,
-                                                  bottom: wide ? 36 : 32,
-                                                  child: IgnorePointer(
-                                                    child: Center(
-                                                      child: ClipPath(
-                                                        clipper:
-                                                            const ShapeBorderClipper(
-                                                          shape:
-                                                              StadiumBorder(),
+                                    // ─── TOP BAR ───
+                                    Positioned(
+                                      top: (wide ? 20 : 8) +
+                                          MediaQuery.of(context).padding.top,
+                                      left: (wide ? 28 : 16) + safe.left,
+                                      right: (wide ? 28 : 16) + safe.right,
+                                      child: Listener(
+                                        onPointerDown: _markControlsPointer,
+                                        child: Row(
+                                          children: [
+                                            // The details screen's back button with
+                                            // the title's logo in a bubble grown out
+                                            // of it (GlassBubbleBar) — out while
+                                            // playing, back in when paused, where the
+                                            // left panel shows the big logo instead.
+                                            Expanded(
+                                              child: Align(
+                                                alignment: Alignment.centerLeft,
+                                                child: TweenAnimationBuilder<
+                                                    double>(
+                                                  tween: Tween<double>(
+                                                      end: _isPlaying
+                                                          ? 1.0
+                                                          : 0.0),
+                                                  duration: const Duration(
+                                                      milliseconds: 300),
+                                                  builder:
+                                                      (context, reveal, _) =>
+                                                          GlassBubbleBar(
+                                                    reveal: reveal,
+                                                    leading: CircleAvatar(
+                                                      backgroundColor:
+                                                          Colors.transparent,
+                                                      child: IconButton(
+                                                        icon: const Icon(
+                                                          GlassCircleButton
+                                                              .backIcon,
+                                                          color: Colors.white,
                                                         ),
-                                                        child: GlassBlur(
-                                                          child: DecoratedBox(
-                                                            decoration:
-                                                                ShapeDecoration(
-                                                              color: kGlassTint,
-                                                              shape:
-                                                                  StadiumBorder(
-                                                                side: BorderSide(
-                                                                  color:
-                                                                      kGlassEdge,
-                                                                ),
-                                                              ),
-                                                            ),
-                                                            child: Padding(
-                                                              padding:
-                                                                  EdgeInsets.symmetric(
-                                                                horizontal: wide
-                                                                    ? 11
-                                                                    : 9,
-                                                                vertical:
-                                                                    wide ? 5 : 4,
-                                                              ),
-                                                              child: Row(
-                                                                mainAxisSize:
-                                                                    MainAxisSize
-                                                                        .min,
-                                                                children: [
-                                                                  Text(
-                                                                    _formatDuration(
-                                                                      tooltipDuration,
-                                                                    ),
-                                                                    style:
-                                                                        TextStyle(
-                                                                      color: Colors
-                                                                          .white,
-                                                                      fontSize: wide
-                                                                          ? 13
-                                                                          : 11.5,
-                                                                      fontWeight:
-                                                                          FontWeight
-                                                                              .w600,
-                                                                      height: 1.1,
-                                                                      fontFeatures: const [
-                                                                        FontFeature
-                                                                            .tabularFigures(),
-                                                                      ],
-                                                                    ),
+                                                        tooltip:
+                                                            MaterialLocalizations
+                                                                    .of(context)
+                                                                .backButtonTooltip,
+                                                        onPressed: () =>
+                                                            Navigator.maybePop(
+                                                                context),
+                                                        iconSize: wide
+                                                            ? 28
+                                                            : GlassCircleButton
+                                                                .backIconSize,
+                                                        padding:
+                                                            EdgeInsets.zero,
+                                                      ),
+                                                    ),
+                                                    title: MovieTitleLogo(
+                                                        movie: widget.details),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            // Download speed — a quiet line of meta
+                                            // text, in its own ValueListenableBuilder
+                                            // so the ~1/sec libtorrent update only
+                                            // rebuilds this, not the whole screen.
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                  right: 12),
+                                              child: ValueListenableBuilder<
+                                                  double>(
+                                                valueListenable:
+                                                    _downloadSpeedNotifier,
+                                                builder: (context, speed, _) =>
+                                                    Row(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    Icon(
+                                                        Icons
+                                                            .arrow_downward_rounded,
+                                                        color: Colors.white38,
+                                                        size: wide ? 15 : 12),
+                                                    const SizedBox(width: 4),
+                                                    Text(
+                                                      '${speed.toStringAsFixed(1)} MB/s',
+                                                      style: TextStyle(
+                                                          color: Colors.white54,
+                                                          fontWeight:
+                                                              FontWeight.w500,
+                                                          fontSize:
+                                                              wide ? 13.5 : 11),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+
+                                    // ─── LEFT METADATA PANEL ───
+                                    Positioned(
+                                      top: 0,
+                                      bottom: 0,
+                                      left: (wide ? 56 : 32) + safe.left,
+                                      width: size.width * (wide ? 0.42 : 0.38),
+                                      child: IgnorePointer(
+                                        child: Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: AnimatedOpacity(
+                                            duration: const Duration(
+                                                milliseconds: 350),
+                                            opacity: (!_isPlaying &&
+                                                    _controlsVisible)
+                                                ? 1.0
+                                                : 0.0,
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                // Title or Logo
+                                                if (widget.details.logoUrl !=
+                                                        null &&
+                                                    widget.details.logoUrl!
+                                                        .isNotEmpty)
+                                                  Padding(
+                                                    padding: EdgeInsets.only(
+                                                        bottom: wide ? 10 : 6),
+                                                    child: CachedNetworkImage(
+                                                      imageUrl: widget
+                                                          .details.logoUrl!,
+                                                      height: wide ? 120 : 64,
+                                                      fit: BoxFit.contain,
+                                                      alignment:
+                                                          Alignment.centerLeft,
+                                                      errorWidget: (context,
+                                                          url, error) {
+                                                        return Text(
+                                                          widget.movie.title,
+                                                          maxLines: 2,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          style: TextStyle(
+                                                            color: Colors.white,
+                                                            fontSize:
+                                                                wide ? 38 : 22,
+                                                            fontWeight:
+                                                                FontWeight.w800,
+                                                            height: 1.15,
+                                                          ),
+                                                        );
+                                                      },
+                                                    ),
+                                                  )
+                                                else
+                                                  Text(
+                                                    widget.movie.title,
+                                                    maxLines: 2,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: wide ? 38 : 22,
+                                                      fontWeight:
+                                                          FontWeight.w800,
+                                                      height: 1.15,
+                                                    ),
+                                                  ),
+                                                // TV episode info, in the episode cards'
+                                                // style: a small "S1 · E3" label over the
+                                                // episode's name.
+                                                if (widget.details.type ==
+                                                        'tv' &&
+                                                    _currentEpisode !=
+                                                        null) ...[
+                                                  SizedBox(
+                                                      height: wide ? 16 : 10),
+                                                  Text(
+                                                    'S$_currentSeason · E$_currentEpisode',
+                                                    style: TextStyle(
+                                                      color: Colors.white54,
+                                                      fontSize: wide ? 16 : 12,
+                                                      height: 1.2,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      letterSpacing: 0.5,
+                                                    ),
+                                                  ),
+                                                  if (_playingEpisode?.name
+                                                      case final name?
+                                                      when name.isNotEmpty) ...[
+                                                    SizedBox(
+                                                        height: wide ? 4 : 2),
+                                                    Text(
+                                                      name,
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: TextStyle(
+                                                        color: Colors.white,
+                                                        fontSize:
+                                                            wide ? 24 : 15,
+                                                        height: 1.25,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ],
+                                                SizedBox(
+                                                    height: wide ? 14 : 10),
+                                                // Description
+                                                Text(
+                                                  (_playingEpisode?.overview ??
+                                                              '')
+                                                          .isNotEmpty
+                                                      ? _playingEpisode!
+                                                          .overview
+                                                      : widget
+                                                          .movie.description,
+                                                  maxLines: wide ? 4 : 3,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: TextStyle(
+                                                    color: wide
+                                                        ? Colors.white70
+                                                        : Colors.white60,
+                                                    fontSize: wide ? 18 : 13,
+                                                    height: 1.5,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+
+                                    // ─── BOTTOM BAR ───
+                                    Positioned(
+                                      bottom: (wide ? 24 : 16) +
+                                          MediaQuery.of(context).padding.bottom,
+                                      left: (wide ? 32 : 24) + safe.left,
+                                      right: (wide ? 32 : 24) + safe.right,
+                                      child: Listener(
+                                        key: _bottomBarKey,
+                                        onPointerDown: _markControlsPointer,
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            // Seek slider — scoped to a ListenableBuilder over the
+                                            // position/duration/buffer notifiers so playback ticks
+                                            // (several times/sec) only rebuild this, not the screen.
+                                            ListenableBuilder(
+                                              listenable: Listenable.merge([
+                                                _positionNotifier,
+                                                _durationNotifier,
+                                                _bufferNotifier,
+                                                _seekHoverFractionNotifier,
+                                                _timelinePartitionRevision,
+                                              ]),
+                                              builder: (context, _) {
+                                                final dur =
+                                                    _durationNotifier.value;
+                                                final totalSeconds =
+                                                    dur.inSeconds.toDouble();
+                                                final hoverFraction =
+                                                    _seekHoverFractionNotifier
+                                                        .value;
+                                                final dragFraction =
+                                                    (_isDragging &&
+                                                            totalSeconds > 0)
+                                                        ? (_positionNotifier
+                                                                    .value
+                                                                    .inSeconds /
+                                                                totalSeconds)
+                                                            .clamp(0.0, 1.0)
+                                                        : null;
+                                                final activeFraction =
+                                                    dragFraction ??
+                                                        hoverFraction;
+                                                final showTooltip =
+                                                    !_loadingVideo &&
+                                                        totalSeconds > 0 &&
+                                                        activeFraction != null;
+                                                final tooltipDuration =
+                                                    showTooltip
+                                                        ? Duration(
+                                                            seconds: (activeFraction *
+                                                                    totalSeconds)
+                                                                .round()
+                                                                .clamp(0,
+                                                                    dur.inSeconds),
+                                                          )
+                                                        : Duration.zero;
+                                                final tooltipLabel = showTooltip
+                                                    ? _segmentLabelAt(
+                                                        tooltipDuration,
+                                                        dur,
+                                                      )
+                                                    : null;
+                                                final skipRanges = _skipRanges;
+                                                final partitions = _partitions;
+                                                final pad = wide ? 16.0 : 14.0;
+
+                                                return LayoutBuilder(
+                                                  builder:
+                                                      (context, constraints) {
+                                                    final trackWidth = math.max(
+                                                      1.0,
+                                                      constraints.maxWidth -
+                                                          pad * 2,
+                                                    );
+                                                    final f =
+                                                        activeFraction ?? 0.0;
+                                                    final targetX =
+                                                        pad + f * trackWidth;
+                                                    final halfPill =
+                                                        tooltipLabel != null
+                                                            ? 110.0
+                                                            : 44.0;
+                                                    final clampedCenter =
+                                                        targetX.clamp(
+                                                      halfPill,
+                                                      math.max(
+                                                        halfPill,
+                                                        constraints.maxWidth -
+                                                            halfPill,
+                                                      ),
+                                                    );
+
+                                                    return Stack(
+                                                      clipBehavior: Clip.none,
+                                                      children: [
+                                                        if (showTooltip)
+                                                          Positioned(
+                                                            left:
+                                                                clampedCenter -
+                                                                    halfPill,
+                                                            width: halfPill * 2,
+                                                            bottom:
+                                                                wide ? 36 : 32,
+                                                            child:
+                                                                IgnorePointer(
+                                                              child: Center(
+                                                                child: ClipPath(
+                                                                  clipper:
+                                                                      const ShapeBorderClipper(
+                                                                    shape:
+                                                                        StadiumBorder(),
                                                                   ),
-                                                                  if (tooltipLabel !=
-                                                                      null) ...[
-                                                                    Flexible(
+                                                                  child:
+                                                                      GlassBlur(
+                                                                    child:
+                                                                        DecoratedBox(
+                                                                      decoration:
+                                                                          ShapeDecoration(
+                                                                        color:
+                                                                            kGlassTint,
+                                                                        shape:
+                                                                            StadiumBorder(
+                                                                          side:
+                                                                              BorderSide(
+                                                                            color:
+                                                                                kGlassEdge,
+                                                                          ),
+                                                                        ),
+                                                                      ),
                                                                       child:
-                                                                          Text(
-                                                                        '  ·  $tooltipLabel',
-                                                                        maxLines:
-                                                                            1,
-                                                                        overflow:
-                                                                            TextOverflow.ellipsis,
-                                                                        style:
-                                                                            TextStyle(
-                                                                          color:
-                                                                              Colors.white70,
-                                                                          fontSize: wide
-                                                                              ? 12.5
-                                                                              : 11,
-                                                                          fontWeight:
-                                                                              FontWeight.w500,
-                                                                          height:
-                                                                              1.1,
+                                                                          Padding(
+                                                                        padding:
+                                                                            EdgeInsets.symmetric(
+                                                                          horizontal: wide
+                                                                              ? 11
+                                                                              : 9,
+                                                                          vertical: wide
+                                                                              ? 5
+                                                                              : 4,
+                                                                        ),
+                                                                        child:
+                                                                            Row(
+                                                                          mainAxisSize:
+                                                                              MainAxisSize.min,
+                                                                          children: [
+                                                                            Text(
+                                                                              _formatDuration(
+                                                                                tooltipDuration,
+                                                                              ),
+                                                                              style: TextStyle(
+                                                                                color: Colors.white,
+                                                                                fontSize: wide ? 13 : 11.5,
+                                                                                fontWeight: FontWeight.w600,
+                                                                                height: 1.1,
+                                                                                fontFeatures: const [
+                                                                                  FontFeature.tabularFigures(),
+                                                                                ],
+                                                                              ),
+                                                                            ),
+                                                                            if (tooltipLabel !=
+                                                                                null) ...[
+                                                                              Flexible(
+                                                                                child: Text(
+                                                                                  '  ·  $tooltipLabel',
+                                                                                  maxLines: 1,
+                                                                                  overflow: TextOverflow.ellipsis,
+                                                                                  style: TextStyle(
+                                                                                    color: Colors.white70,
+                                                                                    fontSize: wide ? 12.5 : 11,
+                                                                                    fontWeight: FontWeight.w500,
+                                                                                    height: 1.1,
+                                                                                  ),
+                                                                                ),
+                                                                              ),
+                                                                            ],
+                                                                          ],
                                                                         ),
                                                                       ),
                                                                     ),
-                                                                  ],
-                                                                ],
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        MouseRegion(
+                                                          onHover: (event) {
+                                                            final frac = ((event
+                                                                            .localPosition
+                                                                            .dx -
+                                                                        pad) /
+                                                                    trackWidth)
+                                                                .clamp(
+                                                                    0.0, 1.0);
+                                                            _seekHoverFractionNotifier
+                                                                .value = frac;
+                                                          },
+                                                          onExit: (_) {
+                                                            _seekHoverFractionNotifier
+                                                                .value = null;
+                                                          },
+                                                          child: SliderTheme(
+                                                            // The cards' progress bar: a thin
+                                                            // cream line, with a small white dot
+                                                            // to drag, partitioned by chapters and
+                                                            // skip segments.
+                                                            data:
+                                                                SliderThemeData(
+                                                              trackHeight: wide
+                                                                  ? 4.5
+                                                                  : 3,
+                                                              trackShape:
+                                                                  _PartitionedSliderTrackShape(
+                                                                partitions:
+                                                                    partitions,
+                                                                skipRanges:
+                                                                    skipRanges,
+                                                                hoveredFraction:
+                                                                    activeFraction,
+                                                              ),
+                                                              activeTrackColor:
+                                                                  AppTheme
+                                                                      .primaryColor,
+                                                              secondaryActiveTrackColor:
+                                                                  Colors.white
+                                                                      .withValues(
+                                                                          alpha:
+                                                                              0.3),
+                                                              inactiveTrackColor:
+                                                                  Colors.white
+                                                                      .withValues(
+                                                                          alpha:
+                                                                              0.15),
+                                                              thumbColor:
+                                                                  Colors.white,
+                                                              thumbShape: RoundSliderThumbShape(
+                                                                  enabledThumbRadius:
+                                                                      wide
+                                                                          ? 7.5
+                                                                          : 6,
+                                                                  elevation: 0,
+                                                                  pressedElevation:
+                                                                      0),
+                                                              overlayShape:
+                                                                  RoundSliderOverlayShape(
+                                                                      overlayRadius: wide
+                                                                          ? 16
+                                                                          : 14),
+                                                              overlayColor: Colors
+                                                                  .white
+                                                                  .withValues(
+                                                                      alpha:
+                                                                          0.12),
+                                                            ),
+                                                            // No seeking until the video has
+                                                            // loaded (see _loadingVideo).
+                                                            child:
+                                                                IgnorePointer(
+                                                              ignoring:
+                                                                  _loadingVideo,
+                                                              child: Slider(
+                                                                value: _positionNotifier
+                                                                    .value
+                                                                    .inSeconds
+                                                                    .toDouble()
+                                                                    .clamp(0.0,
+                                                                        totalSeconds),
+                                                                secondaryTrackValue:
+                                                                    _bufferNotifier
+                                                                        .value
+                                                                        .inSeconds
+                                                                        .toDouble()
+                                                                        .clamp(
+                                                                            0.0,
+                                                                            totalSeconds),
+                                                                min: 0.0,
+                                                                max: totalSeconds >
+                                                                        0
+                                                                    ? totalSeconds
+                                                                    : 1.0,
+                                                                onChangeStart:
+                                                                    (val) {
+                                                                  _isDragging =
+                                                                      true;
+                                                                },
+                                                                onChanged:
+                                                                    (val) {
+                                                                  final d = Duration(
+                                                                      seconds: val
+                                                                          .toInt());
+                                                                  _currentPosition =
+                                                                      d;
+                                                                  _positionNotifier
+                                                                      .value = d;
+                                                                },
+                                                                onChangeEnd:
+                                                                    (val) {
+                                                                  _isDragging =
+                                                                      false;
+                                                                  _seekTo(Duration(
+                                                                      seconds: val
+                                                                          .toInt()));
+                                                                  _syncMediaSessionPlaybackState();
+                                                                },
                                                               ),
                                                             ),
                                                           ),
                                                         ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              MouseRegion(
-                                                onHover: (event) {
-                                                  final frac =
-                                                      ((event.localPosition.dx -
-                                                                  pad) /
-                                                              trackWidth)
-                                                          .clamp(0.0, 1.0);
-                                                  _seekHoverFractionNotifier
-                                                      .value = frac;
-                                                },
-                                                onExit: (_) {
-                                                  _seekHoverFractionNotifier
-                                                      .value = null;
-                                                },
-                                                child: SliderTheme(
-                                                  // The cards' progress bar: a thin
-                                                  // cream line, with a small white dot
-                                                  // to drag, partitioned by chapters and
-                                                  // skip segments.
-                                                  data: SliderThemeData(
-                                                    trackHeight:
-                                                        wide ? 4.5 : 3,
-                                                    trackShape:
-                                                        _PartitionedSliderTrackShape(
-                                                      partitions: partitions,
-                                                      skipRanges: skipRanges,
-                                                      hoveredFraction:
-                                                          activeFraction,
-                                                    ),
-                                                    activeTrackColor:
-                                                        AppTheme.primaryColor,
-                                                    secondaryActiveTrackColor:
-                                                        Colors.white.withValues(
-                                                            alpha: 0.3),
-                                                    inactiveTrackColor: Colors
-                                                        .white
-                                                        .withValues(
-                                                            alpha: 0.15),
-                                                    thumbColor: Colors.white,
-                                                    thumbShape:
-                                                        RoundSliderThumbShape(
-                                                            enabledThumbRadius:
-                                                                wide ? 7.5 : 6,
-                                                            elevation: 0,
-                                                            pressedElevation:
-                                                                0),
-                                                    overlayShape:
-                                                        RoundSliderOverlayShape(
-                                                            overlayRadius: wide
-                                                                ? 16
-                                                                : 14),
-                                                    overlayColor: Colors.white
-                                                        .withValues(
-                                                            alpha: 0.12),
-                                                  ),
-                                                  // No seeking until the video has
-                                                  // loaded (see _loadingVideo).
-                                                  child: IgnorePointer(
-                                                    ignoring: _loadingVideo,
-                                                    child: Slider(
-                                                      value: _positionNotifier
-                                                          .value.inSeconds
-                                                          .toDouble()
-                                                          .clamp(0.0,
-                                                              totalSeconds),
-                                                      secondaryTrackValue:
-                                                          _bufferNotifier
-                                                              .value.inSeconds
-                                                              .toDouble()
-                                                              .clamp(0.0,
-                                                                  totalSeconds),
-                                                      min: 0.0,
-                                                      max: totalSeconds > 0
-                                                          ? totalSeconds
-                                                          : 1.0,
-                                                      onChangeStart: (val) {
-                                                        _isDragging = true;
-                                                      },
-                                                      onChanged: (val) {
-                                                        final d = Duration(
-                                                            seconds:
-                                                                val.toInt());
-                                                        _currentPosition = d;
-                                                        _positionNotifier
-                                                            .value = d;
-                                                      },
-                                                      onChangeEnd: (val) {
-                                                        _isDragging = false;
-                                                        _seekTo(Duration(
-                                                            seconds:
-                                                                val.toInt()));
-                                                        _syncMediaSessionPlaybackState();
-                                                      },
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          );
-                                        },
-                                      );
-                                    },
-                                  ),
-                                  // Timestamps + next episode row
-                                  Padding(
-                                    padding:
-                                        const EdgeInsets.symmetric(horizontal: 8),
-                                    child: Row(
-                                      children: [
-                                        // Play / pause, ringed by the loading
-                                        // spinner while opening, buffering or
-                                        // seeking
-                                        SizedBox(
-                                          width: wide ? 48 : 40,
-                                          height: wide ? 48 : 40,
-                                          child: Stack(
-                                            alignment: Alignment.center,
-                                            children: [
-                                              if (!_switchingQuality &&
-                                                  (_isMediaOpening ||
-                                                      _isBuffering ||
-                                                      _seekPending))
-                                                const Positioned.fill(
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                    color: Colors.white70,
-                                                    strokeWidth: 2,
-                                                  ),
-                                                ),
-                                              IconButton(
-                                                onPressed: _playPause,
-                                                visualDensity:
-                                                    VisualDensity.compact,
-                                                padding: EdgeInsets.zero,
-                                                icon: Icon(
-                                                  _isPlaying
-                                                      ? Icons.pause_rounded
-                                                      : Icons
-                                                          .play_arrow_rounded,
-                                                  color: Colors.white,
-                                                  size: wide ? 34 : 24,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        SizedBox(width: wide ? 4 : 2),
-                                        // Volume button + expandable slider:
-                                        // the desktop app's only. A phone
-                                        // has its own volume buttons.
-                                        if (isComputer)
-                                        MouseRegion(
-                                          onEnter: (_) => setState(
-                                              () => _volumeHover = true),
-                                          onExit: (_) => setState(
-                                              () => _volumeHover = false),
-                                          child: ValueListenableBuilder<double>(
-                                            valueListenable: _volumeNotifier,
-                                            builder: (context, volume, _) {
-                                              final showSlider = _volumeHover ||
-                                                  _volumeDragging ||
-                                                  _volumeRecentlyAdjusted;
-                                              return Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  SizedBox(
-                                                    width: wide ? 44 : 38,
-                                                    height: wide ? 44 : 38,
-                                                    child: IconButton(
-                                                      onPressed: () =>
-                                                          _toggleMute(),
-                                                      visualDensity:
-                                                          VisualDensity.compact,
-                                                      padding: EdgeInsets.zero,
-                                                      icon: Icon(
-                                                        _volumeIconFor(volume),
-                                                        color: Colors.white,
-                                                        size: wide ? 28 : 22,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  AnimatedContainer(
-                                                    duration: const Duration(
-                                                        milliseconds: 200),
-                                                    curve: Curves.easeOutCubic,
-                                                    width: showSlider
-                                                        ? (wide ? 104 : 84)
-                                                        : 0,
-                                                    child: ClipRect(
-                                                      child: SliderTheme(
-                                                        data: SliderThemeData(
-                                                          trackHeight:
-                                                              wide ? 4 : 3,
-                                                          activeTrackColor:
-                                                              Colors.white,
-                                                          inactiveTrackColor:
-                                                              Colors.white
-                                                                  .withValues(
-                                                                      alpha:
-                                                                          0.24),
-                                                          thumbColor:
-                                                              Colors.white,
-                                                          thumbShape:
-                                                              RoundSliderThumbShape(
-                                                            enabledThumbRadius:
-                                                                wide ? 6.5 : 5,
-                                                            elevation: 0,
-                                                            pressedElevation: 0,
-                                                          ),
-                                                          overlayShape:
-                                                              RoundSliderOverlayShape(
-                                                            overlayRadius:
-                                                                wide ? 13 : 11,
-                                                          ),
-                                                          overlayColor: Colors
-                                                              .white
-                                                              .withValues(
-                                                                  alpha: 0.12),
-                                                        ),
-                                                        child: Slider(
-                                                          value: volume,
-                                                          min: 0.0,
-                                                          max: 100.0,
-                                                          onChangeStart: (_) {
-                                                            setState(() =>
-                                                                _volumeDragging =
-                                                                    true);
-                                                          },
-                                                          onChanged: (val) {
-                                                            _setVolume(
-                                                              val,
-                                                              persist: false,
-                                                            );
-                                                          },
-                                                          onChangeEnd: (val) {
-                                                            setState(() =>
-                                                                _volumeDragging =
-                                                                    false);
-                                                            _setVolume(
-                                                              val,
-                                                              showSlider: true,
-                                                            );
-                                                          },
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ],
-                                              );
-                                            },
-                                          ),
-                                        ),
-                                        if (isComputer)
-                                          SizedBox(width: wide ? 8 : 4),
-                                        ListenableBuilder(
-                                          listenable: Listenable.merge([
-                                            _positionNotifier,
-                                            _durationNotifier
-                                          ]),
-                                          builder: (context, _) => Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(
-                                                _formatDuration(
-                                                    _positionNotifier.value),
-                                                style: TextStyle(
-                                                    color: Colors.white,
-                                                    fontSize: wide ? 15 : 12,
-                                                    fontWeight: FontWeight.w600),
-                                              ),
-                                              const SizedBox(width: 4),
-                                              Text(
-                                                '/ ${_formatDuration(_durationNotifier.value)}',
-                                                style: TextStyle(
-                                                    color: Colors.white54,
-                                                    fontSize: wide ? 15 : 12,
-                                                    fontWeight:
-                                                        FontWeight.w500),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        // The buttons, at the right: shrunk
-                                        // to fit when the window's too
-                                        // narrow for them (a computer's
-                                        // window made phone-narrow overflowed
-                                        // by 108px).
-                                        Expanded(
-                                          child: Align(
-                                            alignment: Alignment.centerRight,
-                                            child: FittedBox(
-                                              fit: BoxFit.scaleDown,
-                                              alignment: Alignment.centerRight,
+                                                      ],
+                                                    );
+                                                  },
+                                                );
+                                              },
+                                            ),
+                                            // Timestamps + next episode row
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 8),
                                               child: Row(
-                                                mainAxisSize: MainAxisSize.min,
                                                 children: [
-                                              if (wide) ...[
-                                                _menuButton(GlassPillButton(
-                                                  grouped: true,
-                                                  key: _qualityButtonKey,
-                                                  icon: Icons.hd_rounded,
-                                                  label: 'Quality',
-                                                  selected: _menuOpen('quality'),
-                                                  onPressed: () =>
-                                                      _toggleSettingsPanel(
-                                                          'quality',
-                                                          _qualityButtonKey),
-                                                )),
-                                                // English or the original, for a
-                                                // title not made in English.
-                                                if (AudioLanguageService.appliesTo(
-                                                    widget.details)) ...[
-                                                  const SizedBox(width: 10),
-                                                  _menuButton(GlassPillButton(
-                                                    grouped: true,
-                                                    key: _audioButtonKey,
-                                                    icon: Icons
-                                                        .record_voice_over_rounded,
-                                                    label: 'Audio',
-                                                    selected: _menuOpen('audio'),
-                                                    busy: _changingAudio,
-                                                    onPressed: () =>
-                                                        _toggleSettingsPanel(
-                                                            'audio',
-                                                            _audioButtonKey),
-                                                  )),
-                                                ],
-                                                const SizedBox(width: 10),
-                                                _menuButton(GlassPillButton(
-                                                  grouped: true,
-                                                  key: _subtitlesButtonKey,
-                                                  icon: Icons.subtitles_rounded,
-                                                  label: _subtitlesSyncing ? 'Syncing…' : 'Subtitles',
-                                                  selected: _menuOpen('subtitles'),
-                                                  busy: _subtitlesSyncing,
-                                                  onPressed: () =>
-                                                      _toggleSettingsPanel(
-                                                          'subtitles',
-                                                          _subtitlesButtonKey),
-                                                )),
-                                                const SizedBox(width: 10),
-                                                _menuButton(GlassPillButton(
-                                                  grouped: true,
-                                                  key: _videoSizeButtonKey,
-                                                  icon: _videoFit.icon,
-                                                  label: 'Video Size',
-                                                  selected: _menuOpen('videoSize'),
-                                                  onPressed: () =>
-                                                      _toggleSettingsPanel(
-                                                          'videoSize',
-                                                          _videoSizeButtonKey),
-                                                )),
-                                              ] else
-                                                // Settings — quality, subtitles and
-                                                // video size
-                                                _menuButton(GlassPillButton(
-                                                  grouped: true,
-                                                  key: _settingsButtonKey,
-                                                  // Syncing: what's being synced.
-                                                  icon: _subtitlesSyncing
-                                                      ? Icons.subtitles_rounded
-                                                      : Icons.tune_rounded,
-                                                  label: _subtitlesSyncing ? 'Syncing…' : 'Settings',
-                                                  // Subtitles are in here.
-                                                  busy: _subtitlesSyncing,
-                                                  selected: _menuOpen('main'),
-                                                  onPressed: () =>
-                                                      _toggleSettingsPanel(
-                                                          'main', _settingsButtonKey),
-                                                )),
-                                              if (widget.details.type == 'tv') ...[
-                                                const SizedBox(width: 10),
-                                                // In the panel's group: its own
-                                                // press toggles it, rather than
-                                                // counting as a click outside.
-                                                TapRegion(
-                                                  groupId:
-                                                      EpisodeBrowser.panelTapGroup,
-                                                  child: GlassPillButton(
-                                                    grouped: true,
-                                                    icon: Icons.grid_view_rounded,
-                                                    label: 'Episodes',
-                                                    selected: _showEpisodeDrawer,
-                                                    onPressed: _toggleEpisodeBrowser,
+                                                  // Play / pause, ringed by the loading
+                                                  // spinner while opening, buffering or
+                                                  // seeking
+                                                  SizedBox(
+                                                    width: wide ? 48 : 40,
+                                                    height: wide ? 48 : 40,
+                                                    child: Stack(
+                                                      alignment:
+                                                          Alignment.center,
+                                                      children: [
+                                                        if (!_switchingQuality &&
+                                                            (_isMediaOpening ||
+                                                                _isBuffering ||
+                                                                _seekPending))
+                                                          const Positioned.fill(
+                                                            child:
+                                                                CircularProgressIndicator(
+                                                              color: Colors
+                                                                  .white70,
+                                                              strokeWidth: 2,
+                                                            ),
+                                                          ),
+                                                        IconButton(
+                                                          onPressed: _playPause,
+                                                          visualDensity:
+                                                              VisualDensity
+                                                                  .compact,
+                                                          padding:
+                                                              EdgeInsets.zero,
+                                                          icon: Icon(
+                                                            _isPlaying
+                                                                ? Icons
+                                                                    .pause_rounded
+                                                                : Icons
+                                                                    .play_arrow_rounded,
+                                                            color: Colors.white,
+                                                            size:
+                                                                wide ? 34 : 24,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
                                                   ),
-                                                ),
-                                                const SizedBox(width: 10),
-                                                GlassPillButton(
-                                                  grouped: true,
-                                                  icon: Icons.skip_next_rounded,
-                                                  label: 'Next',
-                                                  onPressed: nextEpisodePlayable
-                                                      ? _playNextEpisode
-                                                      : null,
-                                                ),
-                                              ],
-                                              if (WindowFullScreen.supported) ...[
-                                                const SizedBox(width: 10),
-                                                ValueListenableBuilder<bool>(
-                                                  valueListenable:
-                                                      WindowFullScreen.state,
-                                                  builder: (context, isFullScreen, _) =>
-                                                      GlassCircleButton(
-                                                    grouped: true,
-                                                    icon: isFullScreen
-                                                        ? Icons.fullscreen_exit_rounded
-                                                        : Icons.fullscreen_rounded,
-                                                    iconSize: wide ? 24 : 20,
-                                                    dimension: wide ? 42 : 34,
-                                                    onPressed: () {
-                                                      _resetControlsTimer();
-                                                      WindowFullScreen.toggle();
-                                                    },
+                                                  SizedBox(width: wide ? 4 : 2),
+                                                  // Volume button + expandable slider:
+                                                  // the desktop app's only. A phone
+                                                  // has its own volume buttons.
+                                                  if (isComputer)
+                                                    MouseRegion(
+                                                      onEnter: (_) => setState(
+                                                          () => _volumeHover =
+                                                              true),
+                                                      onExit: (_) => setState(
+                                                          () => _volumeHover =
+                                                              false),
+                                                      child:
+                                                          ValueListenableBuilder<
+                                                              double>(
+                                                        valueListenable:
+                                                            _volumeNotifier,
+                                                        builder: (context,
+                                                            volume, _) {
+                                                          final showSlider =
+                                                              _volumeHover ||
+                                                                  _volumeDragging ||
+                                                                  _volumeRecentlyAdjusted;
+                                                          return Row(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              SizedBox(
+                                                                width: wide
+                                                                    ? 44
+                                                                    : 38,
+                                                                height: wide
+                                                                    ? 44
+                                                                    : 38,
+                                                                child:
+                                                                    IconButton(
+                                                                  onPressed: () =>
+                                                                      _toggleMute(),
+                                                                  visualDensity:
+                                                                      VisualDensity
+                                                                          .compact,
+                                                                  padding:
+                                                                      EdgeInsets
+                                                                          .zero,
+                                                                  icon: Icon(
+                                                                    _volumeIconFor(
+                                                                        volume),
+                                                                    color: Colors
+                                                                        .white,
+                                                                    size: wide
+                                                                        ? 28
+                                                                        : 22,
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                              AnimatedContainer(
+                                                                duration:
+                                                                    const Duration(
+                                                                        milliseconds:
+                                                                            200),
+                                                                curve: Curves
+                                                                    .easeOutCubic,
+                                                                width: showSlider
+                                                                    ? (wide
+                                                                        ? 104
+                                                                        : 84)
+                                                                    : 0,
+                                                                child: ClipRect(
+                                                                  child:
+                                                                      SliderTheme(
+                                                                    data:
+                                                                        SliderThemeData(
+                                                                      trackHeight:
+                                                                          wide
+                                                                              ? 4
+                                                                              : 3,
+                                                                      activeTrackColor:
+                                                                          Colors
+                                                                              .white,
+                                                                      inactiveTrackColor: Colors
+                                                                          .white
+                                                                          .withValues(
+                                                                              alpha: 0.24),
+                                                                      thumbColor:
+                                                                          Colors
+                                                                              .white,
+                                                                      thumbShape:
+                                                                          RoundSliderThumbShape(
+                                                                        enabledThumbRadius: wide
+                                                                            ? 6.5
+                                                                            : 5,
+                                                                        elevation:
+                                                                            0,
+                                                                        pressedElevation:
+                                                                            0,
+                                                                      ),
+                                                                      overlayShape:
+                                                                          RoundSliderOverlayShape(
+                                                                        overlayRadius: wide
+                                                                            ? 13
+                                                                            : 11,
+                                                                      ),
+                                                                      overlayColor: Colors
+                                                                          .white
+                                                                          .withValues(
+                                                                              alpha: 0.12),
+                                                                    ),
+                                                                    child:
+                                                                        Slider(
+                                                                      value:
+                                                                          volume,
+                                                                      min: 0.0,
+                                                                      max:
+                                                                          100.0,
+                                                                      onChangeStart:
+                                                                          (_) {
+                                                                        setState(() =>
+                                                                            _volumeDragging =
+                                                                                true);
+                                                                      },
+                                                                      onChanged:
+                                                                          (val) {
+                                                                        _setVolume(
+                                                                          val,
+                                                                          persist:
+                                                                              false,
+                                                                        );
+                                                                      },
+                                                                      onChangeEnd:
+                                                                          (val) {
+                                                                        setState(() =>
+                                                                            _volumeDragging =
+                                                                                false);
+                                                                        _setVolume(
+                                                                          val,
+                                                                          showSlider:
+                                                                              true,
+                                                                        );
+                                                                      },
+                                                                    ),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          );
+                                                        },
+                                                      ),
+                                                    ),
+                                                  if (isComputer)
+                                                    SizedBox(
+                                                        width: wide ? 8 : 4),
+                                                  ListenableBuilder(
+                                                    listenable:
+                                                        Listenable.merge([
+                                                      _positionNotifier,
+                                                      _durationNotifier
+                                                    ]),
+                                                    builder: (context, _) =>
+                                                        Row(
+                                                      mainAxisSize:
+                                                          MainAxisSize.min,
+                                                      children: [
+                                                        Text(
+                                                          _formatDuration(
+                                                              _positionNotifier
+                                                                  .value),
+                                                          style: TextStyle(
+                                                              color:
+                                                                  Colors.white,
+                                                              fontSize: wide
+                                                                  ? 15
+                                                                  : 12,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600),
+                                                        ),
+                                                        const SizedBox(
+                                                            width: 4),
+                                                        Text(
+                                                          '/ ${_formatDuration(_durationNotifier.value)}',
+                                                          style: TextStyle(
+                                                              color: Colors
+                                                                  .white54,
+                                                              fontSize: wide
+                                                                  ? 15
+                                                                  : 12,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w500),
+                                                        ),
+                                                      ],
+                                                    ),
                                                   ),
-                                                ),
-                                              ],
+                                                  const SizedBox(width: 8),
+                                                  // The buttons, at the right: shrunk
+                                                  // to fit when the window's too
+                                                  // narrow for them (a computer's
+                                                  // window made phone-narrow overflowed
+                                                  // by 108px).
+                                                  Expanded(
+                                                    child: Align(
+                                                      alignment:
+                                                          Alignment.centerRight,
+                                                      child: FittedBox(
+                                                        fit: BoxFit.scaleDown,
+                                                        alignment: Alignment
+                                                            .centerRight,
+                                                        child: Row(
+                                                          mainAxisSize:
+                                                              MainAxisSize.min,
+                                                          children: [
+                                                            if (wide) ...[
+                                                              _menuButton(
+                                                                  GlassPillButton(
+                                                                grouped: true,
+                                                                key:
+                                                                    _qualityButtonKey,
+                                                                icon: Icons
+                                                                    .hd_rounded,
+                                                                label:
+                                                                    'Quality',
+                                                                selected:
+                                                                    _menuOpen(
+                                                                        'quality'),
+                                                                onPressed: () =>
+                                                                    _toggleSettingsPanel(
+                                                                        'quality',
+                                                                        _qualityButtonKey),
+                                                              )),
+                                                              // English or the original, for a
+                                                              // title not made in English.
+                                                              if (AudioLanguageService
+                                                                  .appliesTo(widget
+                                                                      .details)) ...[
+                                                                const SizedBox(
+                                                                    width: 10),
+                                                                _menuButton(
+                                                                    GlassPillButton(
+                                                                  grouped: true,
+                                                                  key:
+                                                                      _audioButtonKey,
+                                                                  icon: Icons
+                                                                      .record_voice_over_rounded,
+                                                                  label:
+                                                                      'Audio',
+                                                                  selected:
+                                                                      _menuOpen(
+                                                                          'audio'),
+                                                                  busy:
+                                                                      _changingAudio,
+                                                                  onPressed: () =>
+                                                                      _toggleSettingsPanel(
+                                                                          'audio',
+                                                                          _audioButtonKey),
+                                                                )),
+                                                              ],
+                                                              const SizedBox(
+                                                                  width: 10),
+                                                              _menuButton(
+                                                                  GlassPillButton(
+                                                                grouped: true,
+                                                                key:
+                                                                    _subtitlesButtonKey,
+                                                                icon: Icons
+                                                                    .subtitles_rounded,
+                                                                label: _subtitlesSyncing
+                                                                    ? 'Syncing…'
+                                                                    : 'Subtitles',
+                                                                selected: _menuOpen(
+                                                                    'subtitles'),
+                                                                busy:
+                                                                    _subtitlesSyncing,
+                                                                onPressed: () =>
+                                                                    _toggleSettingsPanel(
+                                                                        'subtitles',
+                                                                        _subtitlesButtonKey),
+                                                              )),
+                                                              const SizedBox(
+                                                                  width: 10),
+                                                              _menuButton(
+                                                                  GlassPillButton(
+                                                                grouped: true,
+                                                                key:
+                                                                    _videoSizeButtonKey,
+                                                                icon: _videoFit
+                                                                    .icon,
+                                                                label:
+                                                                    'Video Size',
+                                                                selected: _menuOpen(
+                                                                    'videoSize'),
+                                                                onPressed: () =>
+                                                                    _toggleSettingsPanel(
+                                                                        'videoSize',
+                                                                        _videoSizeButtonKey),
+                                                              )),
+                                                            ] else
+                                                              // Settings — quality, subtitles and
+                                                              // video size
+                                                              _menuButton(
+                                                                  GlassPillButton(
+                                                                grouped: true,
+                                                                key:
+                                                                    _settingsButtonKey,
+                                                                // Syncing: what's being synced.
+                                                                icon: _subtitlesSyncing
+                                                                    ? Icons
+                                                                        .subtitles_rounded
+                                                                    : Icons
+                                                                        .tune_rounded,
+                                                                label: _subtitlesSyncing
+                                                                    ? 'Syncing…'
+                                                                    : 'Settings',
+                                                                // Subtitles are in here.
+                                                                busy:
+                                                                    _subtitlesSyncing,
+                                                                selected:
+                                                                    _menuOpen(
+                                                                        'main'),
+                                                                onPressed: () =>
+                                                                    _toggleSettingsPanel(
+                                                                        'main',
+                                                                        _settingsButtonKey),
+                                                              )),
+                                                            if (widget.details
+                                                                    .type ==
+                                                                'tv') ...[
+                                                              const SizedBox(
+                                                                  width: 10),
+                                                              // In the panel's group: its own
+                                                              // press toggles it, rather than
+                                                              // counting as a click outside.
+                                                              TapRegion(
+                                                                groupId:
+                                                                    EpisodeBrowser
+                                                                        .panelTapGroup,
+                                                                child:
+                                                                    GlassPillButton(
+                                                                  grouped: true,
+                                                                  icon: Icons
+                                                                      .grid_view_rounded,
+                                                                  label:
+                                                                      'Episodes',
+                                                                  selected:
+                                                                      _showEpisodeDrawer,
+                                                                  onPressed:
+                                                                      _toggleEpisodeBrowser,
+                                                                ),
+                                                              ),
+                                                              const SizedBox(
+                                                                  width: 10),
+                                                              GlassPillButton(
+                                                                grouped: true,
+                                                                icon: Icons
+                                                                    .skip_next_rounded,
+                                                                label: 'Next',
+                                                                onPressed:
+                                                                    nextEpisodePlayable
+                                                                        ? _playNextEpisode
+                                                                        : null,
+                                                              ),
+                                                            ],
+                                                            if (WindowFullScreen
+                                                                .supported) ...[
+                                                              const SizedBox(
+                                                                  width: 10),
+                                                              ValueListenableBuilder<
+                                                                  bool>(
+                                                                valueListenable:
+                                                                    WindowFullScreen
+                                                                        .state,
+                                                                builder: (context,
+                                                                        isFullScreen,
+                                                                        _) =>
+                                                                    GlassCircleButton(
+                                                                  grouped: true,
+                                                                  icon: isFullScreen
+                                                                      ? Icons
+                                                                          .fullscreen_exit_rounded
+                                                                      : Icons
+                                                                          .fullscreen_rounded,
+                                                                  iconSize: wide
+                                                                      ? 24
+                                                                      : 20,
+                                                                  dimension:
+                                                                      wide
+                                                                          ? 42
+                                                                          : 34,
+                                                                  onPressed:
+                                                                      () {
+                                                                    _resetControlsTimer();
+                                                                    WindowFullScreen
+                                                                        .toggle();
+                                                                  },
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
                                                 ],
                                               ),
                                             ),
-                                          ),
+                                          ],
                                         ),
-                                      ],
+                                      ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
 
-                  // "Resumed from 12:34" for a moment after picking up
-                  // where the viewer left off (see _showResumeBadge).
-                  _glassBadge(
-                    top: 16 + safe.top,
-                    visible: _resumeBadge != null && !_speedBoost,
-                    children: [
-                      const Icon(Icons.replay_rounded,
-                          color: Colors.white, size: 16),
-                      const SizedBox(width: 6),
-                      Text(_resumeBadge ?? '', style: _badgeTextStyle),
-                    ],
-                  ),
-
-                  // "Subtitles synced" for a moment when syncing moved
-                  // them (see _showSyncedBadge) — under "Resumed from" if
-                  // that's up too.
-                  _glassBadge(
-                    top: 16 + safe.top + (_resumeBadge != null ? 44 : 0),
-                    visible: _syncedBadge && !_speedBoost,
-                    children: const [
-                      Icon(Icons.subtitles_rounded, color: Colors.white, size: 16),
-                      SizedBox(width: 6),
-                      Text('Subtitles synced', style: _badgeTextStyle),
-                    ],
-                  ),
-
-                  // "2× ⏩" while a press-and-hold speeds playback up
-                  // (see _startSpeedBoost) — shown whether or not the
-                  // controls are.
-                  _glassBadge(
-                    top: 16 + safe.top,
-                    visible: _speedBoost,
-                    children: const [
-                      Text('2×', style: _badgeTextStyle),
-                      SizedBox(width: 6),
-                      Icon(Icons.fast_forward_rounded,
-                          color: Colors.white, size: 16),
-                    ],
-                  ),
-
-                  // "Skip Intro" / "Skip Recap" / "Skip Credits" floating
-                  // pill — remains visible even when the main controls hide,
-                  // shifting up smoothly when the bottom control bar is shown.
-                  // At an episode's end, in its place: Watch Credits and
-                  // Next Episode, filling to play it (see _updateUpNext).
-                  ListenableBuilder(
-                    listenable: Listenable.merge(
-                        [_activeSkipSegmentNotifier, _upNextShown]),
-                    builder: (context, _) {
-                      final segment = _activeSkipSegmentNotifier.value;
-                      final upNext = _upNextShown.value;
-                      final visible = (segment != null || upNext) &&
-                          !_loadingVideo &&
-                          !_showEpisodeDrawer &&
-                          !_showSettingsPanel;
-                      final bottomOffset = (_controlsVisible
-                              ? (wide ? 128.0 : 104.0)
-                              : (wide ? 36.0 : 24.0)) +
-                          MediaQuery.of(context).padding.bottom;
-                      return AnimatedPositioned(
-                        duration: const Duration(milliseconds: 280),
-                        curve: Curves.easeOutCubic,
-                        right: (wide ? 32 : 24) + safe.right,
-                        bottom: bottomOffset,
-                        child: IgnorePointer(
-                          ignoring: !visible,
-                          child: AnimatedOpacity(
-                            duration: const Duration(milliseconds: 220),
-                            opacity: visible ? 1.0 : 0.0,
-                            child: Listener(
-                              onPointerDown: _markControlsPointer,
-                              child: upNext
-                                  ? Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        GlassPillButton(
-                                          grouped: true,
-                                          label: 'Watch Credits',
-                                          onPressed: _watchCredits,
-                                        ),
-                                        const SizedBox(width: 10),
-                                        GlassPillButton(
-                                          grouped: true,
-                                          icon: Icons.skip_next_rounded,
-                                          label: 'Next Episode',
-                                          progress: _upNextFill,
-                                          onPressed: _playNextFromUpNext,
-                                        ),
-                                      ],
-                                    )
-                                  : GlassPillButton(
-                                      grouped: true,
-                                      icon: Icons.skip_next_rounded,
-                                      label: segment?.type.buttonLabel ??
-                                          'Skip Intro',
-                                      onPressed: segment == null
-                                          ? null
-                                          : () => _skipActiveSegment(segment),
-                                    ),
+                            // "Resumed from 12:34" for a moment after picking up
+                            // where the viewer left off (see _showResumeBadge).
+                            _glassBadge(
+                              top: 16 + safe.top,
+                              visible: _resumeBadge != null && !_speedBoost,
+                              children: [
+                                const Icon(Icons.replay_rounded,
+                                    color: Colors.white, size: 16),
+                                const SizedBox(width: 6),
+                                Text(_resumeBadge ?? '',
+                                    style: _badgeTextStyle),
+                              ],
                             ),
+
+                            // "Subtitles synced" for a moment when syncing moved
+                            // them (see _showSyncedBadge) — under "Resumed from" if
+                            // that's up too.
+                            _glassBadge(
+                              top: 16 +
+                                  safe.top +
+                                  (_resumeBadge != null ? 44 : 0),
+                              visible: _syncedBadge && !_speedBoost,
+                              children: const [
+                                Icon(Icons.subtitles_rounded,
+                                    color: Colors.white, size: 16),
+                                SizedBox(width: 6),
+                                Text('Subtitles synced',
+                                    style: _badgeTextStyle),
+                              ],
+                            ),
+
+                            // "2× ⏩" while a press-and-hold speeds playback up
+                            // (see _startSpeedBoost) — shown whether or not the
+                            // controls are.
+                            _glassBadge(
+                              top: 16 + safe.top,
+                              visible: _speedBoost,
+                              children: const [
+                                Text('2×', style: _badgeTextStyle),
+                                SizedBox(width: 6),
+                                Icon(Icons.fast_forward_rounded,
+                                    color: Colors.white, size: 16),
+                              ],
+                            ),
+
+                            // "Skip Intro" / "Skip Recap" / "Skip Credits" floating
+                            // pill — remains visible even when the main controls hide,
+                            // shifting up smoothly when the bottom control bar is shown.
+                            // At an episode's end, in its place: Watch Credits and
+                            // Next Episode, filling to play it (see _updateUpNext).
+                            ListenableBuilder(
+                              listenable: Listenable.merge(
+                                  [_activeSkipSegmentNotifier, _upNextShown]),
+                              builder: (context, _) {
+                                final segment =
+                                    _activeSkipSegmentNotifier.value;
+                                final upNext = _upNextShown.value;
+                                final visible = (segment != null || upNext) &&
+                                    !_loadingVideo &&
+                                    !_showEpisodeDrawer &&
+                                    !_showSettingsPanel;
+                                final bottomOffset = (_controlsVisible
+                                        ? (wide ? 128.0 : 104.0)
+                                        : (wide ? 36.0 : 24.0)) +
+                                    MediaQuery.of(context).padding.bottom;
+                                return AnimatedPositioned(
+                                  duration: const Duration(milliseconds: 280),
+                                  curve: Curves.easeOutCubic,
+                                  right: (wide ? 32 : 24) + safe.right,
+                                  bottom: bottomOffset,
+                                  child: IgnorePointer(
+                                    ignoring: !visible,
+                                    child: AnimatedOpacity(
+                                      duration:
+                                          const Duration(milliseconds: 220),
+                                      opacity: visible ? 1.0 : 0.0,
+                                      child: Listener(
+                                        onPointerDown: _markControlsPointer,
+                                        child: upNext
+                                            ? Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  GlassPillButton(
+                                                    grouped: true,
+                                                    label: 'Watch Credits',
+                                                    onPressed: _watchCredits,
+                                                  ),
+                                                  const SizedBox(width: 10),
+                                                  GlassPillButton(
+                                                    grouped: true,
+                                                    icon:
+                                                        Icons.skip_next_rounded,
+                                                    label: 'Next Episode',
+                                                    progress: _upNextFill,
+                                                    onPressed:
+                                                        _playNextFromUpNext,
+                                                  ),
+                                                ],
+                                              )
+                                            : GlassPillButton(
+                                                grouped: true,
+                                                icon: Icons.skip_next_rounded,
+                                                label:
+                                                    segment?.type.buttonLabel ??
+                                                        'Skip Intro',
+                                                onPressed: segment == null
+                                                    ? null
+                                                    : () => _skipActiveSegment(
+                                                        segment),
+                                              ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      // Layer 2: Episode Browser (outside overlay) — stays mounted
+                      // through the slide-down animation (see _episodeDrawerMounted's
+                      // doc), rather than disappearing the instant a close is
+                      // requested.
+                      if (_episodeDrawerMounted && widget.movie.type == 'tv')
+                        ..._episodeBrowserLayer(context),
+
+                      // Layer 3: Unified Settings Panel (outside overlay)
+                      if (_showSettingsPanel)
+                        Positioned.fill(
+                          // Its own key, as the episode browser's layer has: matched
+                          // by position instead, the popup was taken for the browser's
+                          // layer as that went (its slide-out done, just after a click
+                          // outside it opened the popup) and built afresh — opening
+                          // twice.
+                          key: const ValueKey('settings-popup-layer'),
+                          child: PlayerSettingsPanel(
+                            // Fresh for each menu, so switching straight to another
+                            // (see _toggleSettingsPanel) opens that one, by its button.
+                            key: ValueKey(_settingsPanelInitialView),
+                            availableSubtitles: _availableSubtitles,
+                            selectedSubtitle: _selectedSubtitle,
+                            sinhalaProgress: _sinhala?.progress.value,
+                            sinhalaProblem: _sinhala?.problem.value,
+                            onAddGeminiKey: _addGeminiKey,
+                            isLoadingSubtitles: _isLoadingSubtitles,
+                            onSubtitleSelected: (track) {
+                              _selectSubtitle(track);
+                            },
+                            getLanguageName: _getLanguageName,
+                            availableStreams: _availableStreams,
+                            currentStream: _currentStream,
+                            onStreamSelected: (stream) {
+                              _switchQuality(stream);
+                            },
+                            videoFit: _videoFit,
+                            onVideoFitSelected: _selectVideoFit,
+                            audioTitle:
+                                AudioLanguageService.appliesTo(widget.details)
+                                    ? widget.details
+                                    : null,
+                            onAudioLanguageSelected: _setAudioLanguage,
+                            unavailableAudio: _noAudioIn,
+                            audioChanging: _changingAudio,
+                            subtitleDelaySeconds: _subtitleDelaySeconds,
+                            onSubtitleDelayChanged: _setSubtitleDelay,
+                            subtitleSpeed: _subtitleSpeed,
+                            onSubtitleSpeedChanged: _setSubtitleSpeed,
+                            subtitleSyncNote: _subtitleSyncNote,
+                            subtitleSyncing: _subtitlesSyncing,
+                            anchorCenterX: _settingsPanelAnchorX,
+                            initialView: _settingsPanelInitialView,
+                            closeRequests: _settingsCloseRequests,
+                            // Level with the episode panel's foot on a wide window.
+                            bottom: playerIsWide(context)
+                                ? _bottomBarClearance(
+                                    MediaQuery.sizeOf(context))
+                                : null,
+                            onClose: () {
+                              setState(() {
+                                _showSettingsPanel = false;
+                                if (!player.state.playing) {
+                                  _controlsVisible = true;
+                                }
+                              });
+                              // The controls hide again in a moment, as after any
+                              // other control's use.
+                              _resetControlsTimer();
+                            },
                           ),
                         ),
-                      );
-                    },
+                    ],
                   ),
-                ],
-              ),
-            ),
-
-            // Layer 2: Episode Browser (outside overlay) — stays mounted
-            // through the slide-down animation (see _episodeDrawerMounted's
-            // doc), rather than disappearing the instant a close is
-            // requested.
-            if (_episodeDrawerMounted && widget.movie.type == 'tv')
-              ..._episodeBrowserLayer(context),
-
-            // Layer 3: Unified Settings Panel (outside overlay)
-            if (_showSettingsPanel)
-              Positioned.fill(
-                // Its own key, as the episode browser's layer has: matched
-                // by position instead, the popup was taken for the browser's
-                // layer as that went (its slide-out done, just after a click
-                // outside it opened the popup) and built afresh — opening
-                // twice.
-                key: const ValueKey('settings-popup-layer'),
-                child: PlayerSettingsPanel(
-                  // Fresh for each menu, so switching straight to another
-                  // (see _toggleSettingsPanel) opens that one, by its button.
-                  key: ValueKey(_settingsPanelInitialView),
-                  availableSubtitles: _availableSubtitles,
-                  selectedSubtitle: _selectedSubtitle,
-                  sinhalaProgress: _sinhala?.progress.value,
-                  sinhalaProblem: _sinhala?.problem.value,
-                  isLoadingSubtitles: _isLoadingSubtitles,
-                  onSubtitleSelected: (track) {
-                    _selectSubtitle(track);
-                  },
-                  getLanguageName: _getLanguageName,
-                  availableStreams: _availableStreams,
-                  currentStream: _currentStream,
-                  onStreamSelected: (stream) {
-                    _switchQuality(stream);
-                  },
-                  videoFit: _videoFit,
-                  onVideoFitSelected: _selectVideoFit,
-                  audioTitle: AudioLanguageService.appliesTo(widget.details)
-                      ? widget.details
-                      : null,
-                  onAudioLanguageSelected: _setAudioLanguage,
-                  audioChanging: _changingAudio,
-                  subtitleDelaySeconds: _subtitleDelaySeconds,
-                  onSubtitleDelayChanged: _setSubtitleDelay,
-                  subtitleSpeed: _subtitleSpeed,
-                  onSubtitleSpeedChanged: _setSubtitleSpeed,
-                  subtitleSyncNote: _subtitleSyncNote,
-                  subtitleSyncing: _subtitlesSyncing,
-                  anchorCenterX: _settingsPanelAnchorX,
-                  initialView: _settingsPanelInitialView,
-                  closeRequests: _settingsCloseRequests,
-                  // Level with the episode panel's foot on a wide window.
-                  bottom: playerIsWide(context)
-                      ? _bottomBarClearance(MediaQuery.sizeOf(context))
-                      : null,
-                  onClose: () {
-                    setState(() {
-                      _showSettingsPanel = false;
-                      if (!player.state.playing) {
-                        _controlsVisible = true;
-                      }
-                    });
-                    // The controls hide again in a moment, as after any
-                    // other control's use.
-                    _resetControlsTimer();
-                  },
                 ),
               ),
-          ],
-        ),
-        ),
-      ),
-      ),
+            ),
     );
   }
 }
@@ -5925,9 +6410,8 @@ class _PartitionedSliderTrackShape extends RoundedRectSliderTrackShape {
     for (var i = 0; i < boundaries.length - 1; i++) {
       final fStart = boundaries[i];
       final fEnd = boundaries[i + 1];
-      var segLeft = trackRect.left +
-          fStart * trackRect.width +
-          (i > 0 ? gapHalf : 0.0);
+      var segLeft =
+          trackRect.left + fStart * trackRect.width + (i > 0 ? gapHalf : 0.0);
       var segRight = trackRect.left +
           fEnd * trackRect.width -
           (i < boundaries.length - 2 ? gapHalf : 0.0);
@@ -5996,5 +6480,3 @@ class _PartitionedSliderTrackShape extends RoundedRectSliderTrackShape {
     }
   }
 }
-
-

@@ -38,13 +38,35 @@ class _SearchScreenState extends State<SearchScreen> {
   void initState() {
     super.initState();
     // SearchScreen stays mounted (offscreen) for the whole movies-mode
-    // session as one of MovieTabShell's tabs, so `autofocus` would pop the
-    // keyboard the instant the app opens rather than when this tab is
-    // actually shown. Focus only on the transitions that matter: opening
-    // the keyboard when the user switches to Search, dismissing it when
-    // they switch away.
+    // session as one of MovieTabShell's tabs. On a computer the field's
+    // focused on arriving at the tab, ready to type into, as Ask's is; on
+    // a phone or tablet only when it's tapped (focusing it there opened the
+    // keyboard over the page). Unfocused when they switch away.
     MovieTabService().currentTab.addListener(_onActiveTabChanged);
     SearchHistoryService().load();
+    _loadTrending();
+  }
+
+  // This week's top ten of each, for the screen before a search.
+  List<Movie> _trendingMovies = const [];
+  List<Movie> _trendingSeries = const [];
+
+  Future<void> _loadTrending() async {
+    final found = await Future.wait(
+        [_tmdb.getTrendingOf('movie'), _tmdb.getTrendingOf('tv')]);
+    // Movies that can be watched now, not ones still in cinemas or not out
+    // yet (tapped, they'd say there's no copy): most of the week's top
+    // ten were, and the next ones fill in.
+    final candidates = found[0].take(30).toList();
+    final out = await Future.wait(candidates.map(_tmdb.isOutAtHome));
+    if (!mounted) return;
+    setState(() {
+      _trendingMovies = [
+        for (var i = 0; i < candidates.length; i++)
+          if (out[i]) candidates[i],
+      ].take(10).toList();
+      _trendingSeries = found[1].take(10).toList();
+    });
   }
 
   /// Runs [query] right away (no debounce) and records it as a deliberate
@@ -64,10 +86,10 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   void _onActiveTabChanged() {
-    if (MovieTabService().currentTab.value == BottomNavTab.search) {
-      _searchFocusNode.requestFocus();
-    } else {
+    if (MovieTabService().currentTab.value != BottomNavTab.search) {
       _searchFocusNode.unfocus();
+    } else if (isComputer) {
+      _searchFocusNode.requestFocus();
     }
   }
 
@@ -84,12 +106,15 @@ class _SearchScreenState extends State<SearchScreen> {
   void _onSearchChanged(String query) {
     if (_debounce?.isActive ?? false) _debounce?.cancel();
 
-    // Clear results if empty
-    if (query.isEmpty) {
+    // Emptied: no results, and no longer loading — the search under way
+    // is dropped (its answer's ignored), so it wouldn't end the loading
+    // itself: the placeholders shimmered on for good.
+    if (query.trim().isEmpty) {
       _searchRequestId++; // invalidate any in-flight request
       setState(() {
         _results = [];
         _error = null;
+        _isLoading = false;
       });
       return;
     }
@@ -138,14 +163,15 @@ class _SearchScreenState extends State<SearchScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // The field takes the whole row: the same 16 from the edge on both
-    // sides, and 12 between it and the back button (each of the app bar's
-    // gaps is titleSpacing; the right one has the 4 from actions too). On
-    // a wide window there's no back button — Home is in the bar beside it.
+    // The field's at the foot, as Ask's is (see _searchBar); the top has
+    // the tab's name, and the back button — not on a wide window: Home is
+    // in the bar beside it.
     final wide = windowIsWide(context);
+    // The keyboard covers the bottom nav bar, which isn't moved up with
+    // this tab's content; the field then sits just above the keyboard.
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
     return ScreenScaffold(
       bottomNavTab: BottomNavTab.search,
-      titleIsLabel: false,
       leadingWidth: wide ? 0 : 16 + 40,
       titleSpacing: wide ? 16 : 12,
       leading: wide
@@ -162,68 +188,139 @@ class _SearchScreenState extends State<SearchScreen> {
                     MovieTabService().currentTab.value = BottomNavTab.home,
               ),
             ),
-      title: _buildSearchField(),
-      actions: [SizedBox(width: wide ? 0 : 4)],
-      body: _buildBody,
+      title: const Text('Search'),
+      body: (context, isDesktop, padding) {
+        // None in a wide window's side column (its content to its edges).
+        final side =
+            isDesktop ? 60.0 : (SideColumnScope.inColumn(context) ? 0.0 : 16.0);
+        // Where Ask's field is: just above the bottom nav bar's buttons
+        // (padding.bottom keeps clear of its whole fade); with no bar at
+        // the foot (a wide window's, at the top; the side column), just
+        // above the safe area.
+        final barAtFoot =
+            !navBarAtTop(context) && !SideColumnScope.inColumn(context);
+        final fieldBottom = keyboardOpen
+            ? 8.0
+            : barAtFoot
+                ? padding.bottom - 34
+                // In the side column: on its foot.
+                : padding.bottom + (SideColumnScope.inColumn(context) ? 0 : 16);
+        return ValueListenableBuilder<List<String>>(
+          valueListenable: SearchHistoryService().entries,
+          builder: (context, history, _) {
+            // Recent searches: a row of pills just above the bar, before
+            // a search.
+            final recents = history.isNotEmpty && _controller.text.isEmpty;
+            // Room for the field (and the pills), and a gap so a poster's
+            // title isn't right against it.
+            final contentBottom = fieldBottom +
+                _fieldHeight +
+                (recents ? _recentsHeight + 10 : 0) +
+                24;
+            return Stack(
+              children: [
+                Positioned.fill(
+                  child: _buildBody(context, isDesktop,
+                      padding.copyWith(bottom: contentBottom)),
+                ),
+                if (recents)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: fieldBottom + _fieldHeight + 10,
+                    child: _recentSearches(history, side),
+                  ),
+                Positioned(
+                  left: side,
+                  right: side,
+                  bottom: fieldBottom,
+                  child: _searchBar(),
+                ),
+              ],
+            );
+          },
+        );
+      },
       selectedMovie: _selectedMovie,
       onCloseSidePanel: _closeSidePanel,
     );
   }
 
-  /// The search box as a frosted pill, like the bottom nav bar's Search
-  /// button it's opened from: a search icon, the field, and ✕ to clear
-  /// once there's text.
-  Widget _buildSearchField() {
-    const double fieldHeight = 52.0;
+  static const double _fieldHeight = 52;
+
+  /// The search box at the foot, as Ask's text bar: frosted glass, the
+  /// field, ✕ to clear once there's text, and a round white search button
+  /// at the right, where Ask's send is.
+  Widget _searchBar() {
     return SizedBox(
-      height: fieldHeight,
+      height: _fieldHeight,
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(fieldHeight / 2),
+        borderRadius: BorderRadius.circular(_fieldHeight / 2),
         child: GlassBlur(
-          reducedTint: Colors.black.withValues(alpha: 0.45),
+          grouped: true,
+          reducedTint: Colors.black.withValues(alpha: 0.9),
           child: DecoratedBox(
             decoration: ShapeDecoration(
               color: kGlassTint,
               shape: StadiumBorder(side: BorderSide(color: kGlassEdge)),
             ),
-            child: Row(
-              children: [
-                const SizedBox(width: 18),
-                const Icon(Icons.search_rounded,
-                    color: Colors.white70, size: 22),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    focusNode: _searchFocusNode,
-                    style: const TextStyle(color: Colors.white, fontSize: 16),
-                    cursorColor: Colors.white,
-                    decoration: const InputDecoration(
-                      hintText: 'Movies & TV shows',
-                      hintStyle: TextStyle(color: Colors.white54),
-                      border: InputBorder.none,
-                      isDense: true,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 7, 7, 7),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _controller,
+                      focusNode: _searchFocusNode,
+                      style: const TextStyle(color: Colors.white, fontSize: 16),
+                      decoration: const InputDecoration(
+                        hintText: 'Movies & TV shows',
+                        hintStyle: TextStyle(color: Colors.white38),
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(vertical: 9),
+                      ),
+                      textInputAction: TextInputAction.search,
+                      onChanged: _onSearchChanged,
+                      onSubmitted: _searchNow,
                     ),
-                    textInputAction: TextInputAction.search,
-                    onChanged: _onSearchChanged,
-                    onSubmitted: _searchNow,
                   ),
-                ),
-                ValueListenableBuilder<TextEditingValue>(
-                  valueListenable: _controller,
-                  builder: (context, value, _) => value.text.isEmpty
-                      ? const SizedBox(width: 14)
-                      : IconButton(
-                          icon: const Icon(Icons.close_rounded,
-                              color: Colors.white70, size: 18),
-                          tooltip: 'Clear',
-                          onPressed: () {
-                            _controller.clear();
-                            _onSearchChanged('');
-                          },
-                        ),
-                ),
-              ],
+                  ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: _controller,
+                    builder: (context, value, _) => value.text.isEmpty
+                        ? const SizedBox.shrink()
+                        : IconButton(
+                            icon: const Icon(Icons.close_rounded,
+                                color: Colors.white70, size: 18),
+                            tooltip: 'Clear',
+                            onPressed: () {
+                              _controller.clear();
+                              _onSearchChanged('');
+                            },
+                          ),
+                  ),
+                  const SizedBox(width: 4),
+                  ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: _controller,
+                    builder: (context, value, _) => IconButton(
+                      tooltip: 'Search',
+                      onPressed: value.text.trim().isEmpty
+                          ? null
+                          : () => _searchNow(_controller.text),
+                      icon: const Icon(Icons.search_rounded, size: 20),
+                      style: IconButton.styleFrom(
+                        fixedSize: const Size(38, 38),
+                        minimumSize: const Size(38, 38),
+                        padding: EdgeInsets.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.black,
+                        disabledBackgroundColor: Colors.white24,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -240,14 +337,17 @@ class _SearchScreenState extends State<SearchScreen> {
         mainAxisSpacing: isDesktop ? 16 : 12,
       );
 
-  // Search's app bar holds its 52px text field (titleIsLabel: false) inside
-  // an 80px toolbar in the side column.
-  double _topPadding(BuildContext context) =>
-      SideColumnScope.inColumn(context) ? 80 : 100;
+  // Under the app bar, as the other tabs' content (the field's at the
+  // foot now). In a wide window's side column, just clear of its rounded
+  // top corners, which clipped what was right against them.
+  double _topPadding(BuildContext context) => SideColumnScope.inColumn(context)
+      ? 12
+      : ScreenScaffold.contentTop(context);
 
   EdgeInsets _resultsPadding(
       BuildContext context, bool isDesktop, EdgeInsets padding) {
-    final horizontal = isDesktop ? 60.0 : 16.0;
+    final horizontal =
+        isDesktop ? 60.0 : (SideColumnScope.inColumn(context) ? 0.0 : 16.0);
     return padding.copyWith(
       left: horizontal,
       right: horizontal,
@@ -310,7 +410,8 @@ class _SearchScreenState extends State<SearchScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.error_outline_rounded, size: 48, color: Colors.grey),
+            const Icon(Icons.error_outline_rounded,
+                size: 48, color: Colors.grey),
             const SizedBox(height: 16),
             Text(_error!, style: const TextStyle(color: Colors.grey)),
           ],
@@ -319,10 +420,12 @@ class _SearchScreenState extends State<SearchScreen> {
     }
 
     if (_results.isEmpty && _controller.text.isEmpty) {
-      return ValueListenableBuilder<List<String>>(
-        valueListenable: SearchHistoryService().entries,
-        builder: (context, history, _) {
-          if (history.isEmpty) {
+      return Builder(
+        builder: (context) {
+          if (_trendingMovies.isNotEmpty || _trendingSeries.isNotEmpty) {
+            return _buildTrending(context, isDesktop, padding);
+          }
+          {
             return const Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -337,7 +440,6 @@ class _SearchScreenState extends State<SearchScreen> {
               ),
             );
           }
-          return _buildRecentSearches(context, history, isDesktop, padding);
         },
       );
     }
@@ -357,83 +459,144 @@ class _SearchScreenState extends State<SearchScreen> {
           onTap: () {
             // Opening a result marks the query as a real search.
             SearchHistoryService().add(_controller.text);
-            if (isDesktop) {
-              setState(() {
-                _selectedMovie = movie;
-              });
-            } else {
-              Navigator.push(
-                context,
-                CupertinoPageRoute(
-                  builder: (context) => DetailsScreen(movie: movie),
-                ),
-              );
-            }
+            _open(movie, isDesktop);
           },
         );
       },
     );
   }
 
-  /// "Recent" list shown while the search box is empty: tap to search
-  /// again, ✕ to forget.
-  Widget _buildRecentSearches(
-    BuildContext context,
-    List<String> history,
-    bool isDesktop,
-    EdgeInsets padding,
-  ) {
-    final horizontalPadding = isDesktop ? 60.0 : 16.0;
-    return ListView(
-      padding: padding.copyWith(
-        left: horizontalPadding,
-        right: horizontalPadding,
-        top: _topPadding(context),
-      ),
-      children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(12, 8, 12, 8),
-          child: Text(
-            'RECENT SEARCHES',
-            style: TextStyle(
-              color: Colors.white38,
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 1,
-            ),
-          ),
-        ),
-        for (final query in history)
-          InkWell(
-            mouseCursor: WidgetStateMouseCursor.clickable,
-            onTap: () => _searchNow(query),
-            borderRadius: BorderRadius.circular(12),
-            child: Padding(
-              padding: const EdgeInsets.only(left: 12, right: 4),
-              child: Row(
-                children: [
-                  const Icon(Icons.history_rounded, color: Colors.white38, size: 22),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Text(
-                      query,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 16),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close_rounded,
-                        color: Colors.white38, size: 18),
-                    tooltip: 'Remove',
-                    onPressed: () => SearchHistoryService().remove(query),
-                  ),
-                ],
+  /// Opens [movie]: beside the results on a wide window, else its page.
+  void _open(Movie movie, bool isDesktop) {
+    if (isDesktop) {
+      setState(() => _selectedMovie = movie);
+    } else {
+      Navigator.push(
+        context,
+        CupertinoPageRoute(builder: (context) => DetailsScreen(movie: movie)),
+      );
+    }
+  }
+
+  /// Before a search: this week's top ten movies, then series, as the
+  /// results' poster grid.
+  Widget _buildTrending(
+      BuildContext context, bool isDesktop, EdgeInsets padding) {
+    final pad = _resultsPadding(context, isDesktop, padding);
+    // In from the side column's edges, which the posters reach.
+    final headingInset = SideColumnScope.inColumn(context) ? 12.0 : 0.0;
+    Widget heading(String text) => SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.only(left: headingInset, bottom: 12),
+            child: Text(
+              text,
+              style: const TextStyle(
+                color: Colors.white38,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
               ),
             ),
           ),
+        );
+    Widget grid(List<Movie> titles) => SliverGrid.builder(
+          gridDelegate: _resultsGrid(isDesktop),
+          itemCount: titles.length,
+          itemBuilder: (context, i) => MoviePoster(
+            movie: titles[i],
+            width: double.infinity,
+            height: double.infinity,
+            showTitle: true,
+            onTap: () => _open(titles[i], isDesktop),
+          ),
+        );
+    return CustomScrollView(
+      controller: _scrollController,
+      slivers: [
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(pad.left, pad.top, pad.right, 0),
+          sliver: SliverMainAxisGroup(slivers: [
+            if (_trendingMovies.isNotEmpty) ...[
+              heading('TRENDING MOVIES'),
+              grid(_trendingMovies),
+              const SliverToBoxAdapter(child: SizedBox(height: 28)),
+            ],
+            if (_trendingSeries.isNotEmpty) ...[
+              heading('TRENDING SERIES'),
+              grid(_trendingSeries),
+            ],
+          ]),
+        ),
+        SliverToBoxAdapter(child: SizedBox(height: pad.bottom)),
       ],
+    );
+  }
+
+  static const double _recentsHeight = 36;
+
+  /// Recent searches as a row of pills over the search bar: tap one to
+  /// search it again, its ✕ to forget it. Latest first; scrolls sideways.
+  Widget _recentSearches(List<String> history, double side) {
+    return SizedBox(
+      height: _recentsHeight,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.symmetric(horizontal: side),
+        itemCount: history.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, i) {
+          final query = history[i];
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(_recentsHeight / 2),
+            child: GlassBlur(
+              grouped: true,
+              reducedTint: Colors.black.withValues(alpha: 0.9),
+              child: Material(
+                color: kGlassTint,
+                shape: StadiumBorder(side: BorderSide(color: kGlassEdge)),
+                child: InkWell(
+                  mouseCursor: WidgetStateMouseCursor.clickable,
+                  customBorder: const StadiumBorder(),
+                  onTap: () => _searchNow(query),
+                  // The pill's full height, so its text and ✕ sit in the
+                  // middle (the glass under it lets it shrink, and the
+                  // row then sat at the top).
+                  child: Container(
+                    height: _recentsHeight,
+                    padding: const EdgeInsets.only(left: 14, right: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 180),
+                          child: Text(
+                            query,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 14),
+                          ),
+                        ),
+                        SizedBox.square(
+                          dimension: 28,
+                          child: IconButton(
+                            padding: EdgeInsets.zero,
+                            tooltip: 'Remove',
+                            icon: const Icon(Icons.close_rounded,
+                                color: Colors.white54, size: 16),
+                            onPressed: () =>
+                                SearchHistoryService().remove(query),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }

@@ -2358,9 +2358,16 @@ class _TorrentQualitySelectorSheetState
         setState(() {
           _startingOption = null;
           _resolvingMessage = null;
-          _resolveError = 'Couldn\'t start ${option.name}: '
-              '${e.toString().replaceFirst(RegExp(r'^(Exception|Bad state): '), '')}\n'
-              'Try another quality.';
+          // No copy found anyone sharing it in time (no torrent metadata
+          // within 20 s, every copy tried): said plainly, not as the
+          // engine's TimeoutException.
+          _resolveError = e is TimeoutException
+              ? 'Couldn\'t start ${option.name}: too few people are sharing '
+                  'it right now.\nTry another quality, or this one again in '
+                  'a little while.'
+              : 'Couldn\'t start ${option.name}: '
+                  '${e.toString().replaceFirst(RegExp(r'^(Exception|Bad state): '), '')}\n'
+                  'Try another quality.';
         });
       }
     }

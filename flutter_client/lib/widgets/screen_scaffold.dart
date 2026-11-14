@@ -108,30 +108,35 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
               appBar: widget.titleIsLabel && ScreenScaffold.hidesTitle(context)
                   ? null
                   : CustomAppBar(
-                // On its island once the page is scrolled, as the details
-                // page's title is (see GlassBubbleBar) — instead of a black
-                // fade over the content behind it. Not a title that isn't
-                // a label (Search's field): it's glass itself, and takes the
-                // row edge to edge, without the island's padding.
-                title: widget.titleIsLabel
-                    ? ValueListenableBuilder<bool>(
-                        valueListenable: _scrolled,
-                        builder: (context, scrolled, title) =>
-                            TitleIsland(shown: scrolled, child: title!),
-                        child: widget.title,
-                      )
-                    : widget.title,
-                leading: widget.leading,
-                titleSpacing: widget.titleSpacing,
-                leadingWidth: widget.leadingWidth,
-                actions: widget.actions,
-                forceOpacity: 0,
-                showActions: false,
-                // Its 3 callers (Search/Favorites/Settings) all have the
-                // floating bottom nav bar now — mode-switching lives in
-                // Settings instead of a header icon.
-                showModeSwitch: false,
-              ),
+                      // On its island once the page is scrolled, as the details
+                      // page's title is (see GlassBubbleBar) — instead of a black
+                      // fade over the content behind it. Not a title that isn't
+                      // a label (Search's field): it's glass itself, and takes the
+                      // row edge to edge, without the island's padding.
+                      title: widget.titleIsLabel
+                          ? ValueListenableBuilder<bool>(
+                              valueListenable: _scrolled,
+                              builder: (context, scrolled, title) =>
+                                  TitleIsland(shown: scrolled, child: title!),
+                              child: widget.title,
+                            )
+                          : widget.title,
+                      leading: widget.leading,
+                      // Its screens are the bottom bar's tabs (My List, Settings,
+                      // Ask, Search): no back button unless one's given. The
+                      // tabs sit on a route over the mode selector, so Flutter
+                      // would otherwise add one to My List and Settings.
+                      automaticallyImplyLeading: false,
+                      titleSpacing: widget.titleSpacing,
+                      leadingWidth: widget.leadingWidth,
+                      actions: widget.actions,
+                      forceOpacity: 0,
+                      showActions: false,
+                      // Its 3 callers (Search/Favorites/Settings) all have the
+                      // floating bottom nav bar now — mode-switching lives in
+                      // Settings instead of a header icon.
+                      showModeSwitch: false,
+                    ),
               body: NotificationListener<ScrollNotification>(
                 onNotification: _onScroll,
                 child: widget.body(
@@ -240,7 +245,7 @@ class TitleIsland extends StatelessWidget {
                       // overlaps.
                       child: GlassBlur(
                         grouped: true,
-                        reducedTint: Colors.black.withValues(alpha: 0.55),
+                        reducedTint: Colors.black.withValues(alpha: 0.9),
                         child: Opacity(
                           opacity: t,
                           child: DecoratedBox(

@@ -61,4 +61,36 @@ void main() {
     expect(SubtitleTranslator.nameFor('abc'),
         isNot(SubtitleTranslator.nameFor('abd')));
   });
+
+  test('a broken reply keeps its whole lines', () {
+    // A stray quote breaks the JSON after the second line.
+    // (Raw: as Gemini sends it, its quotes in a line escaped.)
+    const reply = r'[{"i": 3, "t": "හෙලෝ, ඩොක්."}, '
+        r'{"i": 4, "t": "එයා කිව්වා \"හරි\" කියලා"}, '
+        r'{"i": 5, "t": "broken" here"}, {"i": 6, "t": "යමු."}]';
+    final lines = SubtitleTranslator.decodeReply(reply);
+    final byId = {for (final l in lines.cast<Map>()) l['i']: l['t']};
+    expect(byId[3], 'හෙලෝ, ඩොක්.');
+    expect(byId[4], 'එයා කිව්වා "හරි" කියලා');
+    expect(byId.containsKey(5), isFalse);
+    expect(byId[6], 'යමු.');
+  });
+
+  test('English left in a line is a slip, unless it was in the line', () {
+    expect(SubtitleTranslator.strayEnglish('තයර් screech හඬ', '[Tires squealing]'),
+        isTrue);
+    expect(SubtitleTranslator.strayEnglish('ය Dist යකෝ!', 'Holy shit!'), isTrue);
+    expect(
+        SubtitleTranslator.strayEnglish(
+            '[Mr. Sandman සින්දුව වදිනවා]', '[Mr. Sandman playing]'),
+        isFalse);
+    expect(SubtitleTranslator.strayEnglish('යමු.', "Let's go."), isFalse);
+  });
+
+  test('a whole reply is read as it is', () {
+    final lines = SubtitleTranslator.decodeReply('[{"i": 1, "t": "හරි"}]');
+    expect(lines, [
+      {'i': 1, 't': 'හරි'}
+    ]);
+  });
 }

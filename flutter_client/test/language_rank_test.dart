@@ -52,6 +52,13 @@ void main() {
     });
   });
 
+  test("Trance's misspelt Malayalam copy is still Malayalam", () {
+    final s = copy(
+        'Trance (2020) 720p WEBRip x264 AAC [ Hin Tel Malyalam ] ESub', '🇮🇳');
+    expect(rank(s, 'ml', own: 'ml', title: 'Trance'), 1);
+    expect(rank(s, 'en', own: 'ml', title: 'Trance'), 2);
+  });
+
   group('a title made in English', () {
     test('unmarked is English', () {
       expect(rank(copy('Back to the Future Part II 1989 720p BluRay'), 'en'), 0);

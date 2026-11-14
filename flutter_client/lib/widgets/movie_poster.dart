@@ -35,7 +35,31 @@ class MoviePoster extends StatefulWidget {
 }
 
 class _MoviePosterState extends State<MoviePoster> {
-  bool _isHovered = false;
+  // Under the mouse: only the poster's zoom listens (see _zoomed), not the
+  // whole card rebuilt on every hover.
+  final ValueNotifier<bool> _hovered = ValueNotifier(false);
+
+  @override
+  void dispose() {
+    _hovered.dispose();
+    super.dispose();
+  }
+
+  /// The poster, a touch larger under the mouse: just the picture (the
+  /// title stays still — text redrawn at every in-between size shimmered),
+  /// drawn once and that zoomed (filterQuality) rather than redrawn each
+  /// frame, easing out softly.
+  Widget _zoomed(Widget poster) => ValueListenableBuilder<bool>(
+        valueListenable: _hovered,
+        builder: (context, hovered, child) => AnimatedScale(
+          scale: hovered ? 1.03 : 1.0,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+          filterQuality: FilterQuality.medium,
+          child: child,
+        ),
+        child: RepaintBoundary(child: poster),
+      );
 
   // A finger touching the poster usually means it's about to be opened:
   // its page starts loading now, the moment before the tap lands.
@@ -71,7 +95,8 @@ class _MoviePosterState extends State<MoviePoster> {
             final hidePlayback = FeatureFlagsService().hidePlayback.value;
             final historyMovie = hidePlayback
                 ? null
-                : SavedMoviesService().getMovieFromHistory(widget.movie.id, type: widget.movie.type);
+                : SavedMoviesService().getMovieFromHistory(widget.movie.id,
+                    type: widget.movie.type);
             final progress = hidePlayback
                 ? null
                 : historyMovie?.progress ?? widget.movie.progress;
@@ -90,12 +115,11 @@ class _MoviePosterState extends State<MoviePoster> {
             final hasPoster = posterUrl != null && posterUrl.isNotEmpty;
             final isSvg = hasPoster && posterUrl.toLowerCase().endsWith('.svg');
             // Multiply by 1.5 to ensure sharpness (supersample slightly)
-            final decodeHeight = ((widget.height == double.infinity
-                        ? 400
-                        : widget.height) *
-                    MediaQuery.of(context).devicePixelRatio *
-                    1.5)
-                .toInt();
+            final decodeHeight =
+                ((widget.height == double.infinity ? 400 : widget.height) *
+                        MediaQuery.of(context).devicePixelRatio *
+                        1.5)
+                    .toInt();
             final Widget image = !hasPoster
                 ? Container(
                     color: Colors.grey[900],
@@ -226,6 +250,7 @@ class _MoviePosterState extends State<MoviePoster> {
     // Only with the title: it's what puts the image in a Column. Without one
     // the grid cell's own size bounds it, and Expanded outside a Column
     // broke the layout (the person sheet's grid of their films).
+    imageContent = _zoomed(imageContent);
     if (widget.height == double.infinity && widget.showTitle) {
       imageContent = Expanded(child: imageContent);
     }
@@ -233,56 +258,46 @@ class _MoviePosterState extends State<MoviePoster> {
     if (!widget.showTitle) {
       return MouseRegion(
         cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _isHovered = true),
-        onExit: (_) => setState(() => _isHovered = false),
+        onEnter: (_) => _hovered.value = true,
+        onExit: (_) => _hovered.value = false,
         child: GestureDetector(
           onTapDown: _prefetchDetails,
           onTap: widget.onTap,
           onLongPress: widget.onLongPress,
-          child: AnimatedScale(
-            scale: _isHovered ? 1.05 : 1.0,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOut,
-            child: imageContent,
-          ),
+          child: imageContent,
         ),
       );
     }
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
+      onEnter: (_) => _hovered.value = true,
+      onExit: (_) => _hovered.value = false,
       child: GestureDetector(
         onTapDown: _prefetchDetails,
         onTap: widget.onTap,
         onLongPress: widget.onLongPress,
-        child: AnimatedScale(
-          scale: _isHovered ? 1.05 : 1.0,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              imageContent,
-              if (widget.showTitle) ...[
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: widget.width == double.infinity ? null : widget.width,
-                  child: Text(
-                    widget.movie.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.white70,
-                    ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            imageContent,
+            if (widget.showTitle) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                width: widget.width == double.infinity ? null : widget.width,
+                child: Text(
+                  widget.movie.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white70,
                   ),
                 ),
-              ],
+              ),
             ],
-          ),
+          ],
         ),
       ),
     );

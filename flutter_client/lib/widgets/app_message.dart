@@ -55,7 +55,7 @@ class _MessagePill extends StatelessWidget {
     return ClipRRect(
       borderRadius: _radius,
       child: GlassBlur(
-        reducedTint: Colors.black.withValues(alpha: 0.6),
+        reducedTint: Colors.black.withValues(alpha: 0.9),
         child: DecoratedBox(
           // Darker than the buttons' glass: it shows over anything, and its
           // text has to stay readable over a bright picture too.

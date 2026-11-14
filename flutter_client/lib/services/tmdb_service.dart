@@ -46,7 +46,8 @@ class TMDBService {
     // One retry, after a pause, when TMDB says it's being asked too often.
     _dio.interceptors.add(InterceptorsWrapper(onError: (e, handler) async {
       final request = e.requestOptions;
-      if (e.response?.statusCode != 429 || request.extra['retried429'] == true) {
+      if (e.response?.statusCode != 429 ||
+          request.extra['retried429'] == true) {
         return handler.next(e);
       }
       final seconds =
@@ -79,6 +80,75 @@ class TMDBService {
   String get _apiKey => dotenv.env['TMDB_API_KEY'] ?? '';
 
   void clearCache() => _cache.clear();
+
+  /// This week's trending movies ([type] 'movie') or series ('tv'), most
+  /// trending first — the same filtering as [getTrending].
+  Future<List<Movie>> getTrendingOf(String type) async {
+    final key = 'trending_$type';
+    if (_cache.containsKey(key) && _cache[key]!.isValid(10)) {
+      return _cache[key]!.data as List<Movie>;
+    }
+    try {
+      final pages = await Future.wait([
+        for (final page in [1, 2])
+          _dio.get(
+            '$_baseUrl/trending/$type/week',
+            queryParameters: {'api_key': _apiKey, 'page': page},
+          ),
+      ]);
+      final movies = [
+        for (final response in pages) ...(response.data['results'] as List),
+      ]
+          .where((m) => !isUnsuitable(m as Map))
+          .map((m) =>
+              _formatMovie({...m as Map<String, dynamic>, 'media_type': type}))
+          .whereType<Movie>()
+          .toList();
+      _cache[key] = _CacheEntry(movies);
+      return movies;
+    } catch (e) {
+      print('TMDB trending $type error: $e');
+      return [];
+    }
+  }
+
+  /// Whether the movie [m] can be watched at home yet — the details page's
+  /// rule (Movie.isCinemaOnly): out on digital, disc or TV somewhere by
+  /// now, or, with no such date known, out in cinemas 120 days ago. False
+  /// for one not out at all.
+  Future<bool> isOutAtHome(Movie m) async {
+    final now = DateTime.now();
+    final release = DateTime.tryParse(m.releaseDateRaw ?? '');
+    if (release == null || release.isAfter(now)) return false;
+    final key = 'home_release_${m.id}';
+    String? home;
+    if (_cache.containsKey(key) && _cache[key]!.isValid(60)) {
+      home = _cache[key]!.data as String?;
+    } else {
+      try {
+        final response = await _dio.get(
+          '$_baseUrl/movie/${m.id}/release_dates',
+          queryParameters: {'api_key': _apiKey},
+        );
+        for (final country in response.data['results'] as List? ?? const []) {
+          for (final d in country['release_dates'] as List? ?? const []) {
+            final date = d['release_date']?.toString();
+            if (const {4, 5, 6}.contains(d['type']) &&
+                date != null &&
+                (home == null || date.compareTo(home) < 0)) {
+              home = date;
+            }
+          }
+        }
+        _cache[key] = _CacheEntry(home);
+      } catch (_) {
+        // Not known: by the cinema date alone, below.
+      }
+    }
+    final homeDate = DateTime.tryParse(home ?? '');
+    if (homeDate != null) return !homeDate.isAfter(now);
+    return now.difference(release).inDays >= 120;
+  }
 
   Future<List<Movie>> getTrending() async {
     const key = 'trending';
@@ -162,8 +232,13 @@ class TMDBService {
     }
   }
 
+  /// The title Ask suggested — by [title], and its [year], [type],
+  /// original [language] and [country] (ISO codes) — on TMDB. Among those
+  /// with the name, the one from that country first (titles share names:
+  /// the US, UK and Australian Ghosts — the last listed as "Ghosts
+  /// Australia"), then that language, then the nearest year.
   Future<Movie?> findTitle(String title,
-      {int? year, String? type, String? language}) async {
+      {int? year, String? type, String? language, String? country}) async {
     final isTv = type == 'tv';
     String plain(Object? s) =>
         '${s ?? ''}'.toLowerCase().replaceAll(_notLetterOrDigit, '');
@@ -208,7 +283,18 @@ class TMDBService {
         var bestMatch = 0;
         for (final r in response.data['results'] as List) {
           if (isUnsuitable(r as Map)) continue;
-          final titleMatch = match(r);
+          var titleMatch = match(r);
+          final countries = r['origin_country'];
+          final fromCountry = country != null &&
+              countries is List &&
+              countries.contains(country);
+          // From the country asked for, with the name in its own: the same
+          // show, named for where it's made ("Ghosts Australia").
+          if (titleMatch == 0 &&
+              fromCountry &&
+              plain(r['name'] ?? r['title']).contains(wanted)) {
+            titleMatch = 1;
+          }
           if (titleMatch == 0) continue;
           // Only partly the same: not unless it's in the language asked
           // for — "Neera" (Sinhala) isn't "Neeraja" (Malayalam).
@@ -217,8 +303,15 @@ class TMDBService {
               r['original_language'] != language) {
             continue;
           }
+          final date = '${r['first_air_date'] ?? r['release_date'] ?? ''}';
+          final found =
+              date.length >= 4 ? int.tryParse(date.substring(0, 4)) : null;
           final score = titleMatch * 2 +
-              (language != null && r['original_language'] == language ? 1 : 0);
+              (fromCountry ? 3 : 0) +
+              (language != null && r['original_language'] == language ? 1 : 0) +
+              (year != null && found != null && (found - year).abs() <= 1
+                  ? 1
+                  : 0);
           if (score <= bestMatch) continue;
           final movie = _formatMovie({
             ...r as Map<String, dynamic>,
@@ -227,7 +320,7 @@ class TMDBService {
           if (movie == null) continue;
           best = movie;
           bestMatch = score;
-          if (score == 5) break;
+          if (score == 9) break;
         }
         return best;
       } catch (e) {
@@ -282,11 +375,57 @@ class TMDBService {
   // Kantara, Devara, Maharaja…). Sinhala too, for viewers in Sri Lanka:
   // Neera's only logo is tagged Sinhala.
   static const _readableLogoLanguages = {
-    'fr', 'es', 'de', 'it', 'pt', 'nl', 'sv', 'da', 'no', 'nb', 'nn', 'fi',
-    'is', 'pl', 'cs', 'sk', 'sl', 'hr', 'bs', 'sr', 'hu', 'ro', 'tr', 'et',
-    'lv', 'lt', 'ga', 'cy', 'ca', 'eu', 'gl', 'id', 'ms', 'tl', 'vi', 'sq',
-    'af', 'sw', 'mt', 'lb',
-    'hi', 'ml', 'ta', 'te', 'kn', 'bn', 'mr', 'pa', 'gu', 'or', 'si',
+    'fr',
+    'es',
+    'de',
+    'it',
+    'pt',
+    'nl',
+    'sv',
+    'da',
+    'no',
+    'nb',
+    'nn',
+    'fi',
+    'is',
+    'pl',
+    'cs',
+    'sk',
+    'sl',
+    'hr',
+    'bs',
+    'sr',
+    'hu',
+    'ro',
+    'tr',
+    'et',
+    'lv',
+    'lt',
+    'ga',
+    'cy',
+    'ca',
+    'eu',
+    'gl',
+    'id',
+    'ms',
+    'tl',
+    'vi',
+    'sq',
+    'af',
+    'sw',
+    'mt',
+    'lb',
+    'hi',
+    'ml',
+    'ta',
+    'te',
+    'kn',
+    'bn',
+    'mr',
+    'pa',
+    'gu',
+    'or',
+    'si',
   };
 
   /// Details are fetched with English / language-neutral images only, so a
@@ -438,7 +577,8 @@ class TMDBService {
           },
           cancelToken: cancelToken,
         );
-        await _addOriginalLanguageExtras(response.data, 'movie', id, cancelToken);
+        await _addOriginalLanguageExtras(
+            response.data, 'movie', id, cancelToken);
         // A black logo can come first (see LogoBrightness).
         await LogoBrightness().preferLight(response.data, _imageBase);
         final movie = _formatMovieDetails(response.data,
@@ -529,16 +669,16 @@ class TMDBService {
               (c['media_type'] == 'movie' || c['media_type'] == 'tv') &&
               !isUnsuitable(c) &&
               // Not talk shows, news and the like (TMDB genre ids).
-              !((c['genre_ids'] as List?)?.any(
-                      (g) => g == 10767 || g == 10763 || g == 10764) ??
+              !((c['genre_ids'] as List?)
+                      ?.any((g) => g == 10767 || g == 10763 || g == 10764) ??
                   false) &&
               c['character'] != 'Self' &&
               c['character'] != 'Himself' &&
               c['character'] != 'Herself' &&
               seen.add('${c['media_type']}_${c['id']}'))
             c,
-      ]..sort((a, b) =>
-          ((b['vote_count'] as num?) ?? 0).compareTo((a['vote_count'] as num?) ?? 0));
+      ]..sort((a, b) => ((b['vote_count'] as num?) ?? 0)
+          .compareTo((a['vote_count'] as num?) ?? 0));
       final bio = p['biography'];
       // Who they played ("as Tony Stark"), or their job ("Director").
       String? role(Map<String, dynamic> c) {
@@ -566,11 +706,7 @@ class TMDBService {
         birthday: p['birthday'] as String?,
         deathday: p['deathday'] as String?,
         placeOfBirth: p['place_of_birth'] as String?,
-        credits: entries
-            .take(60)
-            .map(_formatMovie)
-            .whereType<Movie>()
-            .toList()
+        credits: entries.take(60).map(_formatMovie).whereType<Movie>().toList()
           // Newest first; undated (unannounced) ones last.
           ..sort((a, b) =>
               (b.releaseDateRaw ?? '').compareTo(a.releaseDateRaw ?? '')),
@@ -608,12 +744,16 @@ class TMDBService {
   static bool isUnsuitable(Map m) {
     if (m['adult'] == true) return true;
     final titles = [
-      m['title'], m['name'], m['original_title'], m['original_name'],
+      m['title'],
+      m['name'],
+      m['original_title'],
+      m['original_name'],
     ].whereType<String>().join(' ');
     if (_explicitTitle.hasMatch(titles)) return true;
     final genres = m['genre_ids'] ?? m['genres'];
     if (genres is List &&
-        genres.any((g) => _talkNewsAndReality.contains(g is Map ? g['id'] : g))) {
+        genres
+            .any((g) => _talkNewsAndReality.contains(g is Map ? g['id'] : g))) {
       return true;
     }
     final date = (m['release_date'] ?? m['first_air_date'] ?? '').toString();
@@ -867,7 +1007,8 @@ class TMDBService {
           .where((v) => v['site'] == 'YouTube' && v['type'] == 'Trailer')
           .toList()
         ..sort((a, b) {
-          final officialA = a['official'] == true, officialB = b['official'] == true;
+          final officialA = a['official'] == true,
+              officialB = b['official'] == true;
           if (officialA != officialB) return officialA ? -1 : 1;
           // ISO timestamps: compared as text, later sorts first.
           return '${b['published_at'] ?? ''}'
@@ -921,8 +1062,9 @@ class TMDBService {
       logoUrl: logoUrl,
       logoAspectRatio: logoAspectRatio,
       runtime: runtime,
-      certification:
-          certification != null && certification.isNotEmpty ? certification : null,
+      certification: certification != null && certification.isNotEmpty
+          ? certification
+          : null,
       mpaa: isTv ? certification : (m['adult'] == true ? 'R' : certification),
       seasons: seasons,
       trailerUrl: trailerUrl,
@@ -1128,7 +1270,8 @@ class TMDBService {
     final history = SavedMoviesService();
     return [
       for (final e in await _seasonEpisodes(tvId, seasonNumber))
-        switch (history.getEpisodeMinutes(tvId, seasonNumber, e.episodeNumber)) {
+        switch (
+            history.getEpisodeMinutes(tvId, seasonNumber, e.episodeNumber)) {
           final minutes? => e.withRuntime(minutes),
           null => e,
         },

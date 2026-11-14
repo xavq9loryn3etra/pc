@@ -11,6 +11,8 @@ import 'package:flutter/rendering.dart'
 
 import '../models/movie.dart';
 import '../services/ai_service.dart';
+import '../services/gemini_key_service.dart';
+import '../widgets/gemini_key_form.dart';
 import '../services/movie_tab_service.dart';
 import '../theme/iridescent.dart';
 import '../widgets/ask_orb.dart';
@@ -313,6 +315,12 @@ class _AskScreenState extends State<AskScreen>
   Future<void> _ask([String? text]) async {
     final request = (text ?? _controller.text).trim();
     if (request.isEmpty || _locked) return;
+    // Ask runs on their own free Gemini key: added here first if there's
+    // none yet, then the question goes on as asked.
+    if (!AiService().available) {
+      await showGeminiKeyDialog(context, title: 'Popcorn Ask');
+      if (!mounted || !AiService().available) return;
+    }
     // Earlier questions that got an answer, for follow-ups.
     final history = [
       for (final t in _turns)
@@ -875,7 +883,14 @@ class _AskScreenState extends State<AskScreen>
     return found;
   }
 
-  Widget _fieldRow() {
+  Widget _fieldRow() => ValueListenableBuilder<String?>(
+        valueListenable: GeminiKeyService().key,
+        builder: (context, key, _) => _fieldRowFor(hasKey: key != null),
+      );
+
+  /// The field and its button: send — or, with no Gemini key yet, the
+  /// field closed to typing and "Add key" in send's place.
+  Widget _fieldRowFor({required bool hasKey}) {
     return Row(
       // Send stays at the bottom as the text grows.
       crossAxisAlignment: CrossAxisAlignment.end,
@@ -890,6 +905,7 @@ class _AskScreenState extends State<AskScreen>
                   _focus.hasFocus ? _controller.selection : null,
               child: TextField(
                 key: _textKey,
+                enabled: hasKey,
                 onTap: _onFieldTap,
                 controller: _controller,
                 focusNode: _focus,
@@ -899,13 +915,16 @@ class _AskScreenState extends State<AskScreen>
                 textInputAction: TextInputAction.send,
                 onSubmitted: (_) => _ask(),
                 style: const TextStyle(color: Colors.white, fontSize: 16),
-                decoration: const InputDecoration(
-                  hintText: "What's up?",
-                  hintStyle: TextStyle(color: Colors.white38),
+                decoration: InputDecoration(
+                  hintText:
+                      hasKey ? "What's up?" : 'Add your Gemini key to ask',
+                  hintStyle: const TextStyle(color: Colors.white38),
                   border: InputBorder.none,
                   counterText: '',
                   isDense: true,
-                  contentPadding: EdgeInsets.symmetric(vertical: 9),
+                  // The text sat low in this field (measured on a phone:
+                  // 2.8 below the middle): 3 up, it's centred.
+                  contentPadding: const EdgeInsets.only(top: 6, bottom: 12),
                 ),
               ),
             ),
@@ -916,19 +935,45 @@ class _AskScreenState extends State<AskScreen>
         SizedBox(
           height: math.max(38, (_lineHeight ?? 0) - 14),
           child: Center(
-            child: IconButton(
-              onPressed: _locked ? null : _ask,
-              icon: const Icon(Icons.arrow_upward_rounded, size: 20),
-              style: IconButton.styleFrom(
-                fixedSize: const Size(38, 38),
-                minimumSize: const Size(38, 38),
-                padding: EdgeInsets.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                backgroundColor: Colors.white,
-                foregroundColor: Colors.black,
-                disabledBackgroundColor: Colors.white24,
-              ),
-            ),
+            child: !hasKey
+                ? TextButton.icon(
+                    onPressed: () =>
+                        showGeminiKeyDialog(context, title: 'Popcorn Ask'),
+                    icon: const Icon(Icons.key_rounded, size: 18),
+                    label: const Text(
+                      'Add key',
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                    ),
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(0, 38),
+                      fixedSize: const Size.fromHeight(38),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      backgroundColor: Colors.white,
+                      foregroundColor: Colors.black,
+                      shape: const StadiumBorder(),
+                    ),
+                  )
+                // Faded and untappable until something's typed.
+                : ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: _controller,
+                    builder: (context, value, icon) => IconButton(
+                      onPressed: _locked || value.text.trim().isEmpty
+                          ? null
+                          : () => _ask(),
+                      icon: const Icon(Icons.arrow_upward_rounded, size: 20),
+                      style: IconButton.styleFrom(
+                        fixedSize: const Size(38, 38),
+                        minimumSize: const Size(38, 38),
+                        padding: EdgeInsets.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.black,
+                        disabledBackgroundColor: Colors.white24,
+                      ),
+                    ),
+                  ),
           ),
         ),
       ],
@@ -1130,9 +1175,8 @@ class _TracePainter extends CustomPainter {
     // its tip as it fades, rather than stopping and fading where it was.
     final head = start() + Curves.easeInOutSine.transform(t);
     final grow = Curves.easeOut.transform(math.min(1.0, t / 0.25));
-    final shrink = t < 0.6
-        ? 1.0
-        : 1 - Curves.easeInOutCubic.transform((t - 0.6) / 0.4);
+    final shrink =
+        t < 0.6 ? 1.0 : 1 - Curves.easeInOutCubic.transform((t - 0.6) / 0.4);
     final fade = t < 0.7 ? 1.0 : 1 - Curves.easeIn.transform((t - 0.7) / 0.3);
     final length = _length * grow * shrink;
     if (length <= 0) return;
@@ -1573,7 +1617,7 @@ class _ExamplePill extends StatelessWidget {
       borderRadius: const BorderRadius.all(Radius.circular(100)),
       child: GlassBlur(
         grouped: true,
-        reducedTint: Colors.black.withValues(alpha: 0.45),
+        reducedTint: Colors.black.withValues(alpha: 0.9),
         child: Material(
           color: kGlassTint,
           shape: shape.copyWith(side: BorderSide(color: kGlassEdge)),

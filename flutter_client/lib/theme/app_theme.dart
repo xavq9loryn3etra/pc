@@ -71,6 +71,13 @@ class AppTheme {
         onSurface: Colors.white,
       ),
 
+      // A white cursor in every text field (Ask, Search, the Gemini key…),
+      // with the white send and search buttons; the selection handles keep
+      // the accent.
+      textSelectionTheme: const TextSelectionThemeData(
+        cursorColor: Colors.white,
+      ),
+
       // Typography
       textTheme: GoogleFonts.outfitTextTheme(
         ThemeData.dark().textTheme.apply(

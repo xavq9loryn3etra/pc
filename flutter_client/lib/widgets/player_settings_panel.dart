@@ -1,5 +1,3 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:flutter/material.dart';
 import 'floating_bottom_nav_bar.dart' show playerIsWide;
 import 'glass_blur.dart';
@@ -43,6 +41,10 @@ class PlayerSettingsPanel extends StatefulWidget {
   final double? sinhalaProgress;
   final String? sinhalaProblem;
 
+  /// The Sinhala row's "Add key" pill, without a Gemini key yet: the key's
+  /// steps over the film (see PlayerScreen).
+  final VoidCallback? onAddGeminiKey;
+
   final List<TorrentStream> availableStreams;
   final TorrentStream currentStream;
   final ValueChanged<TorrentStream> onStreamSelected;
@@ -57,6 +59,10 @@ class PlayerSettingsPanel extends StatefulWidget {
 
   /// A change of audio language is being carried out: no other meanwhile.
   final bool audioChanging;
+
+  /// Audio languages with no copy of this title (or episode): greyed out,
+  /// as on the details page's picker (it never plays in another).
+  final Set<AudioLanguage> unavailableAudio;
 
   final double subtitleDelaySeconds;
   final ValueChanged<double> onSubtitleDelayChanged;
@@ -73,7 +79,8 @@ class PlayerSettingsPanel extends StatefulWidget {
   final double? anchorCenterX;
 
   final VoidCallback onClose;
-  final String initialView; // 'main', 'subtitles', 'quality', 'audio', 'videoSize'
+  final String
+      initialView; // 'main', 'subtitles', 'quality', 'audio', 'videoSize'
 
   /// Closes the popup (animated) each time it notifies — the player's way
   /// to close it: its menu button pressed again, or Esc.
@@ -98,6 +105,7 @@ class PlayerSettingsPanel extends StatefulWidget {
     required this.getLanguageName,
     this.sinhalaProgress,
     this.sinhalaProblem,
+    this.onAddGeminiKey,
     required this.availableStreams,
     required this.currentStream,
     required this.onStreamSelected,
@@ -106,6 +114,7 @@ class PlayerSettingsPanel extends StatefulWidget {
     this.audioTitle,
     this.onAudioLanguageSelected,
     this.audioChanging = false,
+    this.unavailableAudio = const {},
     this.subtitleDelaySeconds = 0.0,
     required this.onSubtitleDelayChanged,
     this.subtitleSpeed = 1.0,
@@ -226,10 +235,11 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
                     : Alignment.bottomRight,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(22),
-                  // Its own 85% tint needs no extra when the blur is reduced.
+                  // Its own 72% tint (kGlassSheetTint), darker when the blur
+                  // is reduced: about 90% together.
                   child: GlassBlur(
                     sigma: 16,
-                    reducedTint: Colors.transparent,
+                    reducedTint: Colors.black.withValues(alpha: 0.65),
                     child: Container(
                       width: panelWidth,
                       constraints: BoxConstraints(maxHeight: maxPanelHeight),
@@ -366,9 +376,8 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
             _buildRow(
               icon: Icons.record_voice_over_rounded,
               title: 'Audio',
-              subtitle: AudioLanguageService()
-                  .languageFor(widget.audioTitle!)
-                  .name,
+              subtitle:
+                  AudioLanguageService().languageFor(widget.audioTitle!).name,
               trailing: chevron,
               onTap: () => setState(() => _currentView = 'audio'),
             ),
@@ -400,7 +409,10 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
     Widget row(AudioLanguage choice, String name, String description) =>
         _buildRow(
           title: name,
-          subtitle: description,
+          subtitle: widget.unavailableAudio.contains(choice)
+              ? 'Not available for this title'
+              : description,
+          enabled: !widget.unavailableAudio.contains(choice),
           trailing: choice == current
               ? (widget.audioChanging
                   ? const SizedBox.square(
@@ -502,9 +514,8 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
     bool enabled = true,
   }) {
     final row = InkWell(
-      mouseCursor: enabled
-          ? WidgetStateMouseCursor.clickable
-          : SystemMouseCursors.basic,
+      mouseCursor:
+          enabled ? WidgetStateMouseCursor.clickable : SystemMouseCursors.basic,
       onTap: enabled ? onTap : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -581,133 +592,15 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
       );
     }
 
-    final delay = widget.subtitleDelaySeconds;
-    final delayText = delay.abs() < 0.05
-        ? '0.0s'
-        : '${delay > 0 ? "+" : ""}${delay.toStringAsFixed(1)}s';
-    final speed = widget.subtitleSpeed;
-
-    // The timing card stays put at the top while the tracks under it
-    // scroll — it's adjusted while watching, often with a long list open.
-    final timingCard = widget.selectedSubtitle == null
-        ? null
-        : _buildGroup([
-            _syncCover(Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Text(
-                        'Timing Offset',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const Spacer(),
-                      _buildMiniActionChip(
-                        label: '−0.5s',
-                        onTap: () => widget.onSubtitleDelayChanged(delay - 0.5),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: MouseRegion(
-                          cursor: SystemMouseCursors.click,
-                          child: GestureDetector(
-                          onTap: () => widget.onSubtitleDelayChanged(0.0),
-                          child: Text(
-                            delayText,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w700,
-                              fontFeatures: [FontFeature.tabularFigures()],
-                            ),
-                          ),
-                        ),
-                        ),
-                      ),
-                      _buildMiniActionChip(
-                        label: '+0.5s',
-                        onTap: () => widget.onSubtitleDelayChanged(delay + 0.5),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      const Text(
-                        'Speed (FPS)',
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const Spacer(),
-                      _buildMiniActionChip(
-                        label: 'Slow −4%',
-                        active: (speed - (23.976 / 25.0)).abs() < 0.005,
-                        onTap: () =>
-                            widget.onSubtitleSpeedChanged(23.976 / 25.0),
-                      ),
-                      const SizedBox(width: 6),
-                      _buildMiniActionChip(
-                        label: '1.0×',
-                        active: (speed - 1.0).abs() < 0.005,
-                        onTap: () => widget.onSubtitleSpeedChanged(1.0),
-                      ),
-                      const SizedBox(width: 6),
-                      _buildMiniActionChip(
-                        label: 'Fast +4%',
-                        active: (speed - (25.0 / 23.976)).abs() < 0.005,
-                        onTap: () =>
-                            widget.onSubtitleSpeedChanged(25.0 / 23.976),
-                      ),
-                    ],
-                  ),
-                  if (widget.subtitleSyncNote == 'Synced') ...[
-                    const SizedBox(height: 8),
-                    const Row(
-                      children: [
-                        Icon(Icons.check_circle_rounded,
-                            size: 14, color: Colors.white54),
-                        SizedBox(width: 6),
-                        Text(
-                          'Synced automatically',
-                          style: TextStyle(
-                            color: Colors.white54,
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
-            )),
-          ]);
-
     return Column(
       key: const ValueKey('subtitle-settings'),
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (timingCard != null)
-          Padding(
-            // A gap under it, above where the tracks' list scrolls under.
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-            child: timingCard,
-          ),
         Flexible(
           child: ListView(
             shrinkWrap: true,
-            padding:
-                EdgeInsets.fromLTRB(14, timingCard == null ? 10 : 0, 14, 14),
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
             children: [
               _buildGroup([
                 _buildRow(
@@ -722,22 +615,33 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
                     // key: greyed out until there's a key.
                     if (track.translatedFrom != null) {
                       final hasKey = GeminiKeyService().hasKey;
+                      // No key yet: added right here, over the film.
+                      if (!hasKey) {
+                        return _buildRow(
+                          title: name,
+                          subtitle: 'Needs a free Gemini key',
+                          trailing: GlassPillButton(
+                            icon: Icons.key_rounded,
+                            label: 'Add key',
+                            onPressed: widget.onAddGeminiKey,
+                          ),
+                          onTap: widget.onAddGeminiKey ?? () {},
+                        );
+                      }
                       final chosen = widget.selectedSubtitle?.id == track.id;
                       final progress = widget.sinhalaProgress;
                       final String note;
-                      if (!hasKey) {
-                        note = 'Add your Gemini key in Settings to use';
-                      } else if (chosen && widget.sinhalaProblem != null) {
+                      if (chosen && widget.sinhalaProblem != null) {
                         note = widget.sinhalaProblem!;
                       } else if (chosen && progress != null && progress < 1) {
                         note = 'Translating… ${(progress * 100).floor()}%';
                       } else {
-                        note = 'Auto-translated from English';
+                        note = 'Auto-translated from '
+                            '${widget.getLanguageName(track.translatedFrom!.lang)}';
                       }
                       return _buildRow(
                         title: name,
                         subtitle: note,
-                        enabled: hasKey,
                         trailing: chosen ? _check : null,
                         onTap: () => widget.onSubtitleSelected(track),
                       );
@@ -771,98 +675,6 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
           ),
         ),
       ],
-    );
-  }
-
-  /// [controls] (the subtitles' timing), covered while they're being synced
-  /// (see PlayerSettingsPanel.subtitleSyncing): faded and blurred under
-  /// Ask's orb, as on the Subtitles button, saying so — and out of reach,
-  /// so a nudge can't fight the sync. Uncovered smoothly when it's done.
-  Widget _syncCover(Widget controls) {
-    final syncing = widget.subtitleSyncing;
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        AbsorbPointer(
-          absorbing: syncing,
-          child: TweenAnimationBuilder<double>(
-            tween: Tween(end: syncing ? 1 : 0),
-            duration: const Duration(milliseconds: 350),
-            curve: Curves.easeOutCubic,
-            child: controls,
-            builder: (context, v, child) => v == 0
-                ? child!
-                : ImageFiltered(
-                    imageFilter: ImageFilter.blur(sigmaX: 3 * v, sigmaY: 3 * v),
-                    child: Opacity(opacity: 1 - 0.75 * v, child: child),
-                  ),
-          ),
-        ),
-        IgnorePointer(
-          child: AnimatedOpacity(
-            opacity: syncing ? 1 : 0,
-            duration: const Duration(milliseconds: 350),
-            curve: Curves.easeOutCubic,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Positioned.fill(child: BusyOrb(on: syncing)),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.subtitles_rounded,
-                          color: Colors.white,
-                          size: 16,
-                          shadows: kOnOrbShadows),
-                      SizedBox(width: 8),
-                      Text(
-                        'Syncing subtitles…',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          shadows: kOnOrbShadows,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildMiniActionChip({
-    required String label,
-    required VoidCallback onTap,
-    bool active = false,
-  }) {
-    return Material(
-      color: active
-          ? Colors.white.withValues(alpha: 0.24)
-          : Colors.white.withValues(alpha: 0.08),
-      borderRadius: BorderRadius.circular(8),
-      child: InkWell(
-        mouseCursor: WidgetStateMouseCursor.clickable,
-        borderRadius: BorderRadius.circular(8),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: active ? Colors.white : Colors.white70,
-              fontSize: 11.5,
-              fontWeight: active ? FontWeight.w700 : FontWeight.w600,
-            ),
-          ),
-        ),
-      ),
     );
   }
 

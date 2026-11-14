@@ -10,6 +10,9 @@ Future<T?> showGlassDialog<T>(
   BuildContext context, {
   required WidgetBuilder builder,
   bool dismissible = true,
+  // Wider for one with more to say (the Gemini key's steps over the
+  // player, landscape): short ones read best narrow.
+  double maxWidth = 360,
 }) {
   return showGeneralDialog<T>(
     context: context,
@@ -28,13 +31,21 @@ Future<T?> showGlassDialog<T>(
         ),
       );
     },
-    pageBuilder: (dialogContext, _, __) => SafeArea(
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 360),
-            child: GlassPanel(child: builder(dialogContext)),
+    // Above the keyboard when it's up (a field in it: the Gemini key's),
+    // and scrolled within the screen's height by a builder that scrolls.
+    pageBuilder: (dialogContext, _, __) => AnimatedPadding(
+      duration: const Duration(milliseconds: 150),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(dialogContext).bottom),
+      child: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: maxWidth),
+              child: GlassPanel(child: builder(dialogContext)),
+            ),
           ),
         ),
       ),
@@ -214,7 +225,8 @@ class GlassPanel extends StatelessWidget {
 /// [destructive] (red).
 class GlassDialogButton extends StatelessWidget {
   final String label;
-  final VoidCallback onTap;
+  /// Null: shown faded, and can't be tapped.
+  final VoidCallback? onTap;
   final bool primary;
   final bool destructive;
 
@@ -242,15 +254,21 @@ class GlassDialogButton extends StatelessWidget {
         fontWeight: FontWeight.w700,
       ),
     );
-    return SizedBox(
-      height: 44,
-      child: Material(
-        color: primary ? Colors.white : kGlassTint,
-        shape: primary
-            ? _shape
-            : _shape.copyWith(side: BorderSide(color: kGlassEdge)),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(mouseCursor: WidgetStateMouseCursor.clickable, onTap: onTap, child: Center(child: text)),
+    return Opacity(
+      opacity: onTap == null ? 0.4 : 1,
+      child: SizedBox(
+        height: 44,
+        child: Material(
+          color: primary ? Colors.white : kGlassTint,
+          shape: primary
+              ? _shape
+              : _shape.copyWith(side: BorderSide(color: kGlassEdge)),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+              mouseCursor: WidgetStateMouseCursor.clickable,
+              onTap: onTap,
+              child: Center(child: text)),
+        ),
       ),
     );
   }

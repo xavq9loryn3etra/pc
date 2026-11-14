@@ -1,9 +1,12 @@
 package com.popcorn.flutter_client
 
+import android.app.UiModeManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -47,6 +50,14 @@ class MainActivity : FlutterActivity() {
                     val country = tm?.simCountryIso?.takeIf { it.isNotBlank() }
                         ?: tm?.networkCountryIso?.takeIf { it.isNotBlank() }
                     result.success(country?.uppercase())
+                } else if (call.method == "isTv") {
+                    // Android TV, Google TV, Fire TV: a remote, no touch, a
+                    // screen that never turns (see TvDevice).
+                    val ui = getSystemService(Context.UI_MODE_SERVICE) as UiModeManager
+                    result.success(
+                        ui.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION ||
+                            packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                    )
                 } else if (call.method == "freeBytes") {
                     // Space left on the disk holding a path: the torrents
                     // folder (see FreeSpace).

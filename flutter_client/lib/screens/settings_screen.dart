@@ -12,6 +12,7 @@ import '../widgets/shimmer_loader.dart';
 import '../widgets/mode_switch_row.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
+import '../services/tv_device.dart';
 import '../services/backup_service.dart';
 import '../services/feature_flags_service.dart';
 import '../services/gemini_key_service.dart';
@@ -35,12 +36,13 @@ class SettingsScreen extends StatelessWidget {
           ]),
           builder: (context, _) {
             // Playback's one setting is about mobile data: phones and
-            // tablets only — a computer's on Wi-Fi or a cable, where the
-            // head start always downloads.
+            // tablets only — a computer or a TV is on Wi-Fi or a cable,
+            // where the head start always downloads.
             final showStorage =
                 AppModeService().currentMode.value == AppMode.movies &&
                     !FeatureFlagsService().hidePlayback.value &&
-                    !isComputer;
+                    !isComputer &&
+                    !TvDevice.isTv;
 
             // Grouped like Apple's settings: each section's rows on one
             // card, a short note under it, ordered by how often they're
@@ -91,25 +93,29 @@ class SettingsScreen extends StatelessWidget {
                           'watch.',
                       children: [_GeminiKeySection()],
                     ),
-                    const _SectionLabel(
-                      'BACKUP',
-                    ),
-                    _SettingsGroup(
-                      footnote: 'Your favorites and watch history, saved to a '
-                          'file you can bring back later.',
-                      children: [
-                        _SettingsRow(
-                          icon: Icons.file_upload_outlined,
-                          title: 'Export favorites & history',
-                          onTap: () => _exportBackup(context),
-                        ),
-                        _SettingsRow(
-                          icon: Icons.file_download_outlined,
-                          title: 'Import from a backup',
-                          onTap: () => _importBackup(context),
-                        ),
-                      ],
-                    ),
+                    // Not on a TV: a backup's saved and picked through
+                    // Android's file picker, which many TVs don't have.
+                    if (!TvDevice.isTv) ...[
+                      const _SectionLabel(
+                        'BACKUP',
+                      ),
+                      _SettingsGroup(
+                        footnote: 'Your favorites and watch history, saved to '
+                            'a file you can bring back later.',
+                        children: [
+                          _SettingsRow(
+                            icon: Icons.file_upload_outlined,
+                            title: 'Export favorites & history',
+                            onTap: () => _exportBackup(context),
+                          ),
+                          _SettingsRow(
+                            icon: Icons.file_download_outlined,
+                            title: 'Import from a backup',
+                            onTap: () => _importBackup(context),
+                          ),
+                        ],
+                      ),
+                    ],
                   ]),
                 ),
                 SliverPadding(

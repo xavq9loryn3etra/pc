@@ -3,6 +3,8 @@ import 'package:shimmer/shimmer.dart';
 import '../models/movie.dart';
 import '../services/audio_language_service.dart';
 import '../services/torrent/stream_resolver.dart';
+import '../services/tv_device.dart';
+import 'tv_focus.dart';
 
 /// The quality picker, in the episode cards' style (see EpisodeCard): one
 /// rounded panel with a faint edge and a row per [QualityOption] — the
@@ -48,6 +50,15 @@ class QualityOptionList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // On a TV, the remote starts on the recommended quality, or else the
+    // first there is to pick.
+    bool pickable(QualityOption o) => !(isCurrent?.call(o) ?? false);
+    var first = -1;
+    if (TvDevice.isTv) {
+      first = options
+          .indexWhere((o) => pickable(o) && (isPrimary?.call(o) ?? false));
+      if (first == -1) first = options.indexWhere(pickable);
+    }
     return ClipRRect(
       borderRadius: _radius,
       child: DecoratedBox(
@@ -68,7 +79,7 @@ class QualityOptionList extends StatelessWidget {
                     margin: const EdgeInsets.only(left: 16),
                     color: Colors.white.withValues(alpha: 0.1),
                   ),
-                _buildRow(options[i]),
+                _buildRow(options[i], autofocus: i == first),
               ],
             ],
           ),
@@ -77,7 +88,7 @@ class QualityOptionList extends StatelessWidget {
     );
   }
 
-  Widget _buildRow(QualityOption option) {
+  Widget _buildRow(QualityOption option, {bool autofocus = false}) {
     final tag = tagFor?.call(option);
     final current = isCurrent?.call(option) ?? false;
     final primary = isPrimary?.call(option) ?? false;
@@ -90,7 +101,7 @@ class QualityOptionList extends StatelessWidget {
             if (option.size case final size?) size,
           ].join('  ·  ');
 
-    return AnimatedOpacity(
+    final row = AnimatedOpacity(
       duration: _fade,
       opacity: busy && !isStarting ? 0.35 : 1,
       child: InkWell(
@@ -193,6 +204,9 @@ class QualityOptionList extends StatelessWidget {
         ),
       ),
     );
+    // On a TV, selected as the list appears (see build) — only then: not
+    // again on a rebuild, after a quality that wouldn't start.
+    return autofocus ? TvAutoSelect(child: row) : row;
   }
 }
 

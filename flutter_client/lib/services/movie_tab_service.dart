@@ -40,6 +40,9 @@ class MovieTabService {
     final navigator = columnNavigator.currentState;
     if (navigator == null) return false;
     navigator.popUntil((route) => route.isFirst);
+    // After closing any title open before: closing it may have selected
+    // the home's poster again.
+    rememberFocus();
     navigator.push(CupertinoPageRoute(builder: (_) => page));
     return true;
   }
@@ -47,6 +50,39 @@ class MovieTabService {
   /// Back to the column's tab, closing any titles opened over it.
   void closeColumnPages() =>
       columnNavigator.currentState?.popUntil((route) => route.isFirst);
+
+  // What a TV remote had selected outside the column (the poster a title
+  // was opened from), to go back to once the column closes.
+  FocusNode? _returnFocus;
+
+  /// Notes what's selected now (or [selected]), unless it's in the column
+  /// itself.
+  void rememberFocus([FocusNode? selected]) {
+    final node = selected ?? FocusManager.instance.primaryFocus;
+    final columnContext = columnNavigator.currentContext;
+    if (node == null || node.context == null) return;
+    var inColumn = false;
+    if (columnContext != null) {
+      node.context!.visitAncestorElements((e) {
+        if (identical(e, columnContext)) inColumn = true;
+        return !inColumn;
+      });
+    }
+    if (!inColumn) _returnFocus = node;
+  }
+
+  /// Selects again what was selected when the column opened, if it's still
+  /// there.
+  void restoreFocus() {
+    final node = _returnFocus;
+    _returnFocus = null;
+    if (node == null) return;
+    // Next frame: on a TV the home can't be selected while the column's
+    // open (see _WideTabs), and the column closing takes effect then.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (node.context != null && node.context!.mounted) node.requestFocus();
+    });
+  }
 }
 
 /// Counts the column navigator's pages on top of its first, for
@@ -79,12 +115,21 @@ class ColumnPageCounter extends NavigatorObserver {
   /// layout changing as the window leaves full screen) reports its first
   /// page then, and its listeners can't be rebuilt mid-build.
   void _publish() {
+    void publish() {
+      final tabs = MovieTabService();
+      tabs.columnPages.value = _depth;
+      // The last title closed on the Home tab: the column is going, so a
+      // TV remote's selection goes back to where it was on the home.
+      if (_depth == 0 && tabs.currentTab.value == BottomNavTab.home) {
+        tabs.restoreFocus();
+      }
+    }
+
     final scheduler = SchedulerBinding.instance;
     if (scheduler.schedulerPhase == SchedulerPhase.persistentCallbacks) {
-      scheduler.addPostFrameCallback(
-          (_) => MovieTabService().columnPages.value = _depth);
+      scheduler.addPostFrameCallback((_) => publish());
     } else {
-      MovieTabService().columnPages.value = _depth;
+      publish();
     }
   }
 }

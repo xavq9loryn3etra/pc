@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/gemini_key_service.dart';
+import '../services/tv_device.dart';
+import 'gemini_key_from_phone.dart';
 import 'glass_dialog.dart';
 
 /// Where a Gemini API key is made.
@@ -135,6 +137,12 @@ class _GeminiKeyFormState extends State<GeminiKeyForm> {
         );
     const bold = TextStyle(color: Colors.white, fontWeight: FontWeight.w600);
     final hasKey = GeminiKeyService().hasKey;
+    // On a TV, added from the phone instead (a key that long is a chore
+    // to type with a remote). One that's added shows here as anywhere,
+    // with Remove.
+    if (TvDevice.isTv && !hasKey) {
+      return GeminiKeyFromPhone(onDone: widget.onDone);
+    }
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 2, 16, 16),

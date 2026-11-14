@@ -6,6 +6,8 @@ import '../services/app_mode_service.dart';
 import '../services/movie_tab_service.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/glass_blur.dart';
+import '../widgets/tv_focus.dart';
+import '../services/tv_device.dart';
 import 'home_screen.dart';
 import 'search_screen.dart';
 import 'favorites_screen.dart';
@@ -58,15 +60,21 @@ class MovieTabShell extends StatelessWidget {
                 for (var i = 0; i < screens.length; i++)
                   IgnorePointer(
                     ignoring: BottomNavTab.values[i] != activeTab,
-                    child: AnimatedOpacity(
-                      opacity: BottomNavTab.values[i] == activeTab ? 1.0 : 0.0,
-                      duration: _kTabFadeDuration,
-                      curve: Curves.easeOut,
-                      // The hidden tabs' animations paused — Ask's glow,
-                      // a loading shimmer — rather than running unseen.
-                      child: TickerMode(
-                        enabled: BottomNavTab.values[i] == activeTab,
-                        child: screens[i],
+                    // Out of reach of a TV remote or keyboard too, not just
+                    // of taps, while hidden.
+                    child: ExcludeFocus(
+                      excluding: BottomNavTab.values[i] != activeTab,
+                      child: AnimatedOpacity(
+                        opacity:
+                            BottomNavTab.values[i] == activeTab ? 1.0 : 0.0,
+                        duration: _kTabFadeDuration,
+                        curve: Curves.easeOut,
+                        // The hidden tabs' animations paused — Ask's glow,
+                        // a loading shimmer — rather than running unseen.
+                        child: TickerMode(
+                          enabled: BottomNavTab.values[i] == activeTab,
+                          child: screens[i],
+                        ),
                       ),
                     ),
                   ),
@@ -88,7 +96,10 @@ class MovieTabShell extends StatelessWidget {
         builder: (context, panels, navBar) => AnimatedOpacity(
           opacity: panels > 0 ? 0 : 1,
           duration: const Duration(milliseconds: 200),
-          child: IgnorePointer(ignoring: panels > 0, child: navBar),
+          child: IgnorePointer(
+            ignoring: panels > 0,
+            child: ExcludeFocus(excluding: panels > 0, child: navBar!),
+          ),
         ),
         child: Stack(children: [_navBar(mode, activeTab)]),
       ),
@@ -248,6 +259,9 @@ class _WideTabs extends StatelessWidget {
                                           MovieTabService().closeColumnPages();
                                           MovieTabService().currentTab.value =
                                               BottomNavTab.home;
+                                          // On a TV, back to what was
+                                          // selected on the home.
+                                          MovieTabService().restoreFocus();
                                         },
                                         child: const Center(
                                           child: Icon(
@@ -266,7 +280,13 @@ class _WideTabs extends StatelessWidget {
                         ],
                       ),
                     ),
-                    child: home,
+                    // On a TV, out of the remote's reach while the column's
+                    // open: it stays in the column and the nav bar until the
+                    // column's closed (Back, or collapse above).
+                    child: ExcludeFocus(
+                      excluding: open && TvDevice.isTv,
+                      child: home,
+                    ),
                   ),
                 ),
                 AnimatedPositioned(
@@ -278,9 +298,14 @@ class _WideTabs extends StatelessWidget {
                   right: open ? _kColumnGap : -(_kColumnWidth + _kColumnGap),
                   child: IgnorePointer(
                     ignoring: !open,
-                    child: TickerMode(
-                      enabled: open,
-                      child: _SideColumn(size: columnSize),
+                    // Off-screen while closed: out of a TV remote's or a
+                    // keyboard's reach too.
+                    child: ExcludeFocus(
+                      excluding: !open,
+                      child: TickerMode(
+                        enabled: open,
+                        child: _SideColumn(size: columnSize),
+                      ),
                     ),
                   ),
                 ),
@@ -402,11 +427,29 @@ class _SideColumnState extends State<_SideColumn> {
           child: SideColumnScope(
             child: HeroControllerScope(
               controller: _heroes,
-              child: Navigator(
-                key: MovieTabService().columnNavigator,
-                observers: [_counter],
-                onGenerateRoute: (_) => PageRouteBuilder(
-                  pageBuilder: (_, __, ___) => const _ColumnTabs(),
+              // Back is always the app's on this layout: MainScreen takes
+              // it, closing this column's pages first. Left alone, this
+              // navigator told Android the app had nothing to go back to
+              // whenever it was down to its first page — and Android then
+              // took Back itself, so on a TV one press left the app.
+              child: NotificationListener<NavigationNotification>(
+                onNotification: (notification) {
+                  if (notification.canHandlePop) return false;
+                  const NavigationNotification(canHandlePop: true)
+                      .dispatch(context);
+                  return true;
+                },
+                // Its pages are their own focus scopes: a TV remote's up
+                // from a page's top goes on to the nav bar over it (and
+                // left, to the home) rather than nowhere.
+                child: TvFocusPassThrough(
+                  child: Navigator(
+                    key: MovieTabService().columnNavigator,
+                    observers: [_counter],
+                    onGenerateRoute: (_) => PageRouteBuilder(
+                      pageBuilder: (_, __, ___) => const _ColumnTabs(),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -436,13 +479,16 @@ class _ColumnTabs extends StatelessWidget {
               for (var i = 1; i < screens.length; i++)
                 IgnorePointer(
                   ignoring: BottomNavTab.values[i] != tab,
-                  child: AnimatedOpacity(
-                    opacity: BottomNavTab.values[i] == tab ? 1.0 : 0.0,
-                    duration: _kTabFadeDuration,
-                    curve: Curves.easeOut,
-                    child: TickerMode(
-                      enabled: BottomNavTab.values[i] == tab,
-                      child: screens[i],
+                  child: ExcludeFocus(
+                    excluding: BottomNavTab.values[i] != tab,
+                    child: AnimatedOpacity(
+                      opacity: BottomNavTab.values[i] == tab ? 1.0 : 0.0,
+                      duration: _kTabFadeDuration,
+                      curve: Curves.easeOut,
+                      child: TickerMode(
+                        enabled: BottomNavTab.values[i] == tab,
+                        child: screens[i],
+                      ),
                     ),
                   ),
                 ),

@@ -3,7 +3,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../models/movie.dart';
+import '../services/tv_device.dart';
 import 'glass_blur.dart';
+import 'tv_focus.dart';
 
 /// A frosted "Season n ⌄" pill that opens the season menu below it — on
 /// the details screen and in the player's episode browser.
@@ -94,8 +96,20 @@ class _SeasonPickerState extends State<SeasonPicker>
   // already, but a mouse wheel or trackpad scrolls without one.)
   ScrollPosition? _page;
 
+  // On a TV: the pill (selected when OK opened the menu), selected again
+  // once it closes — the selection was in the menu, gone with it.
+  FocusNode? _returnTo;
+
+  // On a TV, Back closes the menu (not the page under it).
+  bool _back() {
+    if (!_menu.isShowing) return false;
+    _close();
+    return true;
+  }
+
   @override
   void dispose() {
+    TvBack.remove(_back);
     _page?.removeListener(_close);
     _curved.dispose();
     _animation.dispose();
@@ -117,6 +131,10 @@ class _SeasonPickerState extends State<SeasonPicker>
           math.min(_maxMenuHeight, overlay.size.height - _top - 16);
     });
     _page = Scrollable.maybeOf(context)?.position?..addListener(_close);
+    if (TvDevice.isTv) {
+      _returnTo = FocusManager.instance.primaryFocus;
+      TvBack.add(_back);
+    }
     _menu.show();
     _animation.forward(from: 0);
   }
@@ -125,6 +143,11 @@ class _SeasonPickerState extends State<SeasonPicker>
     _page?.removeListener(_close);
     _page = null;
     if (!_menu.isShowing) return;
+    if (TvDevice.isTv) {
+      TvBack.remove(_back);
+      _returnTo?.requestFocus();
+      _returnTo = null;
+    }
     await _animation.reverse();
     if (mounted) _menu.hide();
   }
@@ -212,7 +235,14 @@ class _SeasonPickerState extends State<SeasonPicker>
                     _left == null ? Alignment.topRight : Alignment.topLeft,
                 child: ConstrainedBox(
                   constraints: BoxConstraints(maxHeight: _maxHeight),
-                  child: _buildPanel(),
+                  // On a TV, the remote's arrows stay in the menu while it's
+                  // open (it opens on the current season, below).
+                  // Its rows ringed as rows, not pills.
+                  child: TvDevice.isTv
+                      ? FocusScope(
+                          child: TvRingRadius(radius: 12, child: _buildPanel()),
+                        )
+                      : _buildPanel(),
                 ),
               ),
             ),
@@ -261,6 +291,12 @@ class _SeasonPickerState extends State<SeasonPicker>
 
   Widget _buildRow(Season season) {
     final isCurrent = season.seasonNumber == widget.current;
+    final row = _row(season, isCurrent);
+    // On a TV the menu opens with the current season selected.
+    return isCurrent ? TvAutoSelect(child: row) : row;
+  }
+
+  Widget _row(Season season, bool isCurrent) {
     final count = season.episodeCount;
     return InkWell(
       mouseCursor: WidgetStateMouseCursor.clickable,

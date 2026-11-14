@@ -30,6 +30,8 @@ import '../services/torrent/torrent_download_registry.dart';
 import '../services/torrent/torrent_storage_service.dart';
 import '../services/torrent/trim_point.dart';
 import '../services/tmdb_service.dart';
+import '../services/tv_device.dart';
+import '../widgets/tv_focus.dart';
 import '../models/movie.dart';
 import '../theme/app_theme.dart';
 import '../widgets/player_gesture_overlay.dart';
@@ -172,6 +174,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   Timer? _controlsTimer;
   Timer? _screenTapTimer;
   DateTime? _controlsPointerAt;
+
+  // A TV remote (see _onTvKey): the player itself, selected while none of
+  // its buttons is, and the play button, where the remote lands on them.
+  final FocusNode _rootFocus = FocusNode(debugLabel: 'Player');
+  final FocusNode _playButtonFocus = FocusNode(debugLabel: 'Play/pause');
   bool _isBuffering = false;
   Timer? _bufferingRevealTimer;
   Timer? _seekRevealTimer;
@@ -384,7 +391,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   // bars and pull-down panel turn with it. Only once the player has faded
   // in over the page, and back to portrait before it closes (see _close),
   // so the page behind is never seen sideways.
-  static final _canTurn = Platform.isAndroid || Platform.isIOS;
+  // Never on a TV: its screen doesn't turn, and asking for portrait there
+  // shrinks the app to a phone-shaped strip.
+  static final _canTurn =
+      (Platform.isAndroid || Platform.isIOS) && !TvDevice.isTv;
   bool _turnStarted = false;
   // Followed with the accelerometer, so the picture turns to whichever
   // side the phone is held even with the system's rotation lock on — with
@@ -1663,6 +1673,8 @@ class _PlayerScreenState extends State<PlayerScreen>
             !_seekPending &&
             !_showSettingsPanel) {
           setState(() => _controlsVisible = false);
+          // On a TV, off the buttons as they go: the arrows skip again.
+          if (TvDevice.isTv) _rootFocus.requestFocus();
         }
       });
     }
@@ -1690,6 +1702,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return false;
     }
+    if (TvDevice.isTv) return _onTvKey(event);
     final key = event.logicalKey;
 
     if (event is KeyDownEvent) {
@@ -1756,6 +1769,92 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
 
     return false;
+  }
+
+  /// Whether one of the player's buttons has a TV remote's selection.
+  bool get _tvButtonFocused {
+    final focused = FocusManager.instance.primaryFocus;
+    return focused != null &&
+        focused != _rootFocus &&
+        focused.ancestors.contains(_rootFocus);
+  }
+
+  /// A TV remote, as TV apps' players take it. The remote's own play,
+  /// pause, fast-forward and rewind buttons work whatever's showing. With
+  /// none of the player's buttons selected, left and right skip, OK plays
+  /// or pauses (and shows the controls), and up or down bring the controls
+  /// up with the play button selected; on the buttons, the arrows move
+  /// between them and OK presses one, as anywhere else in the app (see
+  /// TvTraversalPolicy) — until the controls fade, when the arrows skip
+  /// again. A menu (subtitles & audio, the episodes) takes the arrows while
+  /// it's open. Volume is the TV's own (its remote's volume buttons), not
+  /// up and down as on a computer. Back: see the PopScope in build.
+  bool _onTvKey(KeyEvent event) {
+    final key = event.logicalKey;
+    final pressed = event is KeyDownEvent;
+
+    if (key == LogicalKeyboardKey.mediaPlayPause ||
+        key == LogicalKeyboardKey.mediaPlay ||
+        key == LogicalKeyboardKey.mediaPause) {
+      final wanted = key == LogicalKeyboardKey.mediaPlayPause ||
+          (key == LogicalKeyboardKey.mediaPlay) != _isPlaying;
+      if (pressed && wanted && !_loadingVideo && !_episodeCoversVideo) {
+        _playPause();
+        _showTvControls();
+      }
+      return true;
+    }
+    if (key == LogicalKeyboardKey.mediaFastForward) {
+      if (!_loadingVideo && !_episodeCoversVideo) _skipForward(flash: true);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.mediaRewind) {
+      if (!_loadingVideo && !_episodeCoversVideo) _skipBackward(flash: true);
+      return true;
+    }
+
+    if (_showSettingsPanel || _showEpisodeDrawer) return false;
+
+    if (_controlsVisible && _tvButtonFocused) {
+      _resetControlsTimer();
+      return false;
+    }
+
+    if (key == LogicalKeyboardKey.select ||
+        key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      if (pressed && !_loadingVideo) {
+        _playPause();
+        _showTvControls();
+      }
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      if (!_loadingVideo) _skipBackward(flash: true);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowRight) {
+      if (!_loadingVideo) _skipForward(flash: true);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown) {
+      if (pressed) _showTvControls(selectPlay: true);
+      return true;
+    }
+    return false;
+  }
+
+  /// The controls up, for their usual few seconds — with the play button
+  /// selected ([selectPlay]) once they're there to be selected.
+  void _showTvControls({bool selectPlay = false}) {
+    setState(() => _controlsVisible = true);
+    _resetControlsTimer();
+    if (selectPlay) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _controlsVisible) _playButtonFocus.requestFocus();
+      });
+    }
   }
 
   // On a computer, clicking anywhere on the video plays/pauses, and
@@ -3333,6 +3432,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     _discardRetimedFiles();
     _stopSinhala();
     WakelockPlus.disable();
+    _rootFocus.dispose();
+    _playButtonFocus.dispose();
     _screenTapTimer?.cancel();
     _bufferingRevealTimer?.cancel();
     _seekRevealTimer?.cancel();
@@ -3344,9 +3445,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     // unless that's been done already, or is now the web player's.
     _tilt?.cancel();
     if (!_orientationHandedOn) {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-      ]);
+      if (_canTurn) {
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.portraitUp,
+        ]);
+      }
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
     // The window's full screen is this player's alone (the web player
@@ -4886,6 +4989,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       canPop: false,
       onPopInvoked: (didPop) {
         if (didPop) return;
+        // On a TV: a menu open in a panel (the episodes' season menu)
+        // closes first (TvBack).
+        if (TvBack.handle()) return;
         if (_showEpisodeDrawer) {
           _closeEpisodeBrowser();
         } else if (_showSettingsPanel) {
@@ -4895,6 +5001,14 @@ class _PlayerScreenState extends State<PlayerScreen>
               _controlsVisible = true;
             }
           });
+        } else if (TvDevice.isTv &&
+            _controlsVisible &&
+            _isPlaying &&
+            !_loadingVideo) {
+          // On a TV, Back puts the controls away before it leaves.
+          _controlsTimer?.cancel();
+          setState(() => _controlsVisible = false);
+          _rootFocus.requestFocus();
         } else {
           _close();
         }
@@ -4902,8 +5016,15 @@ class _PlayerScreenState extends State<PlayerScreen>
       child: _closing
           ? const ColoredBox(color: Colors.black)
           : Focus(
+              focusNode: _rootFocus,
               autofocus: true,
-              descendantsAreFocusable: false,
+              // Keys are the player's own (_onHardwareKey), not its
+              // buttons' — except on a TV, where the remote moves between
+              // them while they're showing (see _onTvKey).
+              descendantsAreFocusable: TvDevice.isTv &&
+                  (_controlsVisible ||
+                      _showSettingsPanel ||
+                      _showEpisodeDrawer),
               child: Scaffold(
                 backgroundColor: Colors.black,
                 body: MouseRegion(
@@ -5627,55 +5748,61 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                             // No seeking until the video has
                                                             // loaded (see _loadingVideo).
                                                             child:
-                                                                IgnorePointer(
-                                                              ignoring:
-                                                                  _loadingVideo,
-                                                              child: Slider(
-                                                                value: _positionNotifier
-                                                                    .value
-                                                                    .inSeconds
-                                                                    .toDouble()
-                                                                    .clamp(0.0,
-                                                                        totalSeconds),
-                                                                secondaryTrackValue:
-                                                                    _bufferNotifier
-                                                                        .value
-                                                                        .inSeconds
-                                                                        .toDouble()
-                                                                        .clamp(
+                                                                // Not for a TV remote: it took the
+                                                                // arrows and kept them. Left and
+                                                                // right skip there (see _onTvKey).
+                                                                ExcludeFocus(
+                                                                    excluding:
+                                                                        TvDevice
+                                                                            .isTv,
+                                                                    child:
+                                                                        IgnorePointer(
+                                                                      ignoring:
+                                                                          _loadingVideo,
+                                                                      child:
+                                                                          Slider(
+                                                                        value: _positionNotifier
+                                                                            .value
+                                                                            .inSeconds
+                                                                            .toDouble()
+                                                                            .clamp(0.0,
+                                                                                totalSeconds),
+                                                                        secondaryTrackValue: _bufferNotifier
+                                                                            .value
+                                                                            .inSeconds
+                                                                            .toDouble()
+                                                                            .clamp(0.0,
+                                                                                totalSeconds),
+                                                                        min:
                                                                             0.0,
-                                                                            totalSeconds),
-                                                                min: 0.0,
-                                                                max: totalSeconds >
-                                                                        0
-                                                                    ? totalSeconds
-                                                                    : 1.0,
-                                                                onChangeStart:
-                                                                    (val) {
-                                                                  _isDragging =
-                                                                      true;
-                                                                },
-                                                                onChanged:
-                                                                    (val) {
-                                                                  final d = Duration(
-                                                                      seconds: val
-                                                                          .toInt());
-                                                                  _currentPosition =
-                                                                      d;
-                                                                  _positionNotifier
-                                                                      .value = d;
-                                                                },
-                                                                onChangeEnd:
-                                                                    (val) {
-                                                                  _isDragging =
-                                                                      false;
-                                                                  _seekTo(Duration(
-                                                                      seconds: val
-                                                                          .toInt()));
-                                                                  _syncMediaSessionPlaybackState();
-                                                                },
-                                                              ),
-                                                            ),
+                                                                        max: totalSeconds >
+                                                                                0
+                                                                            ? totalSeconds
+                                                                            : 1.0,
+                                                                        onChangeStart:
+                                                                            (val) {
+                                                                          _isDragging =
+                                                                              true;
+                                                                        },
+                                                                        onChanged:
+                                                                            (val) {
+                                                                          final d =
+                                                                              Duration(seconds: val.toInt());
+                                                                          _currentPosition =
+                                                                              d;
+                                                                          _positionNotifier.value =
+                                                                              d;
+                                                                        },
+                                                                        onChangeEnd:
+                                                                            (val) {
+                                                                          _isDragging =
+                                                                              false;
+                                                                          _seekTo(
+                                                                              Duration(seconds: val.toInt()));
+                                                                          _syncMediaSessionPlaybackState();
+                                                                        },
+                                                                      ),
+                                                                    )),
                                                           ),
                                                         ),
                                                       ],
@@ -5714,6 +5841,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                             ),
                                                           ),
                                                         IconButton(
+                                                          focusNode:
+                                                              _playButtonFocus,
                                                           onPressed: _playPause,
                                                           visualDensity:
                                                               VisualDensity
@@ -5804,78 +5933,50 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                                     : 0,
                                                                 child: ClipRect(
                                                                   child:
-                                                                      SliderTheme(
-                                                                    data:
-                                                                        SliderThemeData(
-                                                                      trackHeight:
-                                                                          wide
-                                                                              ? 4
-                                                                              : 3,
-                                                                      activeTrackColor:
-                                                                          Colors
-                                                                              .white,
-                                                                      inactiveTrackColor: Colors
-                                                                          .white
-                                                                          .withValues(
-                                                                              alpha: 0.24),
-                                                                      thumbColor:
-                                                                          Colors
-                                                                              .white,
-                                                                      thumbShape:
-                                                                          RoundSliderThumbShape(
-                                                                        enabledThumbRadius: wide
-                                                                            ? 6.5
-                                                                            : 5,
-                                                                        elevation:
-                                                                            0,
-                                                                        pressedElevation:
-                                                                            0,
-                                                                      ),
-                                                                      overlayShape:
-                                                                          RoundSliderOverlayShape(
-                                                                        overlayRadius: wide
-                                                                            ? 13
-                                                                            : 11,
-                                                                      ),
-                                                                      overlayColor: Colors
-                                                                          .white
-                                                                          .withValues(
-                                                                              alpha: 0.12),
-                                                                    ),
-                                                                    child:
-                                                                        Slider(
-                                                                      value:
-                                                                          volume,
-                                                                      min: 0.0,
-                                                                      max:
-                                                                          100.0,
-                                                                      onChangeStart:
-                                                                          (_) {
-                                                                        setState(() =>
-                                                                            _volumeDragging =
-                                                                                true);
-                                                                      },
-                                                                      onChanged:
-                                                                          (val) {
-                                                                        _setVolume(
-                                                                          val,
-                                                                          persist:
-                                                                              false,
-                                                                        );
-                                                                      },
-                                                                      onChangeEnd:
-                                                                          (val) {
-                                                                        setState(() =>
-                                                                            _volumeDragging =
-                                                                                false);
-                                                                        _setVolume(
-                                                                          val,
-                                                                          showSlider:
-                                                                              true,
-                                                                        );
-                                                                      },
-                                                                    ),
-                                                                  ),
+                                                                      ExcludeFocus(
+                                                                          excluding: TvDevice
+                                                                              .isTv,
+                                                                          child:
+                                                                              SliderTheme(
+                                                                            data:
+                                                                                SliderThemeData(
+                                                                              trackHeight: wide ? 4 : 3,
+                                                                              activeTrackColor: Colors.white,
+                                                                              inactiveTrackColor: Colors.white.withValues(alpha: 0.24),
+                                                                              thumbColor: Colors.white,
+                                                                              thumbShape: RoundSliderThumbShape(
+                                                                                enabledThumbRadius: wide ? 6.5 : 5,
+                                                                                elevation: 0,
+                                                                                pressedElevation: 0,
+                                                                              ),
+                                                                              overlayShape: RoundSliderOverlayShape(
+                                                                                overlayRadius: wide ? 13 : 11,
+                                                                              ),
+                                                                              overlayColor: Colors.white.withValues(alpha: 0.12),
+                                                                            ),
+                                                                            child:
+                                                                                Slider(
+                                                                              value: volume,
+                                                                              min: 0.0,
+                                                                              max: 100.0,
+                                                                              onChangeStart: (_) {
+                                                                                setState(() => _volumeDragging = true);
+                                                                              },
+                                                                              onChanged: (val) {
+                                                                                _setVolume(
+                                                                                  val,
+                                                                                  persist: false,
+                                                                                );
+                                                                              },
+                                                                              onChangeEnd: (val) {
+                                                                                setState(() => _volumeDragging = false);
+                                                                                _setVolume(
+                                                                                  val,
+                                                                                  showSlider: true,
+                                                                                );
+                                                                              },
+                                                                            ),
+                                                                          )),
                                                                 ),
                                                               ),
                                                             ],

@@ -10,6 +10,7 @@ import '../widgets/hero_banner.dart';
 import '../widgets/movie_poster.dart';
 import '../services/saved_movies_service.dart';
 import '../services/feature_flags_service.dart';
+import '../services/tv_device.dart';
 import '../widgets/skeletons.dart';
 import 'desktop_home_screen.dart';
 import '../widgets/desktop_skeletons.dart';
@@ -132,10 +133,16 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
     if (featured != null && mounted) DetailsScreen.prefetch(context, featured);
   }
 
+  /// The wide (desktop) home, or the phone's. On a TV, still the wide one
+  /// beside the side column (about 760 of its 1280): the phone's took its
+  /// place as the column opened, back at its top, the remote's selection
+  /// on a poster lost with it.
+  static bool _isWide(double width) => width > (TvDevice.isTv ? 600 : 800);
+
   Future<void> _precacheHero(Movie movie) {
     // Same breakpoint as build(): the desktop hero requests its images at
     // different sizes.
-    return MediaQuery.sizeOf(context).width > 800
+    return _isWide(MediaQuery.sizeOf(context).width)
         ? DesktopHomeScreen.precacheHero(context, movie)
         : MovieHeroBanner.precache(context, movie);
   }
@@ -155,7 +162,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final wide = constraints.maxWidth > 800;
+        final wide = _isWide(constraints.maxWidth);
         return Stack(
           fit: StackFit.expand,
           children: [
@@ -211,7 +218,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
     final VoidCallback? onTrailer =
         trailerUrl != null ? () => _openTrailer(trailerUrl) : null;
 
-    if (constraints.maxWidth > 800 && _featuredMovie != null) {
+    if (_isWide(constraints.maxWidth) && _featuredMovie != null) {
       return DesktopHomeScreen(
         featuredMovie: _featuredMovie!,
         trendingMovies: _trendingMovies,

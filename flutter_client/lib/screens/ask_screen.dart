@@ -11,6 +11,8 @@ import 'package:flutter/rendering.dart'
 
 import '../models/movie.dart';
 import '../services/ai_service.dart';
+import '../services/tv_device.dart';
+import '../widgets/tv_focus.dart';
 import '../services/gemini_key_service.dart';
 import '../widgets/gemini_key_form.dart';
 import '../services/movie_tab_service.dart';
@@ -70,6 +72,8 @@ class _AskScreenState extends State<AskScreen>
     with SingleTickerProviderStateMixin {
   final _controller = TextEditingController();
   final _focus = FocusNode();
+  // On a TV, the bar round the field: what the remote selects.
+  final _fieldBar = FocusNode(debugLabel: 'Ask bar');
   final _scroll = SmoothScrollController();
 
   final List<_Turn> _turns = [];
@@ -308,6 +312,7 @@ class _AskScreenState extends State<AskScreen>
     _unlock?.cancel();
     _controller.dispose();
     _focus.dispose();
+    _fieldBar.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -329,6 +334,9 @@ class _AskScreenState extends State<AskScreen>
     final turn = _Turn(request, _nextLooking());
     _controller.clear();
     _focus.unfocus();
+    // On a TV the remote goes back to the field's bar (see TvTextField):
+    // up from it to the answer, OK on it for a follow-up.
+    if (TvDevice.isTv) _fieldBar.requestFocus();
     setState(() {
       _turns.add(turn);
       _pinned = turn;
@@ -455,6 +463,10 @@ class _AskScreenState extends State<AskScreen>
       ),
       body: (context, isDesktop, padding) {
         final side = isDesktop ? 60.0 : 16.0;
+        // The field where Search's is: in a wide window's side column, to
+        // its edges and on its foot (it was inset, so narrower and higher).
+        final inColumn = SideColumnScope.inColumn(context);
+        final fieldSide = inColumn && !isDesktop ? 0.0 : side;
         // Just above the bottom nav bar's buttons: padding.bottom keeps clear
         // of its whole fade, taller than the buttons themselves. With no bar
         // at the foot (a wide window's, at the top; the side column),
@@ -465,7 +477,7 @@ class _AskScreenState extends State<AskScreen>
             ? 8.0
             : barAtFoot
                 ? padding.bottom - 34
-                : padding.bottom + 16;
+                : padding.bottom + (inColumn ? 0 : 16);
         // Room for the field, and a gap so a poster's title isn't right
         // against it.
         final contentBottom = fieldBottom + _fieldHeight + 24;
@@ -522,8 +534,8 @@ class _AskScreenState extends State<AskScreen>
               ),
             ),
             Positioned(
-              left: side,
-              right: side,
+              left: fieldSide,
+              right: fieldSide,
               bottom: fieldBottom,
               // Coming up into place on Ask's entrance, after the glow's
               // begun.
@@ -777,6 +789,17 @@ class _AskScreenState extends State<AskScreen>
     final gap = d * 0.15;
     final shape = _JoinedShape(diameter: d, gap: gap);
     final enabled = _turns.isNotEmpty;
+    // On a TV the remote first selects it all as one; OK goes in, to the
+    // field with its keyboard open, and the arrows then move between
+    // new chat, the field and send (see TvGroup).
+    return TvGroup(
+      borderRadius: d / 2,
+      enterOn: () => GeminiKeyService().key.value != null ? _focus : null,
+      child: _fieldStack(d, gap, shape, enabled),
+    );
+  }
+
+  Widget _fieldStack(double d, double gap, _JoinedShape shape, bool enabled) {
     return Stack(
       // The trace's glow spills a little past the glass.
       clipBehavior: Clip.none,
@@ -896,38 +919,49 @@ class _AskScreenState extends State<AskScreen>
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         Expanded(
-          // The field scrolls its own lines: not the page scrolling, for
-          // the title's island (see ScreenScaffold).
-          child: NotificationListener<ScrollNotification>(
-            onNotification: (_) => true,
-            child: Listener(
-              onPointerDown: (_) => _selectionAtTap =
-                  _focus.hasFocus ? _controller.selection : null,
-              child: TextField(
-                key: _textKey,
-                enabled: hasKey,
-                onTap: _onFieldTap,
-                controller: _controller,
-                focusNode: _focus,
-                minLines: 1,
-                maxLines: 4,
-                maxLength: 300,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _ask(),
-                style: const TextStyle(color: Colors.white, fontSize: 16),
-                decoration: InputDecoration(
-                  // One line, however narrow the phone: the bar stays its
-                  // usual height beside "Add key" (three lines made it
-                  // tall and lumpy).
-                  hintText: hasKey ? "What's up?" : 'Add a key to ask',
-                  hintMaxLines: 1,
-                  hintStyle: const TextStyle(color: Colors.white38),
-                  border: InputBorder.none,
-                  counterText: '',
-                  isDense: true,
-                  // The text sat low in this field (measured on a phone:
-                  // 2.8 below the middle): 3 up, it's centred.
-                  contentPadding: const EdgeInsets.only(top: 6, bottom: 12),
+          // On a TV: the remote selects the field's bar and opens the
+          // keyboard from it, never stuck in the field (see TvTextField).
+          child: TvTextField(
+            field: _focus,
+            barFocus: _fieldBar,
+            enabled: hasKey,
+            borderRadius: 19,
+            // The field scrolls its own lines: not the page scrolling, for
+            // the title's island (see ScreenScaffold).
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (_) => true,
+              child: Listener(
+                onPointerDown: (_) => _selectionAtTap =
+                    _focus.hasFocus ? _controller.selection : null,
+                child: TextField(
+                  key: _textKey,
+                  enabled: hasKey,
+                  onTap: _onFieldTap,
+                  controller: _controller,
+                  focusNode: _focus,
+                  minLines: 1,
+                  maxLines: 4,
+                  maxLength: 300,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _ask(),
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                  decoration: InputDecoration(
+                    // One line, however narrow the phone: the bar stays its
+                    // usual height beside "Add key" (three lines made it
+                    // tall and lumpy).
+                    hintText: hasKey ? "What's up?" : 'Add a key to ask',
+                    hintMaxLines: 1,
+                    hintStyle: const TextStyle(color: Colors.white38),
+                    border: InputBorder.none,
+                    counterText: '',
+                    isDense: true,
+                    // The text sat low in this field (measured on a phone:
+                    // 2.8 below the middle): 3 up, it's centred. 3 less in
+                    // all, the bar is Search's height at one line (52; it
+                    // was 55).
+                    contentPadding:
+                        const EdgeInsets.only(top: 4.5, bottom: 10.5),
+                  ),
                 ),
               ),
             ),

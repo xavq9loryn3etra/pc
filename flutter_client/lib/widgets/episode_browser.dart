@@ -14,6 +14,7 @@ import 'floating_bottom_nav_bar.dart' show kNavButtonHeight;
 import 'glass_bubble_bar.dart' show GlassBubbleBar, MovieTitleLogo;
 import 'season_picker.dart';
 import 'smooth_scroll_controller.dart';
+import 'tv_focus.dart';
 
 /// YouTube-style, full-screen episode browser for the in-player "Episodes"
 /// button. Two states:
@@ -334,7 +335,7 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
           ep.episodeNumber,
         ) ??
         ep.progress;
-    return EpisodeCard(
+    final card = EpisodeCard(
       episode: ep,
       fallbackImage: widget.details.backdrop ?? widget.movie.backdrop,
       progress: progress,
@@ -346,6 +347,8 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
         _selectedEpisode = ep;
       }),
     );
+    // On a TV, the remote starts on the episode that's playing.
+    return _isPlaying(ep) ? TvAutoSelect(child: card) : card;
   }
 
   // ─────────────────────── Detail + source view ───────────────────────

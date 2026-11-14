@@ -11,6 +11,7 @@ import 'details_screen.dart';
 import '../widgets/image_precache.dart';
 import '../services/saved_movies_service.dart';
 import '../services/movie_tab_service.dart';
+import '../services/tv_device.dart';
 import '../widgets/artwork_glow.dart';
 import '../widgets/smooth_scroll_controller.dart';
 
@@ -452,6 +453,8 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
             // pill — here opening the side details panel — then the round
             // frosted Trailer and Like.
             ElevatedButton.icon(
+              // Where a TV remote starts on the home.
+              autofocus: TvDevice.isTv,
               onPressed: () => _onMovieSelect(widget.featuredMovie),
               icon: const Icon(
                 Icons.info_outline_rounded,

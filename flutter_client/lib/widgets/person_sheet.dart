@@ -11,6 +11,7 @@ import 'episode_card.dart';
 import 'glass_blur.dart';
 import 'glass_dialog.dart' show showGlassSheet;
 import 'movie_poster.dart';
+import 'tv_focus.dart';
 
 /// A person's page, as a bottom sheet in the quality popup's frosted style
 /// ([EpisodeSheetFrame]): a scene from the title they're best known for
@@ -424,7 +425,11 @@ class _PersonSheetState extends State<PersonSheet> {
           child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () => setState(() => _shows = shows),
-          child: Center(
+          // A TV remote can select each half too (plain tap areas).
+          child: TvFocusable(
+            onPressed: () => setState(() => _shows = shows),
+            borderRadius: 17,
+            child: Center(
             child: AnimatedDefaultTextStyle(
               duration: const Duration(milliseconds: 200),
               style: TextStyle(
@@ -443,6 +448,7 @@ class _PersonSheetState extends State<PersonSheet> {
                 ),
               ])),
             ),
+          ),
           ),
         ),
         ),

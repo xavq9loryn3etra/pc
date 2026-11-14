@@ -13,6 +13,8 @@ import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/glass_blur.dart';
 import '../services/movie_tab_service.dart';
 import '../services/search_history_service.dart';
+import '../services/tv_device.dart';
+import '../widgets/tv_focus.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -25,6 +27,9 @@ class _SearchScreenState extends State<SearchScreen> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = SmoothScrollController();
   final FocusNode _searchFocusNode = FocusNode();
+  // On a TV, the search bar round the field: what the remote selects (see
+  // TvTextField).
+  final FocusNode _barFocus = FocusNode(debugLabel: 'Search bar');
   final TMDBService _tmdb = TMDBService();
 
   List<Movie> _results = [];
@@ -44,7 +49,9 @@ class _SearchScreenState extends State<SearchScreen> {
     // keyboard over the page). Unfocused when they switch away.
     MovieTabService().currentTab.addListener(_onActiveTabChanged);
     SearchHistoryService().load();
-    _loadTrending();
+    // Not on a TV: the remote wandered into the trending posters on its
+    // way to and from the search bar.
+    if (!TvDevice.isTv) _loadTrending();
   }
 
   // This week's top ten of each, for the screen before a search.
@@ -83,6 +90,9 @@ class _SearchScreenState extends State<SearchScreen> {
     }
     SearchHistoryService().add(q);
     _performSearch(q);
+    // On a TV: the keyboard closes and the remote is back on the bar, a
+    // press of up from the results.
+    if (TvDevice.isTv) _barFocus.requestFocus();
   }
 
   void _onActiveTabChanged() {
@@ -90,6 +100,13 @@ class _SearchScreenState extends State<SearchScreen> {
       _searchFocusNode.unfocus();
     } else if (isComputer) {
       _searchFocusNode.requestFocus();
+    } else if (TvDevice.isTv) {
+      // On a TV the remote starts on the search bar: searching is what the
+      // tab's for. After the frame, once the tab is no longer hidden from
+      // the remote (see MovieTabShell).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _barFocus.requestFocus();
+      });
     }
   }
 
@@ -99,6 +116,7 @@ class _SearchScreenState extends State<SearchScreen> {
     _debounce?.cancel();
     _controller.dispose();
     _searchFocusNode.dispose();
+    _barFocus.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -252,6 +270,18 @@ class _SearchScreenState extends State<SearchScreen> {
   /// field, ✕ to clear once there's text, and a round white search button
   /// at the right, where Ask's send is.
   Widget _searchBar() {
+    // On a TV, one item for the remote (see TvTextField): OK opens the
+    // keyboard; the ✕ and search buttons inside are left to the keyboard's
+    // own delete and search keys.
+    return TvTextField(
+      field: _searchFocusNode,
+      barFocus: _barFocus,
+      borderRadius: _fieldHeight / 2,
+      child: _searchBarContent(),
+    );
+  }
+
+  Widget _searchBarContent() {
     return SizedBox(
       height: _fieldHeight,
       child: ClipRRect(
@@ -289,7 +319,7 @@ class _SearchScreenState extends State<SearchScreen> {
                     valueListenable: _controller,
                     builder: (context, value, _) => value.text.isEmpty
                         ? const SizedBox.shrink()
-                        : IconButton(
+                        : _offRemote(IconButton(
                             icon: const Icon(Icons.close_rounded,
                                 color: Colors.white70, size: 18),
                             tooltip: 'Clear',
@@ -297,12 +327,12 @@ class _SearchScreenState extends State<SearchScreen> {
                               _controller.clear();
                               _onSearchChanged('');
                             },
-                          ),
+                          )),
                   ),
                   const SizedBox(width: 4),
                   ValueListenableBuilder<TextEditingValue>(
                     valueListenable: _controller,
-                    builder: (context, value, _) => IconButton(
+                    builder: (context, value, _) => _offRemote(IconButton(
                       tooltip: 'Search',
                       onPressed: value.text.trim().isEmpty
                           ? null
@@ -317,7 +347,7 @@ class _SearchScreenState extends State<SearchScreen> {
                         foregroundColor: Colors.black,
                         disabledBackgroundColor: Colors.white24,
                       ),
-                    ),
+                    )),
                   ),
                 ],
               ),
@@ -327,6 +357,10 @@ class _SearchScreenState extends State<SearchScreen> {
       ),
     );
   }
+
+  /// Out of a TV remote's reach (see _searchBar); untouched elsewhere.
+  static Widget _offRemote(Widget button) =>
+      ExcludeFocus(excluding: TvDevice.isTv, child: button);
 
   // The results grid's layout, shared with its placeholder so they match.
   SliverGridDelegate _resultsGrid(bool isDesktop) =>
@@ -563,7 +597,8 @@ class _SearchScreenState extends State<SearchScreen> {
                   // row then sat at the top).
                   child: Container(
                     height: _recentsHeight,
-                    padding: const EdgeInsets.only(left: 14, right: 4),
+                    padding: EdgeInsets.only(
+                        left: 14, right: TvDevice.isTv ? 14 : 4),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -577,7 +612,10 @@ class _SearchScreenState extends State<SearchScreen> {
                                 color: Colors.white, fontSize: 14),
                           ),
                         ),
-                        SizedBox.square(
+                        // Not on a TV: the remote could select only the ✕
+                        // inside the pill, never the pill itself.
+                        if (!TvDevice.isTv)
+                          SizedBox.square(
                           dimension: 28,
                           child: IconButton(
                             padding: EdgeInsets.zero,

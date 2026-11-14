@@ -4,6 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:animations/animations.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
+import '../services/movie_tab_service.dart';
+import '../widgets/floating_bottom_nav_bar.dart';
+import '../widgets/tv_focus.dart';
 import 'movie_tab_shell.dart';
 
 // MainScreen is the app's first/only route (ModeSelectorScreen replaces
@@ -23,6 +26,25 @@ class _MainScreenState extends State<MainScreen> {
   DateTime? _lastBackPress;
 
   void _handleBackPress() {
+    // A TV remote inside a group (Ask's bar): out of it first (TvGroup).
+    if (TvBack.handle()) return;
+    // A wide layout's side column (see MovieTabShell) has its own pages,
+    // which Back never reached: a TV remote's Back left a popup or a
+    // title open in it. Those close first, then the column itself.
+    final tabs = MovieTabService();
+    final column = tabs.columnNavigator.currentState;
+    if (column != null) {
+      if (column.canPop()) {
+        column.maybePop();
+        return;
+      }
+      if (tabs.currentTab.value != BottomNavTab.home) {
+        tabs.currentTab.value = BottomNavTab.home;
+        tabs.restoreFocus();
+        return;
+      }
+    }
+
     final now = DateTime.now();
     if (_lastBackPress != null &&
         now.difference(_lastBackPress!) < _kExitPressWindow) {

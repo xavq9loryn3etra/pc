@@ -12,6 +12,7 @@ import '../theme/app_theme.dart';
 import '../widgets/skeletons.dart';
 import '../models/movie.dart';
 import '../services/tmdb_service.dart';
+import '../services/tv_device.dart';
 import '../services/scraper_service.dart';
 import '../services/saved_movies_service.dart';
 import '../services/feature_flags_service.dart';
@@ -1473,6 +1474,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                     provider,
                                                     InkWell(
                                                       mouseCursor: WidgetStateMouseCursor.clickable,
+                                                      // Where a TV remote
+                                                      // starts on the page.
+                                                      autofocus:
+                                                          TvDevice.isTv,
                                                       onTap: movieBlocked
                                                           ? null
                                                           : _openMovie,
@@ -1571,6 +1576,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                     provider,
                                                     InkWell(
                                                       mouseCursor: WidgetStateMouseCursor.clickable,
+                                                      autofocus:
+                                                          TvDevice.isTv,
                                                       onTap: tvUnreleased
                                                           ? null
                                                           : () async {

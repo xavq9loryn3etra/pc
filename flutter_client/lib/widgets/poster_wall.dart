@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../services/app_mode_service.dart';
+
 /// The tilted, endlessly scrolling wall of book / album / movie artwork
 /// behind the welcome screen and the app-wide status screens (update,
 /// maintenance, offline). Uses bundled assets, so it renders instantly and
@@ -56,8 +58,11 @@ class PosterWall extends StatelessWidget {
 
   /// Books, music and movies in turn, counted from the middle row ([middle]),
   /// which is movies.
-  static int _kindOf(int rowIndex, int middle) =>
-      ((rowIndex - middle + _movies) % 3 + 3) % 3;
+  /// Where the app is Popcorn only (the desktop app, a TV), every row is
+  /// movies: music and books aren't there to show.
+  static int _kindOf(int rowIndex, int middle) => AppModeService.canSwitchMode
+      ? ((rowIndex - middle + _movies) % 3 + 3) % 3
+      : _movies;
 
   double _rowHeight(int kind) => ((kind == _music ? 135.0 : 155.0) + 8) * scale;
 

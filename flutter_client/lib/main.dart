@@ -22,6 +22,8 @@ import 'screens/no_internet_overlay.dart';
 import 'screens/splash_screen.dart';
 import 'theme/app_theme.dart';
 import 'widgets/glass_blur.dart';
+import 'widgets/tv_focus.dart';
+import 'widgets/tv_screen_scale.dart';
 
 import 'services/app_mode_service.dart';
 import 'services/background_download_service.dart';
@@ -33,6 +35,7 @@ import 'services/torrent/download_ahead_settings.dart';
 import 'services/torrent/torrent_engine_service.dart';
 import 'services/torrent/torrent_storage_service.dart';
 import 'services/trending_service.dart';
+import 'services/tv_device.dart';
 import 'services/smooth_wheel_binding.dart';
 import 'services/visual_effects_service.dart';
 import 'services/window_full_screen.dart';
@@ -106,7 +109,13 @@ void main() async {
   // is held at the Activity level and survives the kill, so without this,
   // reopening from Recents cold-starts fresh into the mode selector screen
   // while still stuck in landscape.
-  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  //
+  // Not on a TV: its screen never turns, and an app that asks for portrait
+  // there is shown as a phone-shaped strip with black bars either side.
+  await TvDevice.init();
+  if (!TvDevice.isTv) {
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  }
 
   // Draw behind the system bars from the start (Android 15+ enforces this
   // anyway; the players already restore edgeToEdge when they close), and
@@ -510,17 +519,24 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           value: AppTheme.systemUiStyle,
           child: BackdropGroup(
             backdropKey: _backdropKey,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                if (child != null) child,
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 350),
-                  child: _isOffline
-                      ? const NoInternetOverlay()
-                      : const SizedBox.shrink(),
+            // On a TV, the ring around whatever the remote has selected.
+            // On a TV, laid out at laptop-window proportions (see
+            // TvScreenScale), with the ring drawn at the TV's own size.
+            child: TvFocusRing(
+              child: TvScreenScale(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (child != null) child,
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 350),
+                      child: _isOffline
+                          ? const NoInternetOverlay()
+                          : const SizedBox.shrink(),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         );

@@ -6,6 +6,7 @@ import 'smooth_scroll_controller.dart';
 
 import '../models/movie.dart';
 import 'person_sheet.dart';
+import 'tv_focus.dart';
 
 /// Synopsis collapsed to [collapsedLines], Apple TV style: the last line
 /// fades out sideways into a MORE at its end. Tapping expands it, also
@@ -136,14 +137,20 @@ class _ExpandableSynopsisState extends State<ExpandableSynopsis> {
                   child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: _toggle,
-                  child: clipped
-                      ? _collapsed(
-                          width: constraints.maxWidth,
-                          height: collapsedHeight,
-                          lastLineTop: lastLineTop,
-                          moreWidth: moreWidth,
-                        )
-                      : Text(widget.text, style: _style),
+                  // On a TV the remote selects the text itself: OK reads
+                  // more (MORE in it is no control of its own), or less.
+                  child: TvFocusable(
+                    onPressed: _toggle,
+                    borderRadius: 8,
+                    child: clipped
+                        ? _collapsed(
+                            width: constraints.maxWidth,
+                            height: collapsedHeight,
+                            lastLineTop: lastLineTop,
+                            moreWidth: moreWidth,
+                          )
+                        : Text(widget.text, style: _style),
+                  ),
                 ),
                 ),
               // Outside the tap target, so scrolling or tapping the cast
@@ -164,8 +171,12 @@ class _ExpandableSynopsisState extends State<ExpandableSynopsis> {
                   child: Padding(
                     // Taller tap target than the label itself.
                     padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Text(_expanded ? 'LESS' : 'MORE',
-                        style: _toggleStyle),
+                    child: TvFocusable(
+                      onPressed: _toggle,
+                      borderRadius: 6,
+                      child: Text(_expanded ? 'LESS' : 'MORE',
+                          style: _toggleStyle),
+                    ),
                   ),
                 ),
                 ),
@@ -349,7 +360,12 @@ class _CastTile extends StatelessWidget {
       child: GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: member.id == null ? null : () => PersonSheet.show(context, member),
-      child: ClipRRect(
+      // A TV remote can select it too (a plain tap area otherwise).
+      child: TvFocusable(
+        onPressed:
+            member.id == null ? null : () => PersonSheet.show(context, member),
+        borderRadius: 10,
+        child: ClipRRect(
         borderRadius: BorderRadius.circular(10),
         child: SizedBox(
           width: CastRow._cardWidth,
@@ -415,6 +431,7 @@ class _CastTile extends StatelessWidget {
             ],
           ),
         ),
+      ),
       ),
     ),
     );

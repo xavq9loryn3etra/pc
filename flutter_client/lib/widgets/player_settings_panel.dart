@@ -4,6 +4,7 @@ import 'glass_blur.dart';
 import '../services/torrent/torrent_index_service.dart';
 import '../services/torrent/stream_resolver.dart';
 import 'quality_option_list.dart';
+import 'tv_focus.dart';
 import '../services/subtitle_service.dart';
 import '../models/movie.dart';
 import '../services/audio_language_service.dart';
@@ -267,7 +268,16 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
                                     child: child,
                                   );
                                 },
-                                child: _buildCurrentView(),
+                                // On a TV, the remote on the menu's first
+                                // row as it opens, and on each page's.
+                                // Its rows ringed as rows, not pills.
+                                child: TvRingRadius(
+                                  key: ValueKey('tv-$_currentView'),
+                                  radius: 12,
+                                  child: TvAutoSelect(
+                                    child: _buildCurrentView(),
+                                  ),
+                                ),
                               ),
                             ),
                           ),
@@ -565,7 +575,9 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
         ),
       ),
     );
-    return enabled ? row : Opacity(opacity: 0.4, child: row);
+    final shown = enabled ? row : Opacity(opacity: 0.4, child: row);
+    // On a TV, a list opens on what's chosen (its tick), not its first row.
+    return identical(trailing, _check) ? TvAutoSelect(child: shown) : shown;
   }
 
   Widget _buildSubtitlesView() {

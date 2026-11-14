@@ -8,6 +8,7 @@ import '../services/saved_movies_service.dart';
 import '../services/feature_flags_service.dart';
 import 'artwork_glow.dart';
 import 'episode_card.dart';
+import 'tv_focus.dart';
 import '../screens/details_screen.dart';
 
 class MoviePoster extends StatefulWidget {
@@ -251,6 +252,14 @@ class _MoviePosterState extends State<MoviePoster> {
     // the grid cell's own size bounds it, and Expanded outside a Column
     // broke the layout (the person sheet's grid of their films).
     imageContent = _zoomed(imageContent);
+    // On a TV: the remote selects the picture (it grows, as under a mouse)
+    // and OK opens it.
+    imageContent = TvFocusable(
+      onPressed: widget.onTap,
+      borderRadius: 8,
+      onFocusChange: (focused) => _hovered.value = focused,
+      child: imageContent,
+    );
     if (widget.height == double.infinity && widget.showTitle) {
       imageContent = Expanded(child: imageContent);
     }

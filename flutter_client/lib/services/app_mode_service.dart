@@ -6,6 +6,7 @@ import '../enums/app_mode.dart';
 
 import '../widgets/floating_bottom_nav_bar.dart';
 import 'movie_tab_service.dart';
+import 'tv_device.dart';
 
 class AppModeService {
   static final AppModeService _instance = AppModeService._internal();
@@ -19,9 +20,13 @@ class AppModeService {
 
   /// The desktop app (Windows; a native Mac or Linux build) is Popcorn
   /// only: no mode selector after the splash, no mode switch in Settings.
-  /// An iPad or the iPad app on a Mac still has them.
-  static final bool canSwitchMode =
-      kIsWeb || !(Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+  /// An iPad or the iPad app on a Mac still has them. A TV is Popcorn only
+  /// too (TvDevice.init runs before this is first read).
+  static final bool canSwitchMode = kIsWeb ||
+      !(Platform.isWindows ||
+          Platform.isMacOS ||
+          Platform.isLinux ||
+          TvDevice.isTv);
 
   Future<void> init() async {
     if (!canSwitchMode) {

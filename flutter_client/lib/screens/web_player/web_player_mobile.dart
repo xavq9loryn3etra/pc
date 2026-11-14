@@ -14,6 +14,7 @@ import '../../models/movie.dart';
 import '../../services/saved_movies_service.dart';
 import '../../services/scraper_service.dart';
 import '../../services/tmdb_service.dart';
+import '../../services/tv_device.dart';
 import '../../widgets/shimmer_loader.dart';
 import '../../widgets/player_gesture_overlay.dart';
 import '../../widgets/episode_drawer.dart';
@@ -278,51 +279,54 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
     // Force landscape immediately, then continuously monitor the accelerometer
     // to auto-rotate between landscapeLeft and landscapeRight even when the
     // OS auto-rotate lock is ON.
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    // Not on a TV: its screen never turns.
+    if (!TvDevice.isTv) {
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
 
-    _accelSubscription = accelerometerEventStream(
-      samplingPeriod: const Duration(milliseconds: 500),
-    ).listen((event) {
-      if (!mounted) return;
+      _accelSubscription = accelerometerEventStream(
+        samplingPeriod: const Duration(milliseconds: 500),
+      ).listen((event) {
+        if (!mounted) return;
 
-      // Determine which landscape the phone is physically in:
-      // x < -4 => phone top pointing right => landscapeRight
-      // x >  4 => phone top pointing left  => landscapeLeft
-      // |x| <= 4 => ambiguous / in-between, keep current
-      DeviceOrientation? detected;
-      if (event.x < -4.0) {
-        detected = DeviceOrientation.landscapeRight;
-      } else if (event.x > 4.0) {
-        detected = DeviceOrientation.landscapeLeft;
-      }
+        // Determine which landscape the phone is physically in:
+        // x < -4 => phone top pointing right => landscapeRight
+        // x >  4 => phone top pointing left  => landscapeLeft
+        // |x| <= 4 => ambiguous / in-between, keep current
+        DeviceOrientation? detected;
+        if (event.x < -4.0) {
+          detected = DeviceOrientation.landscapeRight;
+        } else if (event.x > 4.0) {
+          detected = DeviceOrientation.landscapeLeft;
+        }
 
-      if (detected != null && detected != _currentOrientation) {
-        _currentOrientation = detected;
-        SystemChrome.setPreferredOrientations([detected]);
+        if (detected != null && detected != _currentOrientation) {
+          _currentOrientation = detected;
+          SystemChrome.setPreferredOrientations([detected]);
 
-        // After rotating, unlock both landscape directions so that
-        // subsequent tilts are picked up naturally by the OS too.
-        Future.delayed(const Duration(milliseconds: 800), () {
-          if (mounted) {
-            SystemChrome.setPreferredOrientations([
-              DeviceOrientation.landscapeLeft,
-              DeviceOrientation.landscapeRight,
-            ]);
-          }
-        });
-      }
-    }, onError: (_) {
-      // Sensors unavailable — just allow both landscape directions
-      if (mounted) {
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.landscapeLeft,
-          DeviceOrientation.landscapeRight,
-        ]);
-      }
-    });
+          // After rotating, unlock both landscape directions so that
+          // subsequent tilts are picked up naturally by the OS too.
+          Future.delayed(const Duration(milliseconds: 800), () {
+            if (mounted) {
+              SystemChrome.setPreferredOrientations([
+                DeviceOrientation.landscapeLeft,
+                DeviceOrientation.landscapeRight,
+              ]);
+            }
+          });
+        }
+      }, onError: (_) {
+        // Sensors unavailable — just allow both landscape directions
+        if (mounted) {
+          SystemChrome.setPreferredOrientations([
+            DeviceOrientation.landscapeLeft,
+            DeviceOrientation.landscapeRight,
+          ]);
+        }
+      });
+    }
 
     _controller
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -675,9 +679,11 @@ if (window.flutterTrackingActive) {
     _isVideoPaused.dispose();
     _showEpisodeDrawer.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-    ]);
+    if (!TvDevice.isTv) {
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+      ]);
+    }
     super.dispose();
   }
 

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'ask_orb.dart';
 import 'glass_blur.dart';
+import 'tv_focus.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import '../services/movie_tab_service.dart';
@@ -232,6 +233,8 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
   }
 
   void _navigate(BuildContext context, BottomNavTab tab) {
+    // On a TV, the button the remote pressed: where Back returns to.
+    final pressed = FocusManager.instance.primaryFocus;
     final hadColumnPages = MovieTabService().columnPages.value > 0;
     // A wide window's side column goes back to its tab, closing any title
     // opened in it.
@@ -249,6 +252,7 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
     // value flip — no rebuild, no refetch, scroll/search state stays put.
     // popUntil covers the case where this bar is on a screen pushed on top
     // of the shell: it unwinds back down so the newly selected tab is visible.
+    if (tab != BottomNavTab.home) MovieTabService().rememberFocus(pressed);
     MovieTabService().currentTab.value = tab;
     Navigator.of(context).popUntil((route) => route.isFirst);
   }
@@ -478,9 +482,14 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
                     opacity: entrance[i].clamp(0.0, 1.0),
                     child: Transform.translate(
                       offset: Offset(0, (1 - entrance[i]) * travel),
-                      child: pills == null
-                          ? _circleFor(context, tabs[i], activeColor)
-                          : _pillFor(context, tabs[i], activeColor),
+                      // A TV remote coming up to the bar lands on the open
+                      // tab, not just the nearest.
+                      child: TvPreferred(
+                        preferred: tabs[i] == widget.activeTab,
+                        child: pills == null
+                            ? _circleFor(context, tabs[i], activeColor)
+                            : _pillFor(context, tabs[i], activeColor),
+                      ),
                     ),
                   ),
                 ),

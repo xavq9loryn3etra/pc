@@ -158,7 +158,14 @@ class _AskScreenState extends State<AskScreen>
   // How far down the screen the content starts, under the title.
   // Where the conversation starts: below the app bar, or near the top in
   // the side column, where the title's left out (ScreenScaffold).
-  double get _top => ScreenScaffold.contentTop(context);
+  double get _top =>
+      ScreenScaffold.contentTop(context) +
+      (_fieldOnTop ? _fieldHeight + 20 : 0);
+
+  // On a TV the field's at the top, under the nav bar: the keyboard comes
+  // up over the bottom of the screen, and hid it there.
+  bool get _fieldOnTop =>
+      TvDevice.isTv && SideColumnScope.inColumn(context);
 
   // The newest question, held just under the title while it's answered:
   // its answer then comes in below it. And the room left under the
@@ -480,16 +487,20 @@ class _AskScreenState extends State<AskScreen>
                 : padding.bottom + (inColumn ? 0 : 16);
         // Room for the field, and a gap so a poster's title isn't right
         // against it.
-        final contentBottom = fieldBottom + _fieldHeight + 24;
+        final contentBottom =
+            _fieldOnTop ? padding.bottom + 16 : fieldBottom + _fieldHeight + 24;
         return Stack(
           children: [
-            // The glow across the top, behind everything.
+            // The glow across the top, behind everything — on a TV, up
+            // from the foot, the whole tab being the other way up there.
             Positioned(
-              top: 0,
+              top: _fieldOnTop ? null : 0,
+              bottom: _fieldOnTop ? 0 : null,
               left: 0,
               right: 0,
               height: MediaQuery.sizeOf(context).height * 0.55,
-              // Blooming down from the top on Ask's entrance.
+              // Blooming down from the top on Ask's entrance (up from the
+              // foot on a TV).
               child: _Entrance(
                 shown: _presented,
                 duration: const Duration(milliseconds: 1400),
@@ -497,11 +508,18 @@ class _AskScreenState extends State<AskScreen>
                   opacity: t,
                   child: Transform.scale(
                     scaleY: 0.5 + 0.5 * t,
-                    alignment: Alignment.topCenter,
+                    alignment: _fieldOnTop
+                        ? Alignment.bottomCenter
+                        : Alignment.topCenter,
                     child: child,
                   ),
                 ),
-                child: IgnorePointer(child: _Glow(thinking: _asking)),
+                child: IgnorePointer(
+                  child: Transform.flip(
+                    flipY: _fieldOnTop,
+                    child: _Glow(thinking: _asking),
+                  ),
+                ),
               ),
             ),
             Positioned.fill(child: _content(side, isDesktop, contentBottom)),
@@ -510,7 +528,9 @@ class _AskScreenState extends State<AskScreen>
             Positioned(
               left: 0,
               right: 0,
-              bottom: fieldBottom + _fieldHeight + 12,
+              bottom: _fieldOnTop
+                  ? padding.bottom + 16
+                  : fieldBottom + _fieldHeight + 12,
               child: Center(
                 child: ValueListenableBuilder<bool>(
                   valueListenable: _awayFromEnd,
@@ -536,7 +556,8 @@ class _AskScreenState extends State<AskScreen>
             Positioned(
               left: fieldSide,
               right: fieldSide,
-              bottom: fieldBottom,
+              top: _fieldOnTop ? ScreenScaffold.contentTop(context) : null,
+              bottom: _fieldOnTop ? null : fieldBottom,
               // Coming up into place on Ask's entrance, after the glow's
               // begun.
               child: _Entrance(
@@ -588,7 +609,23 @@ class _AskScreenState extends State<AskScreen>
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
             slivers: [
               SliverToBoxAdapter(child: SizedBox(height: _top)),
-              if (_turns.isEmpty)
+              // On a TV, at the foot of the screen, the other way up (the
+              // field's at the top there).
+              if (_turns.isEmpty && _fieldOnTop)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(side, 0, side, bottom),
+                    child: Align(
+                      alignment: Alignment.bottomLeft,
+                      child: KeyedSubtree(
+                        key: ValueKey(_presented),
+                        child: _intro(upsideDown: true),
+                      ),
+                    ),
+                  ),
+                )
+              else if (_turns.isEmpty)
                 SliverPadding(
                   padding: EdgeInsets.symmetric(horizontal: side),
                   // Anew on Ask's entrance, so it rises in then.
@@ -660,7 +697,8 @@ class _AskScreenState extends State<AskScreen>
                     ),
                   ),
                 ),
-              SliverToBoxAdapter(child: SizedBox(height: bottom + _room)),
+              if (!(_turns.isEmpty && _fieldOnTop))
+                SliverToBoxAdapter(child: SizedBox(height: bottom + _room)),
             ],
           ),
         ),
@@ -1017,10 +1055,10 @@ class _AskScreenState extends State<AskScreen>
     );
   }
 
-  Widget _intro() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
+  /// [upsideDown]: on a TV, the other way up — the examples first and
+  /// the title last, at the foot of the screen (see _content).
+  Widget _intro({bool upsideDown = false}) {
+    final parts = <Widget>[
         // One after another, as the glow blooms.
         const _Appear(
           delay: Duration(milliseconds: 150),
@@ -1055,7 +1093,11 @@ class _AskScreenState extends State<AskScreen>
               ),
           ],
         ),
-      ],
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: upsideDown ? parts.reversed.toList() : parts,
     );
   }
 

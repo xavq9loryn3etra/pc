@@ -688,9 +688,13 @@ class TvGroup extends StatefulWidget {
     required this.child,
     this.enterOn,
     this.borderRadius = 12,
+    this.focusNode,
   });
 
   final Widget child;
+
+  /// The group's own, to select it (as one item) from code.
+  final FocusNode? focusNode;
 
   /// What OK selects in it (null: the first control in it).
   final FocusNode? Function()? enterOn;
@@ -703,7 +707,9 @@ class TvGroup extends StatefulWidget {
 }
 
 class _TvGroupState extends State<TvGroup> {
-  final _node = FocusNode(debugLabel: 'TvGroup');
+  FocusNode? _own;
+  FocusNode get _node =>
+      widget.focusNode ?? (_own ??= FocusNode(debugLabel: 'TvGroup'));
   bool _open = false;
 
   @override
@@ -724,7 +730,7 @@ class _TvGroupState extends State<TvGroup> {
   void dispose() {
     TvBack._handlers.remove(_back);
     _node.removeListener(_onFocus);
-    _node.dispose();
+    _own?.dispose();
     super.dispose();
   }
 

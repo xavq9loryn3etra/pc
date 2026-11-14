@@ -30,6 +30,8 @@ class _SearchScreenState extends State<SearchScreen> {
   // On a TV, the search bar round the field: what the remote selects (see
   // TvTextField).
   final FocusNode _barFocus = FocusNode(debugLabel: 'Search bar');
+  // On a TV, the whole bar as one item (see _searchBar).
+  final FocusNode _groupFocus = FocusNode(debugLabel: 'Search bar group');
   final TMDBService _tmdb = TMDBService();
 
   List<Movie> _results = [];
@@ -105,7 +107,7 @@ class _SearchScreenState extends State<SearchScreen> {
       // tab's for. After the frame, once the tab is no longer hidden from
       // the remote (see MovieTabShell).
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _barFocus.requestFocus();
+        if (mounted) _groupFocus.requestFocus();
       });
     }
   }
@@ -117,6 +119,7 @@ class _SearchScreenState extends State<SearchScreen> {
     _controller.dispose();
     _searchFocusNode.dispose();
     _barFocus.dispose();
+    _groupFocus.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -229,6 +232,36 @@ class _SearchScreenState extends State<SearchScreen> {
             // Recent searches: a row of pills just above the bar, before
             // a search.
             final recents = history.isNotEmpty && _controller.text.isEmpty;
+            // On a TV, the field's at the top (the keyboard comes up over
+            // the bottom of the screen and hid it), the pills under it.
+            if (TvDevice.isTv && SideColumnScope.inColumn(context)) {
+              const fieldTop = 12.0;
+              _tvContentTop = fieldTop +
+                  _fieldHeight +
+                  (recents ? 10 + _recentsHeight : 0) +
+                  20;
+              return Stack(
+                children: [
+                  Positioned.fill(
+                    child: _buildBody(context, isDesktop,
+                        padding.copyWith(bottom: padding.bottom + 16)),
+                  ),
+                  Positioned(
+                    left: side,
+                    right: side,
+                    top: fieldTop,
+                    child: _searchBar(),
+                  ),
+                  if (recents)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: fieldTop + _fieldHeight + 10,
+                      child: _recentSearches(history, side),
+                    ),
+                ],
+              );
+            }
             // Room for the field (and the pills), and a gap so a poster's
             // title isn't right against it.
             final contentBottom = fieldBottom +
@@ -270,13 +303,13 @@ class _SearchScreenState extends State<SearchScreen> {
   /// field, ✕ to clear once there's text, and a round white search button
   /// at the right, where Ask's send is.
   Widget _searchBar() {
-    // On a TV, one item for the remote (see TvTextField): OK opens the
-    // keyboard; the ✕ and search buttons inside are left to the keyboard's
-    // own delete and search keys.
-    return TvTextField(
-      field: _searchFocusNode,
-      barFocus: _barFocus,
+    // On a TV, as Ask's bar: one item for the remote first (TvGroup); OK
+    // goes in, to the field with its keyboard open, and the arrows then
+    // reach ✕ and search too.
+    return TvGroup(
+      focusNode: _groupFocus,
       borderRadius: _fieldHeight / 2,
+      enterOn: () => _searchFocusNode,
       child: _searchBarContent(),
     );
   }
@@ -299,6 +332,12 @@ class _SearchScreenState extends State<SearchScreen> {
               child: Row(
                 children: [
                   Expanded(
+                    // On a TV: the remote selects the field's bar and opens
+                    // the keyboard from it (see TvTextField).
+                    child: TvTextField(
+                    field: _searchFocusNode,
+                    barFocus: _barFocus,
+                    borderRadius: 19,
                     child: TextField(
                       controller: _controller,
                       focusNode: _searchFocusNode,
@@ -314,25 +353,28 @@ class _SearchScreenState extends State<SearchScreen> {
                       onChanged: _onSearchChanged,
                       onSubmitted: _searchNow,
                     ),
+                    ),
                   ),
                   ValueListenableBuilder<TextEditingValue>(
                     valueListenable: _controller,
                     builder: (context, value, _) => value.text.isEmpty
                         ? const SizedBox.shrink()
-                        : _offRemote(IconButton(
+                        : IconButton(
                             icon: const Icon(Icons.close_rounded,
                                 color: Colors.white70, size: 18),
                             tooltip: 'Clear',
                             onPressed: () {
                               _controller.clear();
                               _onSearchChanged('');
+                              // On a TV, back to typing (the ✕ is gone).
+                              if (TvDevice.isTv) _barFocus.requestFocus();
                             },
-                          )),
+                          ),
                   ),
                   const SizedBox(width: 4),
                   ValueListenableBuilder<TextEditingValue>(
                     valueListenable: _controller,
-                    builder: (context, value, _) => _offRemote(IconButton(
+                    builder: (context, value, _) => IconButton(
                       tooltip: 'Search',
                       onPressed: value.text.trim().isEmpty
                           ? null
@@ -347,7 +389,7 @@ class _SearchScreenState extends State<SearchScreen> {
                         foregroundColor: Colors.black,
                         disabledBackgroundColor: Colors.white24,
                       ),
-                    )),
+                    ),
                   ),
                 ],
               ),
@@ -357,10 +399,6 @@ class _SearchScreenState extends State<SearchScreen> {
       ),
     );
   }
-
-  /// Out of a TV remote's reach (see _searchBar); untouched elsewhere.
-  static Widget _offRemote(Widget button) =>
-      ExcludeFocus(excluding: TvDevice.isTv, child: button);
 
   // The results grid's layout, shared with its placeholder so they match.
   SliverGridDelegate _resultsGrid(bool isDesktop) =>
@@ -375,8 +413,11 @@ class _SearchScreenState extends State<SearchScreen> {
   // foot now). In a wide window's side column, just clear of its rounded
   // top corners, which clipped what was right against them.
   double _topPadding(BuildContext context) => SideColumnScope.inColumn(context)
-      ? 12
+      ? (TvDevice.isTv ? _tvContentTop : 12)
       : ScreenScaffold.contentTop(context);
+
+  // On a TV, below the field and pills at the top (see build).
+  double _tvContentTop = 12;
 
   EdgeInsets _resultsPadding(
       BuildContext context, bool isDesktop, EdgeInsets padding) {

@@ -1,8 +1,11 @@
+import 'dart:ffi' show Abi;
 import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+
+import 'tv_device.dart';
 
 /// Updates the app from the update screen, without the round trip through
 /// the website: downloads the latest release and starts installing it.
@@ -27,8 +30,15 @@ class UpdateInstaller {
 
   static bool get supported => Platform.isAndroid || Platform.isWindows;
 
-  static String get _fileName =>
-      Platform.isAndroid ? 'Popcorn-Android.apk' : 'Popcorn-Windows-Setup.exe';
+  static String get _fileName {
+    if (!Platform.isAndroid) return 'Popcorn-Windows-Setup.exe';
+    // TVs get the download that also runs on 32-bit sticks; so does anything
+    // already running the 32-bit app (it couldn't run the phone download).
+    if (TvDevice.isTv || Abi.current() == Abi.androidArm) {
+      return 'Popcorn-Android-TV.apk';
+    }
+    return 'Popcorn-Android.apk';
+  }
 
   static Future<Directory> _folder() async {
     final temp = await getTemporaryDirectory();

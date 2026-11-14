@@ -78,10 +78,19 @@ android {
 // Release builds ship for modern 64-bit ARM phones only. Flutter, mpv and
 // libtorrent each bring libraries for every ABI, which add ~70 MB nobody
 // needs. (ndk.abiFilters doesn't work here: the Flutter plugin resets it.)
+//
+// The TV download (Popcorn-Android-TV.apk) also carries 32-bit ARM: many TV
+// sticks (Chromecast with Google TV, most Fire TV Sticks) run 32-bit apps
+// only. It's built with -PpopcornAbis=arm64-v8a,armeabi-v7a (and
+// --target-platform android-arm,android-arm64); see publish-release.yml.
+val releaseAbis = (project.findProperty("popcornAbis") as String? ?: "arm64-v8a")
+    .split(",").map { it.trim() }.filter { it.isNotEmpty() }
 androidComponents {
     onVariants(selector().withBuildType("release")) { variant ->
         variant.packaging.jniLibs.excludes.addAll(
-            listOf("lib/armeabi-v7a/**", "lib/x86_64/**", "lib/x86/**")
+            listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+                .filter { it !in releaseAbis }
+                .map { "lib/$it/**" }
         )
     }
 }

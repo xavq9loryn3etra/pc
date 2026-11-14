@@ -95,20 +95,37 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         # No Gemini key in the app: Ask and Sinhala subtitles use the
         # viewer's own (Settings).
+        #
+        # Two downloads: phones get 64-bit ARM only (smaller); TVs get 64- and
+        # 32-bit ARM, as many TV sticks run 32-bit apps only. The app's
+        # updater picks the same one (lib/services/update_installer.dart).
         run: |
-          flutter build apk --release
           mkdir -p "$RUNNER_TEMP/out"
+          flutter build apk --release --target-platform android-arm64
           cp build/app/outputs/flutter-apk/app-release.apk "$RUNNER_TEMP/out/Popcorn-Android.apk"
-      - name: Check it's signed with the release key
+          flutter build apk --release --target-platform android-arm,android-arm64 \
+            -PpopcornAbis=arm64-v8a,armeabi-v7a
+          cp build/app/outputs/flutter-apk/app-release.apk "$RUNNER_TEMP/out/Popcorn-Android-TV.apk"
+      - name: Check they're signed with the release key and built for the right devices
         run: |
           apksigner="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner"
-          "$apksigner" verify --print-certs "$RUNNER_TEMP/out/Popcorn-Android.apk" | tee "$RUNNER_TEMP/certs.txt"
-          grep -q 'CN=Popcorn, O=Popcorn Organization' "$RUNNER_TEMP/certs.txt" \
-            || { echo "The APK isn't signed with the Popcorn release key." >&2; exit 1; }
+          for apk in Popcorn-Android.apk Popcorn-Android-TV.apk; do
+            "$apksigner" verify --print-certs "$RUNNER_TEMP/out/$apk" | tee "$RUNNER_TEMP/certs.txt"
+            grep -q 'CN=Popcorn, O=Popcorn Organization' "$RUNNER_TEMP/certs.txt" \
+              || { echo "$apk isn't signed with the Popcorn release key." >&2; exit 1; }
+          done
+          has() { unzip -l "$RUNNER_TEMP/out/$1" "lib/$2/libapp.so" > /dev/null 2>&1; }
+          has Popcorn-Android.apk arm64-v8a && ! has Popcorn-Android.apk armeabi-v7a \
+            || { echo "Popcorn-Android.apk should be 64-bit ARM only." >&2; exit 1; }
+          has Popcorn-Android-TV.apk arm64-v8a && has Popcorn-Android-TV.apk armeabi-v7a \
+            || { echo "Popcorn-Android-TV.apk should have 64- and 32-bit ARM." >&2; exit 1; }
+          ls -l "$RUNNER_TEMP/out"
       - uses: actions/upload-artifact@v4
         with:
           name: android
-          path: ${{ runner.temp }}/out/Popcorn-Android.apk
+          path: |
+            ${{ runner.temp }}/out/Popcorn-Android.apk
+            ${{ runner.temp }}/out/Popcorn-Android-TV.apk
           if-no-files-found: error
 
   windows:
@@ -170,13 +187,15 @@ jobs:
           **Popcorn $VERSION**, released on $released_at (Sri Lanka time).
 
           - **Android:** download **Popcorn-Android.apk** below and open it on your phone.
+          - **Android TV, Google TV and Fire TV:** use **Popcorn-Android-TV.apk** instead.
           - **Windows:** download **Popcorn-Windows-Setup.exe** below and run it. If Windows says it protected your PC, click **More info**, then **Run anyway**.
 
           Updating keeps your favourites and history. Earlier versions are listed below this one.
 
           <sub>Built from ${GITHUB_REPOSITORY}@${GITHUB_SHA::7}.</sub>
           EOF
-          gh release create "v$VERSION" dist/Popcorn-Android.apk dist/Popcorn-Windows-Setup.exe \
+          gh release create "v$VERSION" dist/Popcorn-Android.apk dist/Popcorn-Android-TV.apk \
+            dist/Popcorn-Windows-Setup.exe \
             -R "$RELEASE_REPO" \
             --title "Popcorn $VERSION · $released_day" \
             --notes-file notes.md \

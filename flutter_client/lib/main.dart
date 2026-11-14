@@ -290,8 +290,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         state == AppLifecycleState.detached) {
       unawaited(SavedMoviesService().flush());
     }
-    // Picks up flag edits (hide_playback, maintenance, a forced update)
-    // without a cold restart.
+    // Picks up flag edits (hide_playback, maintenance) without a cold
+    // restart. (A forced update waits for the next start: _recheckConfig.)
     if (state == AppLifecycleState.resumed) {
       unawaited(_recheckConfig());
     }
@@ -341,8 +341,16 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     // running, or the app is gone.
     if (!mounted || _currentScreen == _AppScreen.checking) return;
 
-    final lock = await _lockScreen();
+    var lock = await _lockScreen();
     if (!mounted) return;
+    // A new version is asked for only as the app starts, never on coming
+    // back to it: that covered whatever was open (a film, mid-way) with
+    // the update screen. Maintenance still can.
+    if (lock == _AppScreen.updateRequired &&
+        !force &&
+        _currentScreen != _AppScreen.updateRequired) {
+      lock = null;
+    }
     if (lock != null) {
       _showLock(lock);
     } else if (_isLocked) {

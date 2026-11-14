@@ -31,6 +31,7 @@ import '../services/torrent/torrent_storage_service.dart';
 import '../services/torrent/trim_point.dart';
 import '../services/tmdb_service.dart';
 import '../services/tv_device.dart';
+import '../services/landscape_side.dart';
 import '../widgets/tv_focus.dart';
 import '../models/movie.dart';
 import '../theme/app_theme.dart';
@@ -349,8 +350,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   // wipe-and-retry automatically.
   Timer? _stallWatchdogTimer;
 
-  // Lets the screen sleep once paused for a minute (see _playingSub).
-  Timer? _wakelockTimer;
   Duration _lastWatchdogPosition = Duration.zero;
   int? _lastWatchdogDownloadedBytes;
   int _stallTicks = 0;
@@ -415,11 +414,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Keep the screen on for the whole time the player is open — without
-    // this, the OS can lock the screen mid-playback (video keeps decoding
-    // behind a black/locked screen) since Flutter doesn't request a wakelock
-    // on its own. (Released a minute after a pause, kept up again on play:
-    // see _playingSub.)
+    // Keep the screen on for the whole time the player is open, paused or
+    // playing — without this, the OS can lock the screen mid-playback (video
+    // keeps decoding behind a black/locked screen) since Flutter doesn't
+    // request a wakelock on its own. Released in dispose.
     WakelockPlus.enable();
     _currentStream = widget.selectedStream;
     _availableStreams = widget.availableStreams;
@@ -572,14 +570,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     _tilt = accelerometerEventStream(
       samplingPeriod: const Duration(milliseconds: 300),
     ).listen((event) {
-      // Gravity along the phone's width: positive with its left edge down
-      // (top tilted left), negative with its right edge down. In between —
-      // held upright, or lying flat — stays on the current side.
-      final side = event.x > 4.0
-          ? DeviceOrientation.landscapeLeft
-          : event.x < -4.0
-              ? DeviceOrientation.landscapeRight
-              : null;
+      // The side it's held on (named the other way round on an iPhone:
+      // see landscapeSideFor). In between — held upright, or lying flat —
+      // stays on the current side.
+      final side = landscapeSideFor(event.x);
       if (side == null || side == _landscapeSide || _closing) return;
       _landscapeSide = side;
       SystemChrome.setPreferredOrientations([side]);
@@ -730,19 +724,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
         // Sync play/pause to notification
         _syncMediaSessionPlaybackState();
-        // Screen kept on while playing; a paused player (left that way)
-        // lets it sleep after a minute — not while a switch has it held
-        // paused on purpose.
-        _wakelockTimer?.cancel();
-        if (val) {
-          WakelockPlus.enable();
-        } else {
-          _wakelockTimer = Timer(const Duration(minutes: 1), () {
-            if (mounted && !_isPlaying && !_loadingVideo) {
-              WakelockPlus.disable();
-            }
-          });
-        }
+        // The screen stays on while the player's open, paused too (it used
+        // to sleep a minute into a pause): see initState.
         // Up next's countdown runs only while the video plays.
         if (_upNextShown.value) {
           val ? _upNextFill.forward() : _upNextFill.stop();
@@ -3428,7 +3411,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     WidgetsBinding.instance.removeObserver(this);
-    _wakelockTimer?.cancel();
     _discardRetimedFiles();
     _stopSinhala();
     WakelockPlus.disable();

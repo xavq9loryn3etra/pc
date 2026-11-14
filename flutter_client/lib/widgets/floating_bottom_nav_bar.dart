@@ -468,8 +468,11 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
                         _entranceGlassRect(rects[i], entrance[i], travel),
                     ]),
                     // Grouped with the app bar's glass (they never overlap).
+                    // Frosted all the time: going flat as pages opened and
+                    // closed, and frosting back over, was seen.
                     child: const GlassBlur(
                       grouped: true,
+                      keepsFrost: true,
                       child: SizedBox.expand(),
                     ),
                   ),

@@ -15,6 +15,7 @@ import '../../services/saved_movies_service.dart';
 import '../../services/scraper_service.dart';
 import '../../services/tmdb_service.dart';
 import '../../services/tv_device.dart';
+import '../../services/landscape_side.dart';
 import '../../widgets/shimmer_loader.dart';
 import '../../widgets/player_gesture_overlay.dart';
 import '../../widgets/episode_drawer.dart';
@@ -291,16 +292,10 @@ class _WebPlayerMobileState extends State<WebPlayerMobile>
       ).listen((event) {
         if (!mounted) return;
 
-        // Determine which landscape the phone is physically in:
-        // x < -4 => phone top pointing right => landscapeRight
-        // x >  4 => phone top pointing left  => landscapeLeft
-        // |x| <= 4 => ambiguous / in-between, keep current
-        DeviceOrientation? detected;
-        if (event.x < -4.0) {
-          detected = DeviceOrientation.landscapeRight;
-        } else if (event.x > 4.0) {
-          detected = DeviceOrientation.landscapeLeft;
-        }
+        // Which landscape the phone is physically in (named the other way
+        // round on an iPhone: see landscapeSideFor); in between, keep the
+        // current one.
+        final detected = landscapeSideFor(event.x);
 
         if (detected != null && detected != _currentOrientation) {
           _currentOrientation = detected;

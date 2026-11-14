@@ -43,6 +43,11 @@ class GlassBlur extends StatefulWidget {
   /// stuttered. Frosts back over when it's let go of.
   final bool paused;
 
+  /// Stays frosted while pages slide too: the bottom nav bar's, which
+  /// visibly went flat and frosted back over each time a page opened or
+  /// closed. Small, and sharing the grouped backdrop, it costs little.
+  final bool keepsFrost;
+
   final Widget child;
 
   const GlassBlur({
@@ -53,6 +58,7 @@ class GlassBlur extends StatefulWidget {
     this.grouped = false,
     this.reducedTint = const Color(0xE6000000), // black, 90%
     this.paused = false,
+    this.keepsFrost = false,
     required this.child,
   });
 
@@ -162,8 +168,10 @@ class _GlassBlurState extends State<GlassBlur> {
     return ValueListenableBuilder<bool>(
       valueListenable: VisualEffectsService().reduceGlass,
       builder: (context, reduce, child) {
-        final on =
-            !reduce && !_pageMoving && !widget.paused && widget.sigma > 0;
+        final on = !reduce &&
+            (!_pageMoving || widget.keepsFrost) &&
+            !widget.paused &&
+            widget.sigma > 0;
         // Coming back on, the blur grows from nothing as the tint fades
         // out: the glass frosts over. Going off, at once — the page is
         // starting to slide, and the change goes unseen in the motion.

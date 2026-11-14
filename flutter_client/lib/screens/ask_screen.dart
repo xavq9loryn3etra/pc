@@ -916,8 +916,11 @@ class _AskScreenState extends State<AskScreen>
                 onSubmitted: (_) => _ask(),
                 style: const TextStyle(color: Colors.white, fontSize: 16),
                 decoration: InputDecoration(
-                  hintText:
-                      hasKey ? "What's up?" : 'Add your Gemini key to ask',
+                  // One line, however narrow the phone: the bar stays its
+                  // usual height beside "Add key" (three lines made it
+                  // tall and lumpy).
+                  hintText: hasKey ? "What's up?" : 'Add a key to ask',
+                  hintMaxLines: 1,
                   hintStyle: const TextStyle(color: Colors.white38),
                   border: InputBorder.none,
                   counterText: '',

@@ -220,6 +220,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _loadingSeason = false;
   String? _switchingMessage;
 
+  /// Reconnecting after a stall: shown as a tag at the top, as "Resumed
+  /// from", with the video left as it is — not the switching cover and
+  /// spinner over the picture, nor the controls brought up.
+  bool _reconnecting = false;
+
   // Playback position tracking
   // Position/duration/buffer are mirrored into ValueNotifiers so only the
   // seek bar rebuilds on every playback tick, instead of setState() on the
@@ -1238,9 +1243,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       setState(() {
         _switchingQuality = true;
         _switchingMessage = 'Reconnecting…';
-        // Kept up until the new video is playing (see
-        // _resetControlsTimer).
-        _controlsVisible = true;
+        _reconnecting = true;
         _initialPositionRestored = false;
         _forgetFileSubtitles();
       });
@@ -1300,6 +1303,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           _streamId = result.streamId;
           _streamUrl = result.streamUrl;
           _switchingQuality = false;
+          _reconnecting = false;
           _resetControlsTimer();
         });
         _subscribeToTorrent(_torrentId);
@@ -1320,6 +1324,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted) {
         setState(() {
           _switchingQuality = false;
+          _reconnecting = false;
           _initialPositionRestored = true;
         });
         if (otherCopies.isEmpty) {
@@ -1355,7 +1360,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       setState(() {
         _switchingQuality = true;
         _switchingMessage = 'Reconnecting…';
-        _controlsVisible = true;
+        _reconnecting = true;
       });
     }
     try {
@@ -1370,6 +1375,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted) {
         setState(() {
           _switchingQuality = false;
+          _reconnecting = false;
           _resetControlsTimer();
         });
       }
@@ -2365,6 +2371,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           _streamId = result.streamId;
           _streamUrl = result.streamUrl;
           _switchingQuality = false;
+          _reconnecting = false;
           _resetControlsTimer();
         });
         _subscribeToTorrent(_torrentId);
@@ -2380,6 +2387,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted) {
         setState(() {
           _switchingQuality = false;
+          _reconnecting = false;
           _initialPositionRestored =
               true; // Restore state so subsequent playback tracking works
         });
@@ -2982,6 +2990,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _returnAfterFailedSwitch(resumePlayback: false);
     setState(() {
       _switchingQuality = false;
+          _reconnecting = false;
       _controlsVisible = true;
     });
     debugPrint('Episode switch failed: $e');
@@ -3205,6 +3214,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _streamId = result.streamId;
         _streamUrl = result.streamUrl;
         _switchingQuality = false;
+          _reconnecting = false;
         _resetControlsTimer();
       });
       _subscribeToTorrent(_torrentId);
@@ -5234,7 +5244,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                             // Switching (quality, episode, season, recovery): the
                             // video stays visible, softly darkened, under a small
                             // spinner and one quiet line.
-                            if (_switchingQuality || _loadingSeason)
+                            if ((_switchingQuality && !_reconnecting) ||
+                                _loadingSeason)
                               ColoredBox(
                                 color: Colors.black.withValues(alpha: 0.6),
                                 child: Center(
@@ -6312,6 +6323,26 @@ class _PlayerScreenState extends State<PlayerScreen>
                                   ],
                                 ),
                               ),
+                            ),
+
+                            // "Reconnecting…" while a stalled stream's picked
+                            // back up (see _reconnecting): where "Resumed from"
+                            // shows, which it never overlaps.
+                            _glassBadge(
+                              top: 16 + safe.top,
+                              visible: _reconnecting && !_speedBoost,
+                              children: const [
+                                SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 1.8,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                SizedBox(width: 8),
+                                Text('Reconnecting…', style: _badgeTextStyle),
+                              ],
                             ),
 
                             // "Resumed from 12:34" for a moment after picking up

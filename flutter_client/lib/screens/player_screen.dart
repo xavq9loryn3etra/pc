@@ -1242,8 +1242,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (mounted) {
       setState(() {
         _switchingQuality = true;
-        _switchingMessage = 'Reconnecting…';
-        _reconnecting = true;
+        // Still starting, nothing's playing to reconnect: it's moving on
+        // to a faster copy, under the loading spinner. Mid-film, the tag
+        // at the top (see _reconnecting).
+        _reconnecting = !_isMediaOpening;
+        _switchingMessage =
+            _isMediaOpening ? 'Finding a faster copy…' : 'Reconnecting…';
         _initialPositionRestored = false;
         _forgetFileSubtitles();
       });

@@ -10,6 +10,7 @@ import '../widgets/smooth_scroll_controller.dart';
 import 'details_screen.dart';
 import '../widgets/movie_poster.dart';
 import '../widgets/screen_scaffold.dart';
+import '../widgets/screen_shade.dart';
 import 'package:shimmer/shimmer.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/glass_blur.dart';
@@ -240,6 +241,7 @@ class _SearchScreenState extends State<SearchScreen> {
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
     return ScreenScaffold(
       bottomNavTab: BottomNavTab.search,
+      glow: TabGlow.search,
       title: const Text('Search'),
       body: (context, isDesktop, padding) {
         // None in a wide window's side column (its content to its edges).

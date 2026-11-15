@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'screen_shade.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../models/movie.dart';
 import 'desktop_details_panel.dart';
@@ -42,6 +43,10 @@ class ScreenScaffold extends StatefulWidget {
   /// at the bottom for the shell's floating nav bar over it.
   final BottomNavTab? bottomNavTab;
 
+  /// The tab's own glow across the top, as Ask's (see TabGlow): its three
+  /// colours. None when null.
+  final List<Color>? glow;
+
   const ScreenScaffold({
     super.key,
     required this.title,
@@ -55,6 +60,7 @@ class ScreenScaffold extends StatefulWidget {
     this.leadingWidth,
     this.titleIsLabel = true,
     this.bottomNavTab,
+    this.glow,
   });
 
   @override
@@ -84,6 +90,24 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
     _countPanel(false);
     _scrolled.dispose();
     super.dispose();
+  }
+
+  /// [body] over the tab's glow (see [ScreenScaffold.glow]).
+  Widget _withGlow(Widget body) {
+    final glow = widget.glow;
+    if (glow == null) return body;
+    return Stack(
+      children: [
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          height: MediaQuery.sizeOf(context).height * 0.55,
+          child: TabGlow(colors: glow),
+        ),
+        Positioned.fill(child: body),
+      ],
+    );
   }
 
   bool _onScroll(ScrollNotification n) {
@@ -139,7 +163,7 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
                     ),
               body: NotificationListener<ScrollNotification>(
                 onNotification: _onScroll,
-                child: widget.body(
+                child: _withGlow(widget.body(
                   context,
                   isDesktop,
                   // Reserve room for the floating nav bar (~110px including
@@ -155,7 +179,7 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
                             ? 110
                             : 0),
                   ),
-                ),
+                )),
               ),
             ),
 

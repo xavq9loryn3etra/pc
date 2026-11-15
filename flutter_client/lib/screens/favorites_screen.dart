@@ -6,6 +6,7 @@ import '../services/saved_movies_service.dart';
 import '../widgets/movie_poster.dart';
 import 'details_screen.dart';
 import '../widgets/screen_scaffold.dart';
+import '../widgets/screen_shade.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/smooth_scroll_controller.dart';
 
@@ -89,6 +90,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   Widget build(BuildContext context) {
     return ScreenScaffold(
       bottomNavTab: BottomNavTab.favorites,
+      glow: TabGlow.myList,
       title: const Text('My List'),
       body: (context, isDesktop, padding) {
         if (_favorites.isEmpty) {

@@ -117,131 +117,97 @@ class _UpdateOverlayState extends State<UpdateOverlay>
 
   @override
   Widget build(BuildContext context) {
+    final step = _stepParts();
     return StatusScreen(
       title: 'A New Version',
       highlight: 'Is Ready.',
       // The remote message is Android's and Windows' (flags.json); iPhones
-      // update through TestFlight.
+      // update through TestFlight. While updating, what to do next (or what
+      // went wrong) takes the message's place, so the screen keeps the
+      // welcome screen's layout: the button never moves.
       message: Platform.isIOS
           ? 'A new update is available. Please update the app from TestFlight.'
           : widget.message,
-      footer: _footer(),
+      messageBuilder: step?.note == null
+          ? null
+          : (style) => Text.rich(
+                TextSpan(children: [
+                  TextSpan(text: step!.note),
+                  // The website, when the download failed.
+                  if (_step == _Step.failed && _hasValidUrl) ...[
+                    const TextSpan(text: ' Or '),
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.baseline,
+                      baseline: TextBaseline.alphabetic,
+                      child: GestureDetector(
+                        onTap: _openWebsite,
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.click,
+                          child: Text(
+                            'download it from the website',
+                            style: style.copyWith(
+                              color: Colors.white.withValues(alpha: 0.9),
+                              decoration: TextDecoration.underline,
+                              decorationColor:
+                                  Colors.white.withValues(alpha: 0.9),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const TextSpan(text: '.'),
+                  ],
+                ]),
+                textAlign: TextAlign.center,
+                style: style,
+              ),
+      footer: step == null
+          ? null
+          : StatusPrimaryButton(label: step.label, onPressed: step.onPressed),
     );
   }
 
-  Widget? _footer() {
+  /// The button's label and action for where the update's at, and what to
+  /// do next, if anything; null where there's no button (an iPhone).
+  ({String label, VoidCallback? onPressed, String? note})? _stepParts() {
     if (Platform.isIOS) return null;
     // Nowhere else it can update from here: the website, as before. No
     // link given either: no button, rather than a dead one.
     if (!UpdateInstaller.supported) {
       return _hasValidUrl
-          ? StatusPrimaryButton(
-              label: 'Download Update', onPressed: _openWebsite)
+          ? (label: 'Download Update', onPressed: _openWebsite, note: null)
           : null;
     }
-
-    final (String label, VoidCallback? onPressed, String? note) =
-        switch (_step) {
-      _Step.ready => ('Update Now', _update, null),
+    return switch (_step) {
+      _Step.ready => (label: 'Update Now', onPressed: _update, note: null),
+      // The progress is in the button's label.
       _Step.downloading => (
-          'Downloading… ${(_progress * 100).round()}%',
-          null,
-          null,
+          label: 'Downloading… ${(_progress * 100).round()}%',
+          onPressed: null,
+          note: null,
         ),
       _Step.needsPermission => (
-          'Allow Updates',
-          UpdateInstaller.openInstallPermission,
-          'Android asks this once: turn on "Allow from this source" for '
-              'Popcorn, then come back here.',
+          label: 'Allow Updates',
+          onPressed: UpdateInstaller.openInstallPermission,
+          note: 'Android asks this once: turn on "Allow from this source" '
+              'for Popcorn, then come back here.',
         ),
       _Step.install => (
-          'Install Update',
-          _install,
-          'Tap Update when Android asks. Your favourites and history stay.',
+          label: 'Install Update',
+          onPressed: _install,
+          note: 'Tap Update when Android asks. Your favourites and history '
+              'stay.',
         ),
       _Step.installing => (
-          'Installing…',
-          null,
-          'Popcorn will close and open again by itself.',
+          label: 'Installing…',
+          onPressed: null,
+          note: 'Popcorn will close and open again by itself.',
         ),
       _Step.failed => (
-          'Try Again',
-          _update,
-          "Couldn't download the update. Check your connection.",
+          label: 'Try Again',
+          onPressed: _update,
+          note: "Couldn't download the update. Check your connection.",
         ),
     };
-
-    final noteStyle = TextStyle(
-      fontSize: 13,
-      height: 1.4,
-      color: Colors.white.withValues(alpha: 0.6),
-    );
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        StatusPrimaryButton(label: label, onPressed: onPressed),
-        // Always this tall, whatever's in it (nothing, the progress bar, a
-        // note of up to two lines): the words above don't shift as it
-        // changes.
-        SizedBox(
-          height: 64,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 400),
-            child: Padding(
-              padding: const EdgeInsets.only(top: 14),
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: _step == _Step.downloading
-                    ? ClipRRect(
-                        borderRadius: BorderRadius.circular(2),
-                        child: LinearProgressIndicator(
-                          value: _progress,
-                          minHeight: 4,
-                          color: Colors.white,
-                          backgroundColor:
-                              Colors.white.withValues(alpha: 0.15),
-                        ),
-                      )
-                    : note == null
-                        ? const SizedBox.shrink()
-                        : Text.rich(
-                            TextSpan(children: [
-                              TextSpan(text: note),
-                              // The website, when the download failed.
-                              if (_step == _Step.failed && _hasValidUrl) ...[
-                                const TextSpan(text: ' Or '),
-                                WidgetSpan(
-                                  alignment: PlaceholderAlignment.baseline,
-                                  baseline: TextBaseline.alphabetic,
-                                  child: GestureDetector(
-                                    onTap: _openWebsite,
-                                    child: MouseRegion(
-                                      cursor: SystemMouseCursors.click,
-                                      child: Text(
-                                        'download it from the website',
-                                        style: noteStyle.copyWith(
-                                          color: Colors.white
-                                              .withValues(alpha: 0.85),
-                                          decoration: TextDecoration.underline,
-                                          decorationColor: Colors.white
-                                              .withValues(alpha: 0.85),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const TextSpan(text: '.'),
-                              ],
-                            ]),
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            style: noteStyle,
-                          ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
   }
 }

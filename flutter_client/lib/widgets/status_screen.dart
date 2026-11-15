@@ -23,7 +23,12 @@ class StatusScreen extends StatefulWidget {
 
   final String message;
 
-  /// Optional action or status shown under the message.
+  /// Draws the message instead, in the style given (a link in it, say).
+  final Widget Function(TextStyle style)? messageBuilder;
+
+  /// The button under the message, where the welcome screen's Get Started
+  /// is. Without one, its place is kept (empty), so every one of these
+  /// screens has the welcome screen's layout exactly.
   final Widget? footer;
 
   const StatusScreen({
@@ -31,6 +36,7 @@ class StatusScreen extends StatefulWidget {
     required this.title,
     required this.highlight,
     required this.message,
+    this.messageBuilder,
     this.footer,
   });
 
@@ -82,19 +88,24 @@ class _StatusScreenState extends State<StatusScreen>
             ),
           ),
           SizedBox(height: large ? 20 : 12),
-          Text(
-            widget.message,
-            textAlign: sideBySide ? TextAlign.start : TextAlign.center,
-            style: TextStyle(
+          Builder(builder: (context) {
+            final style = TextStyle(
               fontSize: large ? 18 : 14,
               color: Colors.white.withValues(alpha: 0.7),
               height: 1.5,
-            ),
-          ),
-          if (widget.footer != null) ...[
-            SizedBox(height: large ? 40 : 32),
-            widget.footer!,
-          ],
+            );
+            return widget.messageBuilder?.call(style) ??
+                Text(
+                  widget.message,
+                  textAlign: sideBySide ? TextAlign.start : TextAlign.center,
+                  style: style,
+                );
+          }),
+          // As the welcome screen: the button's gap and place, kept even
+          // without one.
+          SizedBox(height: large ? 40 : 32),
+          widget.footer ??
+              const SizedBox(height: StatusPrimaryButton.height),
         ],
       ),
     );
@@ -147,6 +158,9 @@ class StatusPrimaryButton extends StatelessWidget {
     required this.onPressed,
   });
 
+  /// Also the room kept for it on a screen without one.
+  static const double height = 56;
+
   @override
   Widget build(BuildContext context) {
     // Full width on a phone; on a wide window a stretched bar looks broken,
@@ -155,7 +169,7 @@ class StatusPrimaryButton extends StatelessWidget {
       constraints: const BoxConstraints(maxWidth: 400),
       child: SizedBox(
         width: double.infinity,
-        height: 56,
+        height: height,
         child: ElevatedButton(
           onPressed: onPressed,
           style: ElevatedButton.styleFrom(

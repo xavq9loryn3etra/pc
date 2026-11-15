@@ -14,6 +14,7 @@ import '../services/movie_tab_service.dart';
 import '../services/tv_device.dart';
 import '../widgets/artwork_glow.dart';
 import '../widgets/smooth_scroll_controller.dart';
+import '../widgets/custom_app_bar.dart' show LogoIsland;
 
 class DesktopHomeScreen extends StatefulWidget {
   final Movie featuredMovie;
@@ -376,22 +377,27 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     );
   }
 
-  // Just the logo over the page: no bar or fade behind it.
+  // Just the logo over the page, no bar or fade behind it: once scrolled,
+  // on a frosted island of its own, as the phone's home (LogoIsland).
   Widget _buildTopBar(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 24),
+      // The island's own padding (16 by 8) puts the logo 60 in, 24 down.
+      padding: const EdgeInsets.symmetric(horizontal: 44, vertical: 16),
       child: Row(
         children: [
           // Ramen's in its own colours, Popcorn's in cream.
-          SvgPicture.asset(
-            widget.ramen ? 'assets/ramen-app-logo.svg' : 'assets/logo.svg',
-            height: 32,
-            colorFilter: widget.ramen
-                ? null
-                : const ColorFilter.mode(
-                    AppTheme.primaryColor,
-                    BlendMode.srcIn,
-                  ),
+          LogoIsland(
+            scroll: _scrollController,
+            child: SvgPicture.asset(
+              widget.ramen ? 'assets/ramen-app-logo.svg' : 'assets/logo.svg',
+              height: 32,
+              colorFilter: widget.ramen
+                  ? null
+                  : const ColorFilter.mode(
+                      AppTheme.primaryColor,
+                      BlendMode.srcIn,
+                    ),
+            ),
           ),
           // The tab buttons sit at the right of this row (see
           // FloatingBottomNavBar), over it.

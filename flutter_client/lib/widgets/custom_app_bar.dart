@@ -136,7 +136,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
         child: title ??
             (logoIslandScroll == null
                 ? _buildDefaultLogo()
-                : _LogoIsland(
+                : LogoIsland(
                     scroll: logoIslandScroll!, child: _buildDefaultLogo())),
       ),
       backgroundColor: Colors.transparent,
@@ -209,11 +209,11 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
 /// The home's logo on a frosted island — the bottom nav bar's glass, as a
 /// pill — that fades in as the page scrolls (fully there by 200px). Only
 /// the island fades: the logo itself always shows.
-class _LogoIsland extends StatelessWidget {
+class LogoIsland extends StatelessWidget {
   final ScrollController scroll;
   final Widget child;
 
-  const _LogoIsland({required this.scroll, required this.child});
+  const LogoIsland({super.key, required this.scroll, required this.child});
 
   static const _padding = EdgeInsets.symmetric(horizontal: 16, vertical: 8);
 

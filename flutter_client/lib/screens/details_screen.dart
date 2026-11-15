@@ -2527,15 +2527,44 @@ class _TorrentQualitySelectorSheetState
   }
 
   Widget _buildTitleRow(BuildContext context, {required bool closeButton}) {
-    return Row(
-      children: [
-        const Expanded(child: QualitySectionLabel('Choose quality')),
-        if (closeButton && _resolvingMessage == null)
-          IconButton(
+    final close = closeButton && _resolvingMessage == null
+        ? IconButton(
             icon: const Icon(Icons.close_rounded,
                 color: Colors.white38, size: 20),
             onPressed: () => Navigator.pop(context),
+          )
+        : null;
+    // English or the original soundtrack, for a title not made in English
+    // (saved for the whole series): first, then "Choose quality" right
+    // over the qualities it lists.
+    if (AudioLanguageService.appliesTo(widget.details)) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: AudioLanguagePicker(
+                  title: widget.details,
+                  selected: _language,
+                  unavailable: _noCopiesIn,
+                  enabled: !_loading && _startingOption == null,
+                  onChanged: _showLanguage,
+                ),
+              ),
+              if (close != null) close,
+            ],
           ),
+          const SizedBox(height: 16),
+          const QualitySectionLabel('Choose quality'),
+        ],
+      );
+    }
+    return Row(
+      children: [
+        const Expanded(child: QualitySectionLabel('Choose quality')),
+        if (close != null) close,
       ],
     );
   }
@@ -2597,21 +2626,8 @@ class _TorrentQualitySelectorSheetState
 
     return SliverMainAxisGroup(
       slivers: [
-        // English or the original soundtrack, for a title not made in
-        // English — saved for the whole series.
-        if (AudioLanguageService.appliesTo(widget.details))
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 14),
-              child: AudioLanguagePicker(
-                title: widget.details,
-                selected: _language,
-                unavailable: _noCopiesIn,
-                enabled: !_loading && _startingOption == null,
-                onChanged: _showLanguage,
-              ),
-            ),
-          ),
+        // The audio choice is at the top, over "Choose quality" (see
+        // _buildTitleRow).
         if (_resolveError != null && _resolvingMessage == null)
           SliverToBoxAdapter(child: _buildResolveError()),
         state,

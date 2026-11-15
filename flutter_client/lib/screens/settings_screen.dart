@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
@@ -17,6 +19,8 @@ import '../services/feature_flags_service.dart';
 import '../services/gemini_key_service.dart';
 import '../services/torrent/download_ahead_settings.dart';
 import '../widgets/gemini_key_form.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import '../services/trending_service.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -58,8 +62,10 @@ class SettingsScreen extends StatelessWidget {
                 left: side,
                 right: side);
             // The settings, then the credit and version at the tab's foot
-            // (further down, if the settings are longer than the screen).
-            return CustomScrollView(
+            // (further down, if the settings are longer than the screen),
+            // frosted over the mode's artwork (see _SettingsBackdrop).
+            return _SettingsBackdrop(
+                child: CustomScrollView(
               slivers: [
                 SliverPadding(
                   padding: listPadding.copyWith(bottom: 0),
@@ -67,7 +73,12 @@ class SettingsScreen extends StatelessWidget {
                     // No modes in the desktop app (see AppModeService).
                     if (AppModeService.canSwitchMode) ...[
                       const _SectionLabel('SWITCH MODE', topPadding: 8),
-                      const ModeSwitchRow(),
+                      // On a frosted panel, as on the start screen.
+                      const _FrostedCard(
+                        radius: 24,
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: ModeSwitchRow(),
+                      ),
                     ],
                     if (showStorage) ...[
                       _SectionLabel(
@@ -155,7 +166,7 @@ class SettingsScreen extends StatelessWidget {
                   ),
                 ),
               ],
-            );
+            ));
           },
         );
       },
@@ -310,24 +321,12 @@ class _SettingsGroup extends StatelessWidget {
 
   const _SettingsGroup({required this.children, this.footnote});
 
-  // Apple's dark grouped-list grey: lifted just off the black screen.
-  static const _cardColor = Color(0xFF1C1C1E);
-
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      // None in a wide window's side column (the cards to its edges).
-      padding: EdgeInsets.symmetric(
-          horizontal: SideColumnScope.inColumn(context) ? 0 : 16),
-      child: Column(
+    return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Material(
-            color: _cardColor,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-            clipBehavior: Clip.antiAlias,
+          _FrostedCard(
             child: Column(
               children: [
                 for (var i = 0; i < children.length; i++) ...[
@@ -346,20 +345,189 @@ class _SettingsGroup extends StatelessWidget {
           ),
           if (footnote != null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              padding: EdgeInsets.fromLTRB(
+                  SideColumnScope.inColumn(context) ? 16 : 32, 8, 16, 0),
               child: Text(
                 footnote!,
                 style: const TextStyle(
-                  color: Colors.white38,
+                  color: Colors.white54,
                   fontSize: 12.5,
                   height: 1.35,
                 ),
               ),
             ),
         ],
+    );
+  }
+}
+
+/// A frosted glass card, as the start screen's mode panel and the tab
+/// bar: the glass tint and its light edge, over the page's blurred artwork
+/// (see _SettingsBackdrop) — no live blur of its own, which re-blurred
+/// every card on every frame of a scroll.
+class _FrostedCard extends StatelessWidget {
+  final Widget child;
+  final double radius;
+  final EdgeInsetsGeometry? padding;
+
+  const _FrostedCard({required this.child, this.radius = 20, this.padding});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      // None in a wide window's side column (the cards to its edges).
+      padding: EdgeInsets.symmetric(
+          horizontal: SideColumnScope.inColumn(context) ? 0 : 16),
+      child: Material(
+        color: kGlassTint,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(radius),
+          side: BorderSide(color: kGlassEdge),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: padding == null
+            ? child
+            : Padding(padding: padding!, child: child),
       ),
     );
   }
+}
+
+/// Settings' background: the open mode's top trending artwork (the start
+/// screen's), blurred and darkened, for its cards to frost over — the
+/// start screen's look. Blurred once, off screen, as it loads (see
+/// [_blurredOnce]), not live: the page scrolls over a still picture.
+/// Scrolled content stops at the status bar instead of passing behind it.
+class _SettingsBackdrop extends StatefulWidget {
+  final Widget child;
+
+  const _SettingsBackdrop({required this.child});
+
+  @override
+  State<_SettingsBackdrop> createState() => _SettingsBackdropState();
+}
+
+class _SettingsBackdropState extends State<_SettingsBackdrop> {
+  ui.Image? _image;
+  bool _shown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final items =
+        await TrendingService().cached(AppModeService().currentMode.value);
+    if (!mounted || items.isEmpty) return;
+    final image = await _blurredOnce(items.first.imageUrl);
+    if (!mounted) {
+      image?.dispose();
+      return;
+    }
+    setState(() => _image = image);
+    // Then faded in.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _shown = true);
+    });
+  }
+
+  /// [url]'s picture, decoded tiny and drawn blurred into a small image
+  /// once. Stretched straight from the tiny one, it showed in blocks.
+  static Future<ui.Image?> _blurredOnce(String url) async {
+    final done = Completer<ui.Image?>();
+    final stream = ResizeImage.resizeIfNeeded(
+            40, null, CachedNetworkImageProvider(url))
+        .resolve(ImageConfiguration.empty);
+    late final ImageStreamListener listener;
+    listener = ImageStreamListener((info, _) {
+      if (!done.isCompleted) done.complete(info.image.clone());
+      stream.removeListener(listener);
+    }, onError: (_, __) {
+      if (!done.isCompleted) done.complete(null);
+      stream.removeListener(listener);
+    });
+    stream.addListener(listener);
+    final small = await done.future;
+    if (small == null) return null;
+    const width = 180.0;
+    final height = width * small.height / small.width;
+    final recorder = ui.PictureRecorder();
+    Canvas(recorder).drawImageRect(
+      small,
+      Rect.fromLTWH(0, 0, small.width.toDouble(), small.height.toDouble()),
+      Rect.fromLTWH(0, 0, width, height),
+      Paint()
+        ..filterQuality = FilterQuality.medium
+        ..imageFilter =
+            ui.ImageFilter.blur(sigmaX: 7, sigmaY: 7, tileMode: TileMode.clamp),
+    );
+    small.dispose();
+    return recorder
+        .endRecording()
+        .toImage(width.round(), height.round());
+  }
+
+  @override
+  void dispose() {
+    _image?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final image = _image;
+    final top = SideColumnScope.inColumn(context)
+        ? 0.0
+        : MediaQuery.paddingOf(context).top;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (image != null)
+          AnimatedOpacity(
+            opacity: _shown ? 1 : 0,
+            duration: const Duration(milliseconds: 400),
+            child: ColorFiltered(
+              colorFilter: GlassBlur.saturate,
+              child: RawImage(
+                image: image,
+                fit: BoxFit.cover,
+                filterQuality: FilterQuality.medium,
+              ),
+            ),
+          ),
+        // Dark enough for the words, the colour still showing through.
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0x99000000), Color(0xE6000000)],
+            ),
+          ),
+        ),
+        ClipRect(
+          clipper: _BelowTop(top),
+          child: widget.child,
+        ),
+      ],
+    );
+  }
+}
+
+/// Everything below [top]: the status bar's height, which scrolled
+/// settings no longer pass behind.
+class _BelowTop extends CustomClipper<Rect> {
+  final double top;
+
+  const _BelowTop(this.top);
+
+  @override
+  Rect getClip(Size size) => Rect.fromLTRB(0, top, size.width, size.height);
+
+  @override
+  bool shouldReclip(_BelowTop old) => old.top != top;
 }
 
 /// A row on a [_SettingsGroup] card: an icon, a one-line title and,

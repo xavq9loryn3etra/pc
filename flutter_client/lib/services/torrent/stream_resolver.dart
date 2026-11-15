@@ -99,7 +99,8 @@ class StreamResolver {
             !(type != 'movie' && (season ?? 1) > 0 && _isSpecial(s, title)) &&
             _fitsTitle(s, title) &&
             // Never a fan edit, not even when there's nothing else.
-            !_isCustomEdit(s, title))
+            !_isCustomEdit(s, title) &&
+            !tooSmallFor(s, title))
         .toList();
     // English audio for titles made in English. For one made in another
     // language, the audio chosen for it (AudioLanguageService, the
@@ -335,6 +336,35 @@ class StreamResolver {
       }
     }
     return years.any((y) => y >= first && y <= last);
+  }
+
+  /// Whether [stream] is far too small for the quality it claims, for
+  /// [title]'s length — a squeezed copy labelled HD: One Piece's 74 MB
+  /// "720p" episode, a third of a real one, showed as its HD size. At
+  /// least 3.5 MB a minute for 720p, 5 for 1080p and 12 for 4K (squeezed
+  /// but sound copies: 1080p anime episodes of 175 MB, 4K films of 1.5 GB,
+  /// pass). With the length unknown, a short one's taken (20 minutes for
+  /// an episode, 80 for a film), so only the plainly impossible go.
+  @visibleForTesting
+  static bool tooSmallFor(TorrentStream stream, Movie? title) {
+    final mb = _sizeInMB(stream.size);
+    if (mb == null) return false;
+    final perMinute = const {4: 12.0, 3: 5.0, 2: 3.5}[tierOf(stream)];
+    if (perMinute == null) return false;
+    final minutes =
+        minutesOf(title?.runtime) ?? (title?.type == 'movie' ? 80 : 20);
+    return mb < perMinute * minutes;
+  }
+
+  /// A runtime as TMDB's given ("24m", "1h 48m") in minutes; null if none.
+  @visibleForTesting
+  static int? minutesOf(String? runtime) {
+    if (runtime == null) return null;
+    final h = int.tryParse(RegExp(r'(\d+)\s*h').firstMatch(runtime)?[1] ?? '');
+    final m = int.tryParse(RegExp(r'(\d+)\s*m').firstMatch(runtime)?[1] ?? '');
+    if (h == null && m == null) return null;
+    final total = (h ?? 0) * 60 + (m ?? 0);
+    return total > 0 ? total : null;
   }
 
   /// Whether a release [name] is of another show called the same as

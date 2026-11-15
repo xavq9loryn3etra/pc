@@ -10,6 +10,7 @@ import '../screens/search_screen.dart';
 import '../screens/favorites_screen.dart';
 import 'mode_switcher_dialog.dart';
 import 'floating_bottom_nav_bar.dart';
+import 'screen_scaffold.dart' show TitleIsland;
 
 class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   final Widget? title;
@@ -206,53 +207,52 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
-/// The home's logo on a frosted island — the bottom nav bar's glass, as a
-/// pill — that fades in as the page scrolls (fully there by 200px). Only
-/// the island fades: the logo itself always shows.
-class LogoIsland extends StatelessWidget {
+/// The home's logo on a frosted island once the page is scrolled: the
+/// very island a page's header gets (TitleIsland), coming in the same way
+/// — on a phone and on a wide window alike. It faded in with the scroll
+/// position before, which looked sudden beside the headers'.
+class LogoIsland extends StatefulWidget {
   final ScrollController scroll;
   final Widget child;
 
   const LogoIsland({super.key, required this.scroll, required this.child});
 
-  static const _padding = EdgeInsets.symmetric(horizontal: 16, vertical: 8);
+  @override
+  State<LogoIsland> createState() => _LogoIslandState();
+}
+
+class _LogoIslandState extends State<LogoIsland> {
+  bool _shown = false;
 
   @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: scroll,
-      builder: (context, logo) {
-        final offset = scroll.hasClients ? scroll.offset : 0.0;
-        final shown = (offset / 200).clamp(0.0, 1.0);
-        return Stack(
-          children: [
-            // No glass at all at the top, rather than a faded-out one.
-            if (shown > 0.01)
-              Positioned.fill(
-                child: Opacity(
-                  opacity: shown,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(999),
-                    // Grouped with the bottom nav bar's glass: at opposite
-                    // ends of the screen, they never overlap.
-                    child: GlassBlur(
-                      grouped: true,
-                      child: DecoratedBox(
-                        decoration: ShapeDecoration(
-                          color: kGlassTint,
-                          shape: StadiumBorder(
-                              side: BorderSide(color: kGlassEdge)),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            Padding(padding: _padding, child: logo),
-          ],
-        );
-      },
-      child: child,
-    );
+  void initState() {
+    super.initState();
+    widget.scroll.addListener(_onScroll);
   }
+
+  @override
+  void didUpdateWidget(LogoIsland old) {
+    super.didUpdateWidget(old);
+    if (old.scroll != widget.scroll) {
+      old.scroll.removeListener(_onScroll);
+      widget.scroll.addListener(_onScroll);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.scroll.removeListener(_onScroll);
+    super.dispose();
+  }
+
+  // Scrolled from the top, as a page's header (ScreenScaffold): only the
+  // change rebuilds, not every pixel of the scroll.
+  void _onScroll() {
+    final shown = widget.scroll.hasClients && widget.scroll.offset > 4;
+    if (shown != _shown) setState(() => _shown = shown);
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      TitleIsland(shown: _shown, child: widget.child);
 }

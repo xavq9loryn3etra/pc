@@ -381,8 +381,9 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
   // on a frosted island of its own, as the phone's home (LogoIsland).
   Widget _buildTopBar(BuildContext context) {
     return Container(
-      // The island's own padding (16 by 8) puts the logo 60 in, 24 down.
-      padding: const EdgeInsets.symmetric(horizontal: 44, vertical: 16),
+      // The island (TitleIsland: 44 tall, as the tab buttons, 14 in) puts
+      // the logo 60 in and 24 down, level with the tab buttons.
+      padding: const EdgeInsets.symmetric(horizontal: 46, vertical: 18),
       child: Row(
         children: [
           // Ramen's in its own colours, Popcorn's in cream.

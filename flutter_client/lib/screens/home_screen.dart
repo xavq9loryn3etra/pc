@@ -300,9 +300,9 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
         showActions: false,
         showModeSwitch: false,
         logoIslandScroll: _scrollController,
-        // The island's padding then puts the logo in line with the rows'
-        // titles (24 in).
-        titleSpacing: 8,
+        // The island's padding (14) then puts the logo in line with the
+        // rows' titles (24 in).
+        titleSpacing: 10,
       ),
       body: SingleChildScrollView(
         controller: _scrollController,

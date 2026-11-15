@@ -77,12 +77,19 @@ class TrendingService {
 
   final Map<AppMode, Future<List<TrendingItem>>> _inFlight = {};
 
-  /// The list cached by the previous launch, if any.
+  /// The list cached by the previous launch, if any — or, the first time
+  /// after an update that changed its version, the last version's (its
+  /// pictures are on the device already).
   Future<List<TrendingItem>> cached(AppMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    final current = _decode(prefs.getString(_cacheKey(mode)));
+    if (current.isNotEmpty) return current;
+    return _decode(prefs.getString('trending_cache_v4_${mode.name}'));
+  }
+
+  static List<TrendingItem> _decode(String? raw) {
+    if (raw == null) return [];
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_cacheKey(mode));
-      if (raw == null) return [];
       return (jsonDecode(raw) as List)
           .map((e) => TrendingItem.fromJson(e as Map<String, dynamic>))
           .toList();
@@ -91,25 +98,90 @@ class TrendingService {
     }
   }
 
+  static String _shownKey(AppMode mode) => 'trending_shown_v1_${mode.name}';
+  static const _shownKept = 5;
+
+  /// The slides the start screen last showed for [mode], latest first:
+  /// their pictures are on the device, so they show at once, on a slow
+  /// connection or none, while this week's load (see markShown).
+  Future<List<TrendingItem>> shown(AppMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    return _decode(prefs.getString(_shownKey(mode)));
+  }
+
+  /// Remembers [item] as shown on the start screen (its picture loaded).
+  Future<void> markShown(AppMode mode, TrendingItem item) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = [
+        item,
+        for (final i in _decode(prefs.getString(_shownKey(mode))))
+          if (i.imageUrl != item.imageUrl) i,
+      ].take(_shownKept).toList();
+      await prefs.setString(
+          _shownKey(mode), jsonEncode([for (final i in list) i.toJson()]));
+    } catch (_) {}
+  }
+
+  /// What the start screen starts with: the slides it showed last time
+  /// (on the device already), else the cached list, else a fresh one.
+  Future<List<TrendingItem>> startingSlides(AppMode mode) async {
+    final last = await shown(mode);
+    if (last.isNotEmpty) return last;
+    final previous = await cached(mode);
+    if (previous.isNotEmpty) return previous;
+    return fetch(mode);
+  }
+
+  /// A slide's picture: the full-size original (see _movies), decoded
+  /// only as wide as covering this screen needs, with room for the slow
+  /// zoom — sharp, without holding a 3000px picture in memory. A portrait
+  /// poster (2:3) or a landscape backdrop (16:9) covers the screen, so it
+  /// can need to be wider than the screen when it's the screen's height
+  /// it has to fill. The same one for the splash's warm-up and the start
+  /// screen, so what's loaded during the splash is what's shown.
+  static ImageProvider slideImage(BuildContext context, TrendingItem item) {
+    final size = MediaQuery.sizeOf(context);
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final wide = size.width > size.height;
+    final aspect = wide ? 16 / 9 : 2 / 3;
+    final width = (size.width > size.height * aspect
+            ? size.width
+            : size.height * aspect) *
+        dpr *
+        1.15;
+    return ResizeImage.resizeIfNeeded(width.round(), null,
+        CachedNetworkImageProvider(item.imageFor(wide: wide)));
+  }
+
+  /// The start screen panel's "frosted glass": the slide decoded tiny.
+  static ImageProvider slideBlur(BuildContext context, TrendingItem item) {
+    final size = MediaQuery.sizeOf(context);
+    return ResizeImage.resizeIfNeeded(40, null,
+        CachedNetworkImageProvider(item.imageFor(wide: size.width > size.height)));
+  }
+
+  /// A slide's title logo: the original, decoded at its box's size (80
+  /// tall).
+  static ImageProvider slideLogo(BuildContext context, String url) =>
+      ResizeImage.resizeIfNeeded(
+          null,
+          (80 * MediaQuery.devicePixelRatioOf(context)).round(),
+          CachedNetworkImageProvider(url));
+
   /// Gets the mode selector's first slide fully ready — list, background
   /// image and logo — so it isn't blank when the selector appears. Uses
   /// the same list the selector starts with: the cached one if there is
   /// one, otherwise a fresh fetch.
   Future<void> warmUp(AppMode mode, BuildContext context) async {
-    var items = await cached(mode);
-    if (items.isEmpty) items = await fetch(mode);
+    final items = await startingSlides(mode);
     if (items.isEmpty || !context.mounted) return;
-    final size = MediaQuery.sizeOf(context);
     final first = items.first;
     await Future.wait([
-      precacheImage(
-        CachedNetworkImageProvider(
-            first.imageFor(wide: size.width > size.height)),
-        context,
-        onError: (_, __) {},
-      ),
+      precacheImage(slideImage(context, first), context, onError: (_, __) {}),
+      precacheImage(slideBlur(context, first), context, onError: (_, __) {}),
       if (first.logoUrl != null)
-        precacheImage(CachedNetworkImageProvider(first.logoUrl!), context,
+        precacheImage(slideLogo(context, first.logoUrl!), context,
             onError: (_, __) {}),
     ]);
   }

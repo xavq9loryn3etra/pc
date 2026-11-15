@@ -163,7 +163,12 @@ class _UpdateOverlayState extends State<UpdateOverlay>
               ),
       footer: step == null
           ? null
-          : StatusPrimaryButton(label: step.label, onPressed: step.onPressed),
+          : StatusPrimaryButton(
+              label: step.label,
+              onPressed: step.onPressed,
+              // Downloading: the button fills as it goes.
+              progress: _step == _Step.downloading ? _progress : null,
+            ),
     );
   }
 

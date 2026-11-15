@@ -152,10 +152,15 @@ class StatusPrimaryButton extends StatelessWidget {
   /// Null while it can't be pressed (e.g. "Downloading… 45%").
   final VoidCallback? onPressed;
 
+  /// How far along a download is (0–1): the button fills with it, left to
+  /// right, instead of a separate progress bar. Null: a plain button.
+  final double? progress;
+
   const StatusPrimaryButton({
     super.key,
     required this.label,
     required this.onPressed,
+    this.progress,
   });
 
   /// Also the room kept for it on a screen without one.
@@ -165,6 +170,8 @@ class StatusPrimaryButton extends StatelessWidget {
   Widget build(BuildContext context) {
     // Full width on a phone; on a wide window a stretched bar looks broken,
     // so it stops at a normal button's width (centred by its column).
+    final progress = this.progress;
+    if (progress != null) return _filling(progress);
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 400),
       child: SizedBox(
@@ -185,6 +192,48 @@ class StatusPrimaryButton extends StatelessWidget {
           child: Text(
             label,
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The button filling as [progress] goes: dim white, the done part
+  /// solid white over it, gliding as it grows; the label on top.
+  Widget _filling(double progress) {
+    const radius = BorderRadius.all(Radius.circular(16));
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 400),
+      child: SizedBox(
+        width: double.infinity,
+        height: height,
+        child: ClipRRect(
+          borderRadius: radius,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              ColoredBox(color: Colors.white.withValues(alpha: 0.35)),
+              TweenAnimationBuilder<double>(
+                tween: Tween(end: progress.clamp(0.0, 1.0)),
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOut,
+                builder: (context, done, _) => FractionallySizedBox(
+                  alignment: Alignment.centerLeft,
+                  widthFactor: done,
+                  child: const ColoredBox(color: Colors.white),
+                ),
+              ),
+              Center(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.black,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

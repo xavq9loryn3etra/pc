@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../enums/app_mode.dart';
@@ -54,11 +53,17 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
     super.dispose();
   }
 
+  // The slides shown last time (on the device): gone back to when a new
+  // one won't load (a slow connection), rather than sitting on one slide.
+  List<TrendingItem> _fallback = const [];
+
   Future<void> _load() async {
     final service = TrendingService();
-    final cached = await service.cached(_mode);
+    final starting = await service.startingSlides(_mode);
     if (!mounted) return;
-    if (cached.isNotEmpty) await _show(cached, 0);
+    _fallback = await service.shown(_mode);
+    if (!mounted) return;
+    if (starting.isNotEmpty) await _show(starting, 0);
 
     final fresh = await service.fetch(_mode);
     if (!mounted || fresh.isEmpty) return;
@@ -69,37 +74,16 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
     }
   }
 
-  bool get _isWide {
-    final size = MediaQuery.sizeOf(context);
-    return size.width > size.height;
-  }
-
-  ImageProvider _networkImageFor(TrendingItem item) =>
-      CachedNetworkImageProvider(item.imageFor(wide: _isWide));
-
-  /// The slide: the full-size original (see TrendingService), decoded only
-  /// as wide as filling this screen needs, with room for the slow zoom —
-  /// sharp, without holding a 3000px picture in memory. A portrait poster
-  /// (2:3) or a landscape backdrop (16:9) covers the screen, so it can
-  /// need to be wider than the screen when it's the screen's height that
-  /// it has to fill.
-  ImageProvider _imageFor(TrendingItem item) {
-    final size = MediaQuery.sizeOf(context);
-    final dpr = MediaQuery.devicePixelRatioOf(context);
-    final aspect = _isWide ? 16 / 9 : 2 / 3;
-    final width =
-        (size.width > size.height * aspect ? size.width : size.height * aspect) *
-            dpr *
-            1.15;
-    return ResizeImage.resizeIfNeeded(
-        width.round(), null, _networkImageFor(item));
-  }
+  // The slide: the full-size original, decoded at the screen's size (see
+  // TrendingService.slideImage) — the one the splash loads.
+  ImageProvider _imageFor(TrendingItem item) =>
+      TrendingService.slideImage(context, item);
 
   // The mode panel's "frosted glass": the slide decoded tiny and stretched
   // smoothly reads as the artwork blurred, without a live BackdropFilter —
   // which re-blurred the always-zooming slideshow on every frame.
   ImageProvider _blurredImageFor(TrendingItem item) =>
-      ResizeImage.resizeIfNeeded(40, null, _networkImageFor(item));
+      TrendingService.slideBlur(context, item);
 
   ImageProvider _logoFor(String url) => _titleLogo(context, url);
 
@@ -132,6 +116,16 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
         _current = items[index];
         _slide++;
       });
+      // On the device now: shown at once next time.
+      unawaited(TrendingService().markShown(_mode, items[index]));
+    } else if (!identical(items, _fallback) && _fallback.isNotEmpty) {
+      // A new slide that won't load (a slow connection): carry on with
+      // last time's, which are on the device.
+      _pending = null;
+      final at = _fallback.indexWhere((i) => i.imageUrl == _current?.imageUrl);
+      _timer = Timer(Duration.zero,
+          () => _show(_fallback, (at + 1) % _fallback.length));
+      return;
     }
     _timer = Timer(loaded ? _slideDuration : Duration.zero, _next);
   }
@@ -465,9 +459,6 @@ class _Placeholder extends StatelessWidget {
   }
 }
 
-/// A slide's title logo: the original, decoded at its box's size (80 tall).
+/// A slide's title logo (see TrendingService.slideLogo).
 ImageProvider _titleLogo(BuildContext context, String url) =>
-    ResizeImage.resizeIfNeeded(
-        null,
-        (80 * MediaQuery.devicePixelRatioOf(context)).round(),
-        CachedNetworkImageProvider(url));
+    TrendingService.slideLogo(context, url);

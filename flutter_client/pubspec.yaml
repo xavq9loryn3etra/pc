@@ -109,6 +109,7 @@ flutter:
     - assets/reader.html
     - assets/loader.json
     - assets/welcome/movies/
+    - assets/welcome/anime/
     - assets/welcome/music/
     - assets/welcome/books/
     - assets/fonts/Yellowtail-LICENSE.txt

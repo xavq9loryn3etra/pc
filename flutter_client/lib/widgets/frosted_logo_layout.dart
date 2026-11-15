@@ -48,7 +48,9 @@ class FrostedLogoLayout extends StatelessWidget {
       logoRect = Rect.fromCenter(
         center: Offset(
           size.width / 2,
-          padding.top + (size.height - padding.top) * 0.3,
+          // A little above a third of the way down, well clear of the
+          // words at the foot.
+          padding.top + (size.height - padding.top) * 0.27,
         ),
         width: side,
         height: side,
@@ -65,7 +67,11 @@ class FrostedLogoLayout extends StatelessWidget {
           // posters still show through it.
           Positioned.fill(
             child: PosterWall(
-              scale: sideBySide ? 1.0 : (large ? 0.8 : 0.6),
+              // With movies and anime, sized so exactly two rows fill the
+              // logo: one of each.
+              scale: PosterWall.twoKinds
+                  ? logoRect.height / (2 * PosterWall.rowExtent)
+                  : (sideBySide ? 1.0 : (large ? 0.8 : 0.6)),
               // A row of movies through the middle of the logo.
               focus: logoRect.center.dy / size.height,
             ),
@@ -146,8 +152,9 @@ class FrostedLogoLayout extends StatelessWidget {
               child: FadeTransition(
                 opacity: opacity,
                 child: Padding(
+                  // Low on the screen, away from the logo.
                   padding: EdgeInsets.fromLTRB(
-                      32, 0, 32, (large ? 64 : 40) + padding.bottom),
+                      32, 0, 32, (large ? 40 : 20) + padding.bottom),
                   child: words,
                 ),
               ),

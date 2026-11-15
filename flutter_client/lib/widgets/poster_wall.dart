@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../services/app_mode_service.dart';
 
-/// The tilted, endlessly scrolling wall of book / album / movie artwork
+/// The tilted, endlessly scrolling wall of movie and anime artwork (book /
+/// album too, when those modes are on)
 /// behind the welcome screen and the app-wide status screens (update,
 /// maintenance, offline). Uses bundled assets, so it renders instantly and
 /// works without a connection.
@@ -12,10 +13,21 @@ class PosterWall extends StatelessWidget {
   final double scale;
 
   /// How far down the wall (0 top, 1 bottom) its middle row of movies runs:
-  /// through the welcome screen's logo, wherever that sits.
+  /// through the welcome screen's logo, wherever that sits. With movies
+  /// and anime ([twoKinds]), their two rows are centred on it instead: the
+  /// movie row just above, the anime row just below.
   final double focus;
 
   const PosterWall({super.key, this.scale = 1.0, this.focus = 0.5});
+
+  /// Rows of movies and anime in turn: where anime is Ramen's
+  /// (AppModeService.splitsAnime) and Books and Music are off.
+  static bool get twoKinds =>
+      AppModeService.splitsAnime && !AppModeService.booksAndMusic;
+
+  /// A row's full height, its gap included, at [scale] 1: what sizes the
+  /// wall to fit two rows in the welcome screen's logo (FrostedLogoLayout).
+  static const double rowExtent = 155.0 + 8;
 
   static const _movieAssets = [
     'assets/welcome/movies/movie_1.jpg',
@@ -54,16 +66,28 @@ class PosterWall extends StatelessWidget {
   // needs them to fill it.
   static const _minRows = 6;
 
-  static const _books = 0, _music = 1, _movies = 2;
+  static const _animeAssets = [
+    'assets/welcome/anime/anime_1.jpg',
+    'assets/welcome/anime/anime_2.jpg',
+    'assets/welcome/anime/anime_3.jpg',
+    'assets/welcome/anime/anime_4.jpg',
+    'assets/welcome/anime/anime_5.jpg',
+    'assets/welcome/anime/anime_6.jpg',
+    'assets/welcome/anime/anime_7.jpg',
+    'assets/welcome/anime/anime_8.jpg',
+  ];
 
-  /// Books, music and movies in turn, counted from the middle row ([middle]),
-  /// which is movies.
-  /// Where there are no Books and Music modes (now everywhere; always in
-  /// the desktop app and on a TV), every row is movies.
-  static int _kindOf(int rowIndex, int middle) =>
-      AppModeService.booksAndMusic && AppModeService.canSwitchMode
-      ? ((rowIndex - middle + _movies) % 3 + 3) % 3
-      : _movies;
+  static const _books = 0, _music = 1, _movies = 2, _anime = 3;
+
+  /// Each row's artwork, counted from the middle row ([middle]), which is
+  /// movies: movies and anime in turn ([twoKinds]); books, music and
+  /// movies in turn when those modes are on; else (a TV) every row movies.
+  static int _kindOf(int rowIndex, int middle) {
+    if (twoKinds) return (rowIndex - middle).isEven ? _movies : _anime;
+    return AppModeService.booksAndMusic && AppModeService.canSwitchMode
+        ? ((rowIndex - middle + _movies) % 3 + 3) % 3
+        : _movies;
+  }
 
   double _rowHeight(int kind) => ((kind == _music ? 135.0 : 155.0) + 8) * scale;
 
@@ -71,6 +95,7 @@ class PosterWall extends StatelessWidget {
     final assets = switch (kind) {
       _books => _bookAssets,
       _music => _musicAssets,
+      _anime => _animeAssets,
       _ => _movieAssets,
     };
     final isMusic = kind == _music;
@@ -100,7 +125,10 @@ class PosterWall extends StatelessWidget {
           constraints.maxHeight.isFinite ? constraints.maxHeight : 800.0;
       // How far the middle row is moved off the wall's centre to sit at
       // [focus]; the wall needs that many more rows above or below.
-      final shift = (focus - 0.5) * height;
+      // With movies and anime, the middle (movie) row half a row above it,
+      // the anime row below it half a row under.
+      final shift = (focus - 0.5) * height -
+          (twoKinds ? rowExtent * scale / 2 : 0);
       // Rows average (155 + 135 + 155) / 3 tall, plus their gap; a couple
       // more than fit, as the tilt pulls the corners in. An odd count, so
       // there's a middle row.

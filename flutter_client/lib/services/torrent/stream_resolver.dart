@@ -96,11 +96,10 @@ class StreamResolver {
             (!cinemaOnly || _isHomeRelease(s, title)) &&
             !_isExtra(s, title) &&
             !(type != 'movie' && (season ?? 1) > 0 && _isSpecial(s, title)) &&
-            _fitsTitle(s, title))
+            _fitsTitle(s, title) &&
+            // Never a fan edit, not even when there's nothing else.
+            !_isCustomEdit(s, title))
         .toList();
-    // Fan edits only when there's nothing else.
-    final unedited = streams.where((s) => !_isCustomEdit(s, title)).toList();
-    if (unedited.isNotEmpty) streams = unedited;
     // English audio for titles made in English. For one made in another
     // language, the audio chosen for it (AudioLanguageService, the
     // original by default): for, say, a Tamil film, an untagged (assumed

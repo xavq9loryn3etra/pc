@@ -26,6 +26,7 @@ import 'widgets/tv_focus.dart';
 import 'widgets/tv_screen_scale.dart';
 
 import 'services/app_mode_service.dart';
+import 'enums/app_mode.dart';
 import 'services/background_download_service.dart';
 import 'services/saved_movies_service.dart';
 import 'services/tmdb_service.dart';
@@ -519,6 +520,15 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       scrollBehavior: const _AppScrollBehavior(),
       theme: AppTheme.darkTheme,
       builder: (context, child) {
+        // In the open mode's colours: Ramen's orange in Ramen.
+        final appChild = child;
+        final themed = appChild == null
+            ? null
+            : ValueListenableBuilder<AppMode>(
+                valueListenable: AppModeService().currentMode,
+                builder: (context, mode, _) =>
+                    Theme(data: AppTheme.themeFor(mode), child: appChild),
+              );
         // `child` is the app's whole Navigator — swapping it out for
         // NoInternetOverlay (instead of stacking on top of it) unmounts the
         // Navigator entirely, destroying whatever route the user was on. On
@@ -543,7 +553,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    if (child != null) child,
+                    if (themed != null) themed,
                     AnimatedSwitcher(
                       duration: const Duration(milliseconds: 350),
                       child: _isOffline

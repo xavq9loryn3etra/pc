@@ -957,7 +957,7 @@ class _ProgressBar extends StatelessWidget {
         widthFactor: progress.clamp(0.0, 1.0),
         child: Container(
           decoration: BoxDecoration(
-            color: AppTheme.primaryColor,
+            color: AppTheme.accent,
             borderRadius: BorderRadius.circular(2),
           ),
         ),

@@ -322,13 +322,14 @@ class GlassActionButton extends StatelessWidget {
 class GlassSwitch extends StatelessWidget {
   final bool value;
   final ValueChanged<bool> onChanged;
-  final Color activeColor;
+  // The open mode's accent unless given (see AppTheme.accent).
+  final Color? activeColor;
 
   const GlassSwitch({
     super.key,
     required this.value,
     required this.onChanged,
-    this.activeColor = AppTheme.primaryColor,
+    this.activeColor,
   });
 
   static const _duration = Duration(milliseconds: 180);
@@ -355,7 +356,7 @@ class GlassSwitch extends StatelessWidget {
                 height: 32,
                 padding: const EdgeInsets.all(3),
                 decoration: ShapeDecoration(
-                  color: value ? activeColor : kGlassTint,
+                  color: value ? (activeColor ?? AppTheme.accent) : kGlassTint,
                   shape: StadiumBorder(
                     side: BorderSide(
                         color: value ? Colors.transparent : kGlassEdge),

@@ -507,7 +507,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                       liked
                           ? Icons.favorite_rounded
                           : Icons.favorite_border_rounded,
-                      color: liked ? AppTheme.primaryColor : Colors.white,
+                      color: liked ? AppTheme.accent : Colors.white,
                     ),
                     label: 'My List',
                   ),

@@ -5695,7 +5695,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                               ),
                                                               activeTrackColor:
                                                                   AppTheme
-                                                                      .primaryColor,
+                                                                      .accent,
                                                               secondaryActiveTrackColor:
                                                                   Colors.white
                                                                       .withValues(

@@ -222,7 +222,7 @@ class MovieHeroBanner extends StatelessWidget {
                                   ? Icons.favorite_rounded
                                   : Icons.favorite_border_rounded,
                               color: liked
-                                  ? AppTheme.primaryColor
+                                  ? AppTheme.accent
                                   : Colors.white,
                               semanticLabel: liked ? 'Unlike' : 'Like',
                             ),

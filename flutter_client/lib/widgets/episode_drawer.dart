@@ -294,7 +294,7 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                           "Season ${s.seasonNumber}",
                           style: TextStyle(
                             color: s.seasonNumber == widget.currentSeason
-                                ? AppTheme.primaryColor
+                                ? AppTheme.accent
                                 : Colors.white,
                             fontSize: 13,
                             fontWeight: s.seasonNumber == widget.currentSeason
@@ -370,7 +370,7 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                     // frosted/glow visual language.
                     if (isCurrent)
                       BoxShadow(
-                        color: AppTheme.primaryColor.withOpacity(0.35),
+                        color: AppTheme.accent.withOpacity(0.35),
                         blurRadius: 14,
                         spreadRadius: -6,
                         offset: const Offset(0, 6),
@@ -445,7 +445,7 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                               widthFactor: progress.clamp(0.0, 1.0),
                               child: Container(
                                   color: isCurrent
-                                      ? AppTheme.primaryColor
+                                      ? AppTheme.accent
                                       : Colors.white70),
                             ),
                           ),
@@ -487,8 +487,8 @@ class _EpisodeDrawerState extends State<EpisodeDrawer>
                               gradient: LinearGradient(
                                 colors: [
                                   Colors.transparent,
-                                  AppTheme.primaryColor,
-                                  AppTheme.primaryColor,
+                                  AppTheme.accent,
+                                  AppTheme.accent,
                                   Colors.transparent,
                                 ],
                               ),

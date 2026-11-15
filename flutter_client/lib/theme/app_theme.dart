@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../enums/app_mode.dart';
+import '../services/app_mode_service.dart';
+
 class AppTheme {
   // Brand Colors
   static const Color primaryColor = Color(0xFFFDEDAD); // Cream Yellow
@@ -38,14 +41,28 @@ class AppTheme {
   // Computed once and cached — this used to be a `static get` that rebuilt
   // the whole ThemeData (including the GoogleFonts.outfitTextTheme call)
   // every time MaterialApp's theme was read, i.e. on every MyApp rebuild.
-  static final ThemeData darkTheme = _buildDarkTheme();
+  static final ThemeData darkTheme = _buildDarkTheme(primaryColor);
 
-  static ThemeData _buildDarkTheme() {
+  // Ramen's: the same, in its orange.
+  static final ThemeData _ramenTheme = _buildDarkTheme(AppMode.ramenOrange);
+
+  /// The theme for [mode]: Ramen's in its orange, the rest Popcorn's cream.
+  static ThemeData themeFor(AppMode mode) =>
+      mode == AppMode.anime ? _ramenTheme : darkTheme;
+
+  /// The open mode's accent for what's watched: the player's progress
+  /// bar, progress on posters and episodes, the liked heart. Ramen's
+  /// orange in Ramen, Popcorn's cream otherwise.
+  static Color get accent => AppModeService().currentMode.value == AppMode.anime
+      ? AppMode.ramenOrange
+      : primaryColor;
+
+  static ThemeData _buildDarkTheme(Color primary) {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
       scaffoldBackgroundColor: scaffoldColor,
-      primaryColor: primaryColor,
+      primaryColor: primary,
 
       // One way of moving between screens everywhere, Apple's: a slide in
       // from the side, and back with a swipe from the left edge. Pages
@@ -63,8 +80,8 @@ class AppTheme {
       ),
 
       // Color Scheme
-      colorScheme: const ColorScheme.dark(
-        primary: primaryColor,
+      colorScheme: ColorScheme.dark(
+        primary: primary,
         secondary: accentColor,
         surface: surfaceColor,
         background: scaffoldColor,

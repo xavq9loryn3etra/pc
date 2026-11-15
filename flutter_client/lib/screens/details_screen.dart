@@ -246,7 +246,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     final liked = SavedMoviesService().isFavorite(widget.movie.id, type: widget.movie.type);
     return Icon(
       liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-      color: liked ? AppTheme.primaryColor : Colors.white,
+      color: liked ? AppTheme.accent : Colors.white,
     );
   }
 

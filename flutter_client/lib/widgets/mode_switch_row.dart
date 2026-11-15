@@ -96,8 +96,10 @@ class ModeOption extends StatefulWidget {
   /// A mode card's width when it isn't the chosen one.
   static const double compactWidth = 90;
 
-  /// How long the cards take to resize.
-  static const Duration resize = Duration(milliseconds: 320);
+  /// How long the cards take to resize — and everything on them to
+  /// change with it, on one curve ([curve]), so it moves as one.
+  static const Duration resize = Duration(milliseconds: 380);
+  static const Curve curve = Curves.easeInOutCubic;
 
   /// Whether it's the chosen mode: the wide card, in its colour.
   final bool selected;
@@ -140,7 +142,8 @@ class _ModeOptionState extends State<ModeOption> {
             label: mode.label,
             child: AnimatedOpacity(
               opacity: isSelected ? 1 : _kUnchosenOpacity,
-              duration: const Duration(milliseconds: 200),
+              duration: ModeOption.resize,
+              curve: ModeOption.curve,
               child: SvgPicture.asset(
                 mode.logoAsset,
                 height: widget.size,
@@ -170,7 +173,7 @@ class _ModeOptionState extends State<ModeOption> {
               curve: Curves.easeOut,
               child: AnimatedContainer(
                 duration: ModeOption.resize,
-                curve: Curves.easeOutCubic,
+                curve: ModeOption.curve,
                 width: widget.width,
                 height: 88,
                 decoration: BoxDecoration(
@@ -187,45 +190,47 @@ class _ModeOptionState extends State<ModeOption> {
                   ),
                 ),
                 clipBehavior: Clip.hardEdge,
-                // The line beside the logo only once there's room for it,
-                // fading in as the card widens (and out as it narrows).
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final roomy = isSelected &&
-                        constraints.maxWidth >= ModeOption.compactWidth + 110;
-                    // The logo centred; on the chosen card, the line
-                    // centred under it.
-                    return Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        badge,
-                        if (roomy) ...[
-                          const SizedBox(height: 6),
-                          TweenAnimationBuilder<double>(
-                            tween: Tween(begin: 0, end: 1),
-                            duration: const Duration(milliseconds: 250),
-                            builder: (context, t, line) =>
-                                Opacity(opacity: t, child: line),
-                            child: Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 12),
-                              child: Text(
-                                mode.tagline,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.7),
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
+                // The logo centred, gliding up as the line under it fades
+                // in (and back as it fades out) — with the card's resize,
+                // on its curve. The line's laid out at its full width all
+                // along and just clipped by the card, so nothing jumps or
+                // reflows as it widens or narrows.
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: AnimatedPadding(
+                        duration: ModeOption.resize,
+                        curve: ModeOption.curve,
+                        padding: EdgeInsets.only(bottom: isSelected ? 22 : 0),
+                        child: badge,
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 13,
+                      height: 18,
+                      child: AnimatedOpacity(
+                        opacity: isSelected ? 1 : 0,
+                        duration: ModeOption.resize,
+                        curve: ModeOption.curve,
+                        child: OverflowBox(
+                          maxWidth: double.infinity,
+                          child: Text(
+                            mode.tagline,
+                            maxLines: 1,
+                            softWrap: false,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.7),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
-                        ],
-                      ],
-                    );
-                  },
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),

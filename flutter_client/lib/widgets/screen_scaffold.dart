@@ -98,14 +98,18 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
     if (glow == null) return body;
     return Stack(
       children: [
+        // Each on a layer of its own: the glow's drift doesn't redraw the
+        // page, and the page changing (the mode cards resizing) doesn't
+        // redraw the glow's big gradients on every frame, which halved
+        // the frame rate on a Galaxy S10.
         Positioned(
           top: 0,
           left: 0,
           right: 0,
           height: MediaQuery.sizeOf(context).height * 0.55,
-          child: TabGlow(colors: glow),
+          child: RepaintBoundary(child: TabGlow(colors: glow)),
         ),
-        Positioned.fill(child: body),
+        Positioned.fill(child: RepaintBoundary(child: body)),
       ],
     );
   }

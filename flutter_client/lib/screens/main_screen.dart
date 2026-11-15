@@ -73,6 +73,11 @@ class _MainScreenState extends State<MainScreen> {
         valueListenable: AppModeService().currentMode,
         builder: (context, mode, child) {
           return PageTransitionSwitcher(
+            // From Settings' mode switch, at once: the same tab, in the
+            // other mode's colours (a fade through black flashed there).
+            duration: AppModeService().switchKeepsTab
+                ? Duration.zero
+                : const Duration(milliseconds: 300),
             transitionBuilder: (
               Widget child,
               Animation<double> primaryAnimation,

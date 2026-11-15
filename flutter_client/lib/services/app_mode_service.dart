@@ -18,6 +18,9 @@ class AppModeService {
 
   final ValueNotifier<AppMode> currentMode = ValueNotifier(AppMode.movies);
 
+  /// Whether the last mode change kept the open tab (see [setMode]).
+  bool switchKeepsTab = false;
+
   /// Books and Music are switched off everywhere for now, so every device
   /// is Popcorn only: no three-mode introduction, no mode selector after
   /// the splash, no mode switch in Settings, and a movies-only welcome.
@@ -81,6 +84,10 @@ class AppModeService {
   /// Switches to [mode], opening its home — or, with [keepTab], the tab
   /// that's open (Settings, where the switch is: it stays there).
   Future<void> setMode(AppMode mode, {bool keepTab = false}) async {
+    // Read by MainScreen as the mode changes: staying on the same tab
+    // (Settings), the screen swaps at once rather than fading through
+    // black — only its colours change.
+    switchKeepsTab = keepTab;
     currentMode.value = mode;
     if (!keepTab) MovieTabService().currentTab.value = BottomNavTab.home;
     final prefs = await SharedPreferences.getInstance();

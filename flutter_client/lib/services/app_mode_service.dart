@@ -78,9 +78,11 @@ class AppModeService {
     }
   }
 
-  Future<void> setMode(AppMode mode) async {
+  /// Switches to [mode], opening its home — or, with [keepTab], the tab
+  /// that's open (Settings, where the switch is: it stays there).
+  Future<void> setMode(AppMode mode, {bool keepTab = false}) async {
     currentMode.value = mode;
-    MovieTabService().currentTab.value = BottomNavTab.home;
+    if (!keepTab) MovieTabService().currentTab.value = BottomNavTab.home;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_storageKey, mode.index);
   }

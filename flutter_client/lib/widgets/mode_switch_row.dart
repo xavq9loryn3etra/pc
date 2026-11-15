@@ -12,14 +12,35 @@ import '../services/app_mode_service.dart';
 /// they resize smoothly as the mode changes. Shared by the Settings screen
 /// and the mode selector so both always look the same.
 ///
-/// [onSelected] defaults to just switching the mode in place (Settings);
-/// the mode selector passes its own to also navigate into the app.
-class ModeSwitchRow extends StatelessWidget {
+/// [onSelected] defaults to switching the mode in place (Settings): the
+/// cards finish resizing first, then the mode changes with Settings still
+/// open. The mode selector passes its own to also navigate into the app.
+class ModeSwitchRow extends StatefulWidget {
   final ValueChanged<AppMode>? onSelected;
 
   const ModeSwitchRow({super.key, this.onSelected});
 
+  @override
+  State<ModeSwitchRow> createState() => _ModeSwitchRowState();
+}
+
+class _ModeSwitchRowState extends State<ModeSwitchRow> {
   static const double _gap = 12;
+
+  // The mode tapped in Settings, shown chosen while the cards resize to
+  // it, before the mode itself changes (see _pick).
+  AppMode? _picked;
+
+  void _pick(AppMode mode) {
+    final onSelected = widget.onSelected;
+    if (onSelected != null) return onSelected(mode);
+    if (mode == AppModeService().currentMode.value || _picked != null) return;
+    setState(() => _picked = mode);
+    // Once the cards have resized: the mode, staying on Settings.
+    Future.delayed(ModeOption.resize + const Duration(milliseconds: 60), () {
+      AppModeService().setMode(mode, keepTab: true);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -36,6 +57,7 @@ class ModeSwitchRow extends StatelessWidget {
             final chosenWidth = (constraints.maxWidth -
                     others * (ModeOption.compactWidth + _gap))
                 .clamp(ModeOption.compactWidth, double.infinity);
+            final chosen = _picked ?? current;
             return Row(
               children: [
                 for (final (i, mode) in modes.indexed) ...[
@@ -43,12 +65,11 @@ class ModeSwitchRow extends StatelessWidget {
                   ModeOption(
                     mode: mode,
                     size: 34,
-                    width: mode == current
+                    selected: mode == chosen,
+                    width: mode == chosen
                         ? chosenWidth
                         : ModeOption.compactWidth,
-                    onTap: () => onSelected != null
-                        ? onSelected!(mode)
-                        : AppModeService().setMode(mode),
+                    onTap: () => _pick(mode),
                   ),
                 ],
               ],
@@ -75,10 +96,17 @@ class ModeOption extends StatefulWidget {
   /// A mode card's width when it isn't the chosen one.
   static const double compactWidth = 90;
 
+  /// How long the cards take to resize.
+  static const Duration resize = Duration(milliseconds: 320);
+
+  /// Whether it's the chosen mode: the wide card, in its colour.
+  final bool selected;
+
   const ModeOption({
     super.key,
     required this.mode,
     required this.onTap,
+    required this.selected,
     this.size = 48.0,
     this.width = compactWidth,
   });
@@ -90,7 +118,6 @@ class ModeOption extends StatefulWidget {
 class _ModeOptionState extends State<ModeOption> {
   bool _pressed = false;
 
-  static const _resize = Duration(milliseconds: 320);
 
   void _setPressed(bool value) {
     if (_pressed != value) setState(() => _pressed = value);
@@ -100,10 +127,9 @@ class _ModeOptionState extends State<ModeOption> {
   Widget build(BuildContext context) {
     final mode = widget.mode;
 
-    return ValueListenableBuilder<AppMode>(
-      valueListenable: AppModeService().currentMode,
-      builder: (context, currentMode, child) {
-        final isSelected = currentMode == mode;
+    return Builder(
+      builder: (context) {
+        final isSelected = widget.selected;
         final modeColor = mode.accentColor;
 
         // The logo alone: it's the mode's name already. In its own
@@ -143,7 +169,7 @@ class _ModeOptionState extends State<ModeOption> {
               duration: const Duration(milliseconds: 120),
               curve: Curves.easeOut,
               child: AnimatedContainer(
-                duration: _resize,
+                duration: ModeOption.resize,
                 curve: Curves.easeOutCubic,
                 width: widget.width,
                 height: 88,

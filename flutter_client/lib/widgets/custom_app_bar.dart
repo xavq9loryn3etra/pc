@@ -28,6 +28,11 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   final double? titleSpacing;
   final double? leadingWidth;
 
+  /// The home's scroll: once it's scrolled, the logo sits on a frosted
+  /// island, fading in over the first 200px (as the glass bar used to),
+  /// instead of a glass bar or a dark fade across the top.
+  final ScrollController? logoIslandScroll;
+
   const CustomAppBar({
     super.key,
     this.title,
@@ -45,6 +50,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.centerTitle = false,
     this.titleSpacing,
     this.leadingWidth,
+    this.logoIslandScroll,
   });
 
   @override
@@ -127,7 +133,11 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
       leadingWidth: leadingWidth,
       title: GestureDetector(
         onLongPress: onLogoLongPress,
-        child: title ?? _buildDefaultLogo(),
+        child: title ??
+            (logoIslandScroll == null
+                ? _buildDefaultLogo()
+                : _LogoIsland(
+                    scroll: logoIslandScroll!, child: _buildDefaultLogo())),
       ),
       backgroundColor: Colors.transparent,
       flexibleSpace: opacity > 0.01
@@ -193,5 +203,56 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
             ),
           const SizedBox(width: 16),
         ];
+  }
+}
+
+/// The home's logo on a frosted island — the bottom nav bar's glass, as a
+/// pill — that fades in as the page scrolls (fully there by 200px). Only
+/// the island fades: the logo itself always shows.
+class _LogoIsland extends StatelessWidget {
+  final ScrollController scroll;
+  final Widget child;
+
+  const _LogoIsland({required this.scroll, required this.child});
+
+  static const _padding = EdgeInsets.symmetric(horizontal: 16, vertical: 8);
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: scroll,
+      builder: (context, logo) {
+        final offset = scroll.hasClients ? scroll.offset : 0.0;
+        final shown = (offset / 200).clamp(0.0, 1.0);
+        return Stack(
+          children: [
+            // No glass at all at the top, rather than a faded-out one.
+            if (shown > 0.01)
+              Positioned.fill(
+                child: Opacity(
+                  opacity: shown,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    // Grouped with the bottom nav bar's glass: at opposite
+                    // ends of the screen, they never overlap.
+                    child: GlassBlur(
+                      grouped: true,
+                      child: DecoratedBox(
+                        decoration: ShapeDecoration(
+                          color: kGlassTint,
+                          shape: StadiumBorder(
+                              side: BorderSide(color: kGlassEdge)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            Padding(padding: _padding, child: logo),
+          ],
+        );
+      },
+      child: child,
+    );
   }
 }

@@ -65,6 +65,21 @@ enum AppMode {
     }
   }
 
+  /// A short line on what it has: beside the logo on the chosen mode's
+  /// card in the mode switch (ModeSwitchRow).
+  String get tagline {
+    switch (this) {
+      case AppMode.movies:
+        return 'Movies & TV shows';
+      case AppMode.music:
+        return 'Music';
+      case AppMode.books:
+        return 'Books';
+      case AppMode.anime:
+        return 'Anime series & films';
+    }
+  }
+
   /// Whether the logo is drawn in its own colours (Ramen's bowl), rather
   /// than one shape tinted with [accentColor].
   bool get logoHasOwnColors => this == AppMode.anime;

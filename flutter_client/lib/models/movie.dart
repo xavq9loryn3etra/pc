@@ -23,6 +23,10 @@ class Movie {
   // ISO 639-1 code of the language it was made in ("en", "ta", "ja"),
   // from TMDB. Details only, not persisted.
   final String? originalLanguage;
+  // Japanese animation (TMDB's Animation genre, made in Japanese): Ramen's,
+  // and kept out of Popcorn where there's Ramen (AppModeService.belongsIn).
+  // Persisted; entries saved before it was are taken as not anime.
+  final bool isAnime;
 
   // Extra Details
   final String? director;
@@ -128,6 +132,7 @@ class Movie {
     required this.inCinemas,
     this.releaseDateRaw,
     this.homeReleaseRaw,
+    this.isAnime = false,
     this.lastAirYear,
     this.originalLanguage,
     this.director,
@@ -164,6 +169,7 @@ class Movie {
       'type': type,
       'in_cinemas': inCinemas,
       'release_date_raw': releaseDateRaw,
+      'anime': isAnime,
       'trailer_url': trailerUrl,
       'imdb_id': imdbId,
       'current_season': currentSeason,
@@ -204,6 +210,7 @@ class Movie {
       type: str('type') ?? 'movie',
       inCinemas: json['in_cinemas'] == true,
       releaseDateRaw: str('release_date_raw'),
+      isAnime: json['anime'] == true,
       trailerUrl: str('trailer_url'),
       imdbId: str('imdb_id'),
       currentSeason: integer('current_season'),

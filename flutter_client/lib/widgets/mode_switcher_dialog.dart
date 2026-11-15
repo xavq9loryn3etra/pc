@@ -105,33 +105,16 @@ class ModeSwitcherDialog extends StatelessWidget {
                           return Row(
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
-                              _buildModeOption(
-                                context,
-                                mode: AppMode.movies,
-                                assetPath: 'assets/logo.svg',
-                                isSvg: true,
-                                size: 32.0,
-                                label: "Popcorn",
-                                color: AppMode.movies.accentColor,
-                              ),
-                              _buildModeOption(
-                                context,
-                                mode: AppMode.music,
-                                assetPath: 'assets/music-app-logo.svg',
-                                isSvg: true,
-                                size: 32.0,
-                                label: "Groovy",
-                                color: AppMode.music.accentColor,
-                              ),
-                              _buildModeOption(
-                                context,
-                                mode: AppMode.books,
-                                assetPath: 'assets/book-app-logo.svg',
-                                isSvg: true,
-                                size: 32.0,
-                                label: "Library",
-                                color: AppMode.books.accentColor,
-                              ),
+                              for (final mode in AppModeService.modes)
+                                _buildModeOption(
+                                  context,
+                                  mode: mode,
+                                  assetPath: mode.logoAsset,
+                                  isSvg: true,
+                                  size: 32.0,
+                                  label: mode.label,
+                                  color: mode.accentColor,
+                                ),
                             ],
                           );
                         },
@@ -209,13 +192,18 @@ class ModeSwitcherDialog extends StatelessWidget {
                     height: 48, // Fixed height for alignment
                     child: Center(
                       child: isSvg
-                          ? SvgPicture.asset(
-                              assetPath,
-                              height: size,
-                              width: size,
-                              colorFilter: ColorFilter.mode(
-                                isSelected ? color : Colors.white70,
-                                BlendMode.srcIn,
+                          // In its own colours, faded when not chosen
+                          // (as ModeSwitchRow's).
+                          ? AnimatedOpacity(
+                              opacity: isSelected ? 1 : 0.35,
+                              duration: const Duration(milliseconds: 200),
+                              child: SvgPicture.asset(
+                                assetPath,
+                                height: size,
+                                width: size,
+                                colorFilter: mode.logoHasOwnColors
+                                    ? null
+                                    : ColorFilter.mode(color, BlendMode.srcIn),
                               ),
                             )
                           : Image.asset(

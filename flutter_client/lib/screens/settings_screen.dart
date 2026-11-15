@@ -10,7 +10,6 @@ import '../widgets/glass_dialog.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/shimmer_loader.dart';
 import '../widgets/mode_switch_row.dart';
-import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import '../services/tv_device.dart';
 import '../services/backup_service.dart';
@@ -39,7 +38,7 @@ class SettingsScreen extends StatelessWidget {
             // tablets only — a computer or a TV is on Wi-Fi or a cable,
             // where the head start always downloads.
             final showStorage =
-                AppModeService().currentMode.value == AppMode.movies &&
+                AppModeService().currentMode.value.isVideo &&
                     !FeatureFlagsService().hidePlayback.value &&
                     !isComputer &&
                     !TvDevice.isTv;

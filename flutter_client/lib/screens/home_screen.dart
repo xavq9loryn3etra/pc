@@ -3,7 +3,9 @@ import 'dart:math';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../enums/app_mode.dart';
 import '../models/movie.dart';
+import '../services/app_mode_service.dart';
 import '../services/tmdb_service.dart';
 import 'details_screen.dart';
 import '../widgets/hero_banner.dart';
@@ -18,8 +20,12 @@ import '../widgets/custom_app_bar.dart';
 import '../widgets/glass_dialog.dart';
 import '../widgets/smooth_scroll_controller.dart';
 
+/// A video mode's home: Popcorn's ([AppMode.movies]) or Ramen's
+/// ([AppMode.anime]), the same page with each one's own lists.
 class MovieHomeScreen extends StatefulWidget {
-  const MovieHomeScreen({super.key});
+  final AppMode mode;
+
+  const MovieHomeScreen({super.key, this.mode = AppMode.movies});
 
   /// True once the home has loaded and its skeleton started fading, for
   /// MovieTabShell's bottom nav bar to make its entrance then. Stays true
@@ -36,15 +42,22 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
   // the Home tab. Caching the loaded data at the class level survives that
   // recreation, so we only hit the network once per app session instead of
   // re-fetching (and re-rolling the random featured movie) every time.
-  static List<Movie>? _cachedTrending;
-  static List<Movie>? _cachedTopRated;
-  static Movie? _cachedFeatured;
+  // Per mode: Popcorn's and Ramen's homes each load their own.
+  static final Map<AppMode, _HomeData> _cache = {};
+
+  AppMode get _mode => widget.mode;
+  bool get _isRamen => _mode == AppMode.anime;
+  String get _rankLabel =>
+      _isRamen ? 'Popular Right Now' : 'Trending This Week';
 
   final TMDBService _tmdb = TMDBService();
   final ScrollController _scrollController = SmoothScrollController();
 
   List<Movie> _trendingMovies = [];
   List<Movie> _topRatedMovies = [];
+  // Ramen's rows between those two: this season's series, then films.
+  List<Movie> _newSeries = [];
+  List<Movie> _films = [];
   Movie? _featuredMovie;
 
   bool _loading = true;
@@ -66,10 +79,13 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
   @override
   void initState() {
     super.initState();
-    if (_cachedTrending != null) {
-      _trendingMovies = _cachedTrending!;
-      _topRatedMovies = _cachedTopRated!;
-      _featuredMovie = _cachedFeatured;
+    final cached = _cache[_mode];
+    if (cached != null) {
+      _trendingMovies = cached.trending;
+      _topRatedMovies = cached.topRated;
+      _newSeries = cached.newSeries;
+      _films = cached.films;
+      _featuredMovie = cached.featured;
       _loading = false;
       _skeletonDone = true;
       MovieHomeScreen.revealed.value = true;
@@ -80,11 +96,30 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
 
   Future<void> _loadData() async {
     try {
-      final trending = await _tmdb.getTrending();
-
-      // Simulate "Top Rated" for now by fetching action movies or similar
-      // Ideally we add a getTopRated() method to TMDBService later
-      final topRated = trending.reversed.toList();
+      final List<Movie> trending;
+      final List<Movie> topRated;
+      var newSeries = const <Movie>[];
+      var films = const <Movie>[];
+      if (_isRamen) {
+        final lists = await Future.wait([
+          _tmdb.popularAnimeSeries(),
+          _tmdb.topRatedAnimeSeries(),
+          _tmdb.newAnimeSeries(),
+          _tmdb.popularAnimeFilms(),
+        ]);
+        trending = lists[0];
+        topRated = lists[1];
+        newSeries = lists[2];
+        films = lists[3];
+      } else {
+        // Anime is Ramen's, where there's Ramen.
+        trending = (await _tmdb.getTrending())
+            .where((m) => AppModeService.belongsIn(_mode, isAnime: m.isAnime))
+            .toList();
+        // Simulate "Top Rated" for now by fetching action movies or similar
+        // Ideally we add a getTopRated() method to TMDBService later
+        topRated = trending.reversed.toList();
+      }
 
       // Fetch details for featured movie (for logo)
       Movie? featured;
@@ -100,15 +135,21 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
       final resolvedFeatured =
           trending.isNotEmpty ? (featured ?? trending.first) : null;
 
-      _cachedTrending = trending;
-      _cachedTopRated = topRated;
-      _cachedFeatured = resolvedFeatured;
+      _cache[_mode] = _HomeData(
+        trending: trending,
+        topRated: topRated,
+        newSeries: newSeries,
+        films: films,
+        featured: resolvedFeatured,
+      );
 
       if (!mounted) return;
       // Still behind the skeleton (_loading stays true).
       setState(() {
         _trendingMovies = trending;
         _topRatedMovies = topRated;
+        _newSeries = newSeries;
+        _films = films;
         if (resolvedFeatured != null) {
           _featuredMovie = resolvedFeatured;
         }
@@ -211,8 +252,13 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
 
   Widget _buildContent(BuildContext context, BoxConstraints constraints) {
     final hidePlayback = FeatureFlagsService().hidePlayback.value;
-    final history =
-        hidePlayback ? const <Movie>[] : SavedMoviesService().history;
+    // Each mode's own: anime in Ramen, the rest in Popcorn.
+    final history = hidePlayback
+        ? const <Movie>[]
+        : SavedMoviesService()
+            .history
+            .where((m) => AppModeService.belongsIn(_mode, isAnime: m.isAnime))
+            .toList();
     // The hero shows More Info + Trailer (no Play button).
     final trailerUrl = _featuredMovie?.trailerUrl;
     final VoidCallback? onTrailer =
@@ -227,6 +273,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
         trendingRank: _trendingMovies
                 .indexWhere((m) => m.id == _featuredMovie!.id) +
             1,
+        rankLabel: _rankLabel,
         onTrailerHero: onTrailer,
         onInfoHero: () => _navigateToDetails(
           _featuredMovie!,
@@ -262,6 +309,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
                 trendingRank: _trendingMovies
                         .indexWhere((m) => m.id == _featuredMovie!.id) +
                     1,
+                rankLabel: _rankLabel,
                 onTrailer: onTrailer,
                 onInfo: () => _navigateToDetails(
                   _featuredMovie!,
@@ -284,16 +332,34 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
 
             // Trending Section
             _buildSection(
-              title: "Trending This Week",
+              title: _isRamen ? "Popular Right Now" : "Trending This Week",
               movies: _trendingMovies,
               heroPrefix: "trending",
             ),
 
             const SizedBox(height: 24),
 
+            if (_newSeries.isNotEmpty) ...[
+              _buildSection(
+                title: "New This Season",
+                movies: _newSeries,
+                heroPrefix: "new",
+              ),
+              const SizedBox(height: 24),
+            ],
+
+            if (_films.isNotEmpty) ...[
+              _buildSection(
+                title: "Anime Movies",
+                movies: _films,
+                heroPrefix: "films",
+              ),
+              const SizedBox(height: 24),
+            ],
+
             // Top Rated Section
             _buildSection(
-              title: "Top Rated",
+              title: _isRamen ? "Top Rated of All Time" : "Top Rated",
               movies: _topRatedMovies,
               heroPrefix: "top",
             ),
@@ -441,4 +507,21 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
       ],
     );
   }
+}
+
+/// One mode's loaded home, kept for the session (see _cache).
+class _HomeData {
+  final List<Movie> trending;
+  final List<Movie> topRated;
+  final List<Movie> newSeries;
+  final List<Movie> films;
+  final Movie? featured;
+
+  const _HomeData({
+    required this.trending,
+    required this.topRated,
+    required this.newSeries,
+    required this.films,
+    required this.featured,
+  });
 }

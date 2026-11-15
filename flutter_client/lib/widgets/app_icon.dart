@@ -15,9 +15,16 @@ class AppIcon extends StatelessWidget {
   final double size;
   final Color? color;
   final String? semanticLabel;
+  // Solid, the rings' middles filled (see silhouetteIn): Ask's tab
+  // button and its logo, as on the website.
+  final bool filled;
 
   const AppIcon(
-      {super.key, required this.size, this.color, this.semanticLabel});
+      {super.key,
+      required this.size,
+      this.color,
+      this.semanticLabel,
+      this.filled = false});
 
   /// The icon's shape, centred in [size]: for cutting it out of something
   /// (the welcome screen's frost) rather than drawing it.
@@ -31,7 +38,7 @@ class AppIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     final icon = CustomPaint(
       size: Size.square(size),
-      painter: _AppIconPainter(color ?? Colors.white),
+      painter: _AppIconPainter(color ?? Colors.white, filled: filled),
     );
     return semanticLabel == null
         ? icon
@@ -41,8 +48,9 @@ class AppIcon extends StatelessWidget {
 
 class _AppIconPainter extends CustomPainter {
   final Color color;
+  final bool filled;
 
-  const _AppIconPainter(this.color);
+  const _AppIconPainter(this.color, {this.filled = false});
 
   // In the 1024px icon's units: the rings' centreline radius, the stroke's
   // width, and each ring as (centre, where its stroke starts and how far
@@ -141,7 +149,7 @@ class _AppIconPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawPath(
-      shapeIn(size),
+      filled ? silhouetteIn(size) : shapeIn(size),
       Paint()
         ..color = color
         ..isAntiAlias = true,
@@ -149,5 +157,6 @@ class _AppIconPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_AppIconPainter old) => old.color != color;
+  bool shouldRepaint(_AppIconPainter old) =>
+      old.color != color || old.filled != filled;
 }

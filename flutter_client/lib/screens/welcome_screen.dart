@@ -44,16 +44,26 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     super.dispose();
   }
 
-  // Where the app is Popcorn only (the desktop app, a TV), it's about
-  // movies and shows alone: music and books aren't there.
-  static final _popcornOnly = !AppModeService.canSwitchMode;
+  // Where there are no Books and Music modes (now everywhere), it's about
+  // movies and shows, and anime where Ramen is (phones and iPads).
+  static final _popcornOnly =
+      !(AppModeService.booksAndMusic && AppModeService.canSwitchMode);
+  static final _withAnime = AppModeService.splitsAnime;
 
   // "TV Shows" kept together (a no-break space) where the line wraps.
-  String get _headline =>
-      _popcornOnly ? 'Movies. TV Shows.' : 'Movies. Music. Books.';
+  String get _headline => !_popcornOnly
+      ? 'Movies. Music. Books.'
+      : _withAnime
+          ? 'Movies. TV Shows. Anime.'
+          : 'Movies. TV Shows.';
 
   String get _blurb {
     final hidePlayback = FeatureFlagsService().hidePlayback.value;
+    if (_popcornOnly && _withAnime) {
+      return hidePlayback
+          ? 'Discover the latest movies, TV shows and anime, and find what to watch next.'
+          : 'Stream the latest movies, TV shows and anime, all for free.';
+    }
     if (_popcornOnly) {
       return hidePlayback
           ? 'Discover the latest movies and TV shows, and find what to watch next.'

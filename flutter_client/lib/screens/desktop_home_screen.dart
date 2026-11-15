@@ -29,6 +29,8 @@ class DesktopHomeScreen extends StatefulWidget {
   /// Where [featuredMovie] stands in TMDB's weekly trending list (1 = top),
   /// for the "#3 Trending This Week" line; 0 or less hides it.
   final int trendingRank;
+  /// What the rank's of ("Trending This Week", Ramen's "Popular Right Now").
+  final String rankLabel;
 
   const DesktopHomeScreen({
     super.key,
@@ -41,6 +43,7 @@ class DesktopHomeScreen extends StatefulWidget {
     required this.onMovieTap,
     this.onRemoveHistory,
     this.trendingRank = 0,
+    this.rankLabel = 'Trending This Week',
   });
 
   // The hero's images and decode sizes, shared by the state's build and
@@ -416,7 +419,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
         if (widget.trendingRank > 0) ...[
           const SizedBox(height: 6),
           Text(
-            '#${widget.trendingRank} Trending This Week',
+            '#${widget.trendingRank} ${widget.rankLabel}',
             style: const TextStyle(
               color: Colors.white,
               fontSize: 16,

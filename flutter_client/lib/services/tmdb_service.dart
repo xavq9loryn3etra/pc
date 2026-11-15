@@ -175,6 +175,162 @@ class TMDBService {
     }
   }
 
+  /// Anime ([isAnime]) series ([type] 'tv') or films ('movie') from
+  /// TMDB's discover, sorted by [sort] (most popular right now unless
+  /// said), [extra] narrowing it further. Ramen's lists: its home, search
+  /// and start screen.
+  Future<List<Movie>> discoverAnime(
+    String type, {
+    String sort = 'popularity.desc',
+    Map<String, Object> extra = const {},
+    int pages = 1,
+  }) async {
+    final key = 'anime_${type}_${sort}_$extra$pages';
+    if (_cache.containsKey(key) && _cache[key]!.isValid(30)) {
+      return _cache[key]!.data as List<Movie>;
+    }
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    try {
+      final responses = await Future.wait([
+        for (var page = 1; page <= pages; page++)
+          _dio.get(
+            '$_baseUrl/discover/$type',
+            queryParameters: {
+              'api_key': _apiKey,
+              'page': page,
+              'sort_by': sort,
+              'with_genres': '$animationGenre',
+              'with_original_language': 'ja',
+              'include_adult': false,
+              // Not tagged ecchi or hentai (racy anime).
+              'without_keywords': _racyKeywords,
+              // Out already: not ones only announced.
+              if (type == 'tv') 'first_air_date.lte': today,
+              if (type == 'movie') 'primary_release_date.lte': today,
+              ...extra,
+            },
+          ),
+      ]);
+      final seen = <String>{};
+      final movies = [
+        for (final response in responses) ...(response.data['results'] as List),
+      ]
+          .where((m) => !isUnsuitable(m as Map))
+          .map((m) =>
+              _formatMovie({...m as Map<String, dynamic>, 'media_type': type}))
+          .whereType<Movie>()
+          .where((m) => seen.add(m.id))
+          .toList();
+      _cache[key] = _CacheEntry(movies);
+      return movies;
+    } catch (e) {
+      print('TMDB anime $type error: $e');
+      return [];
+    }
+  }
+
+  /// Whether the title [id] of [type] ('movie' or 'tv') is anime
+  /// ([isAnime]); null if TMDB couldn't be asked. For marking titles saved
+  /// before the mark existed (SavedMoviesService.markAnime).
+  Future<bool?> isAnimeTitle(String id, String type) async {
+    try {
+      final response = await _dio.get(
+        '$_baseUrl/$type/$id',
+        queryParameters: {'api_key': _apiKey},
+      );
+      return isAnime(response.data as Map);
+    } on DioException catch (e) {
+      // Gone from TMDB: not anime, so it isn't asked about again.
+      return e.response?.statusCode == 404 ? false : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // TMDB's keywords "ecchi", "etchi", "hentai" and "hentai adaptation",
+  // any of them (| is or).
+  static const _racyKeywords = '195669|285672|198385|384581';
+
+  /// This week's trending anime of [type], most trending first: TMDB's
+  /// trending list (all kinds) narrowed to anime, so a few pages of it.
+  Future<List<Movie>> _trendingAnime(String type, {int pages = 5}) async {
+    final key = 'trending_anime_$type';
+    if (_cache.containsKey(key) && _cache[key]!.isValid(30)) {
+      return _cache[key]!.data as List<Movie>;
+    }
+    try {
+      final responses = await Future.wait([
+        for (var page = 1; page <= pages; page++)
+          _dio.get(
+            '$_baseUrl/trending/$type/week',
+            queryParameters: {'api_key': _apiKey, 'page': page},
+          ),
+      ]);
+      final seen = <String>{};
+      final movies = [
+        for (final response in responses) ...(response.data['results'] as List),
+      ]
+          .where((m) => isAnime(m as Map) && !isUnsuitable(m))
+          .map((m) =>
+              _formatMovie({...m as Map<String, dynamic>, 'media_type': type}))
+          .whereType<Movie>()
+          .where((m) => seen.add(m.id))
+          .toList();
+      _cache[key] = _CacheEntry(movies);
+      return movies;
+    } catch (e) {
+      print('TMDB trending anime $type error: $e');
+      return [];
+    }
+  }
+
+  /// [first], then any of [more] not in it already.
+  static List<Movie> _joined(List<Movie> first, List<Movie> more) {
+    final ids = {for (final m in first) m.id};
+    return [...first, ...more.where((m) => ids.add(m.id))];
+  }
+
+  /// The anime series people are watching right now: this week's
+  /// trending, then well-known ones with an episode out this week.
+  /// (TMDB's own popularity put years-old children's shows first.)
+  Future<List<Movie>> popularAnimeSeries() async {
+    final now = DateTime.now();
+    String day(DateTime d) => d.toIso8601String().substring(0, 10);
+    final lists = await Future.wait([
+      _trendingAnime('tv'),
+      discoverAnime('tv', extra: {
+        'air_date.gte': day(now.subtract(const Duration(days: 7))),
+        'air_date.lte': day(now),
+        'vote_count.gte': 100,
+      }),
+    ]);
+    return _joined(lists[0], lists[1]);
+  }
+
+  /// Anime films people are watching right now: this week's trending,
+  /// then well-known ones.
+  Future<List<Movie>> popularAnimeFilms() async {
+    final lists = await Future.wait([
+      _trendingAnime('movie', pages: 3),
+      discoverAnime('movie', extra: const {'vote_count.gte': 200}),
+    ]);
+    return _joined(lists[0], lists[1]);
+  }
+
+  /// Anime series that began in the last four months: this season's,
+  /// rated by at least a few people (which leaves out obscure ones).
+  Future<List<Movie>> newAnimeSeries() => discoverAnime('tv', extra: {
+        'first_air_date.gte': DateTime.now()
+            .subtract(const Duration(days: 120))
+            .toIso8601String()
+            .substring(0, 10),
+        'vote_count.gte': 5,
+      });
+
+  /// The best-loved anime series of all time (by enough people to count).
+  Future<List<Movie>> topRatedAnimeSeries() => discoverAnime('tv',
+      sort: 'vote_average.desc', extra: const {'vote_count.gte': 500});
+
   Future<List<Movie>> search(String query) async {
     final key = 'search_${query.toLowerCase()}';
     if (_cache.containsKey(key) && _cache[key]!.isValid(5)) {
@@ -801,7 +957,23 @@ class TMDBService {
       type: m['media_type'] ?? (isTv ? 'tv' : 'movie'),
       inCinemas: inCinemas,
       releaseDateRaw: (m['release_date'] ?? m['first_air_date'])?.toString(),
+      isAnime: isAnime(m),
     );
+  }
+
+  /// TMDB's Animation genre.
+  static const animationGenre = 16;
+
+  /// Whether the TMDB title [m] is anime: animation made in Japanese. A
+  /// list result names its genres by number (genre_ids), a details one in
+  /// full (genres).
+  static bool isAnime(Map m) {
+    if (m['original_language'] != 'ja') return false;
+    final ids = m['genre_ids'];
+    if (ids is List && ids.contains(animationGenre)) return true;
+    final genres = m['genres'];
+    return genres is List &&
+        genres.any((g) => g is Map && g['id'] == animationGenre);
   }
 
   Movie _formatMovieDetails(Map<String, dynamic> m,
@@ -1050,6 +1222,7 @@ class TMDBService {
       type: isTv ? 'tv' : 'movie',
       inCinemas: base.inCinemas,
       releaseDateRaw: base.releaseDateRaw,
+      isAnime: base.isAnime,
       homeReleaseRaw: homeReleaseRaw,
       originalLanguage: m['original_language'] as String?,
       lastAirYear: isTv

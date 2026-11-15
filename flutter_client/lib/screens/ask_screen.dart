@@ -6,9 +6,11 @@ import '../widgets/smooth_scroll_controller.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/rendering.dart'
     show RenderAbstractViewport, ScrollDirection;
 
+import '../enums/app_mode.dart';
 import '../models/movie.dart';
 import '../services/ai_service.dart';
 import '../services/tv_device.dart';
@@ -62,7 +64,10 @@ class _Turn {
 /// or two about the picks and their posters, each opening its page.
 /// Follow-ups ("something lighter") carry on from the questions before.
 class AskScreen extends StatefulWidget {
-  const AskScreen({super.key});
+  /// Whose Ask: Popcorn's, or Ramen's (anime only).
+  final AppMode mode;
+
+  const AskScreen({super.key, this.mode = AppMode.movies});
 
   @override
   State<AskScreen> createState() => _AskScreenState();
@@ -86,6 +91,17 @@ class _AskScreenState extends State<AskScreen>
     'A Malayalam thriller with a big twist',
     'Something like Money Heist',
   ];
+
+  // Ramen's.
+  static const _animeExamples = [
+    'A cosy slice of life anime',
+    'A short anime with a great ending',
+    'Something like Attack on Titan',
+    'A Studio Ghibli film for tonight',
+  ];
+
+  List<String> get _examplesHere =>
+      widget.mode == AppMode.anime ? _animeExamples : _examples;
 
   // What the shimmer says while a question's answered: a different one
   // from the last each time.
@@ -355,6 +371,7 @@ class _AskScreenState extends State<AskScreen>
       final answer = await AiService().suggest(
         request,
         history: history,
+        mode: widget.mode,
         onModel: (model) {
           if (mounted && model >= AiService.slowFrom && !turn.slow) {
             setState(() => turn.slow = true);
@@ -456,17 +473,12 @@ class _AskScreenState extends State<AskScreen>
     _measureField();
     return ScreenScaffold(
       bottomNavTab: BottomNavTab.ai,
-      // The app's icon in its iridescent finish, as on the splash screen,
-      // and its name.
-      title: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Iridescent(
-            child: const AppIcon(size: 28),
-          ),
-          const SizedBox(width: 10),
-          const Text('Ask', semanticsLabel: 'Popcorn Ask'),
-        ],
+      // The website's Ask logo (the filled app icon and "ask"), plain
+      // white.
+      title: Semantics(
+        label: 'Popcorn Ask',
+        image: true,
+        child: SvgPicture.asset('assets/ask-logo.svg', height: 30),
       ),
       body: (context, isDesktop, padding) {
         final side = isDesktop ? 60.0 : 16.0;
@@ -1086,7 +1098,7 @@ class _AskScreenState extends State<AskScreen>
           spacing: 8,
           runSpacing: 10,
           children: [
-            for (final (i, example) in _examples.indexed)
+            for (final (i, example) in _examplesHere.indexed)
               _Appear(
                 delay: Duration(milliseconds: 380 + 70 * i),
                 child: _ExamplePill(text: example, onTap: () => _ask(example)),

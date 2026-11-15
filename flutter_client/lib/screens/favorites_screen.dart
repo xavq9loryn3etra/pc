@@ -1,6 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../models/movie.dart';
+import '../services/app_mode_service.dart';
 import '../services/saved_movies_service.dart';
 import '../widgets/movie_poster.dart';
 import 'details_screen.dart';
@@ -33,7 +34,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   void _onSavedMoviesChanged() {
     // The service also notifies for watch-history updates; only rebuild
     // when the favorites themselves changed.
-    final latest = SavedMoviesService().favorites;
+    final latest = _mine();
     final changed = latest.length != _favorites.length ||
         Iterable.generate(latest.length)
             .any((i) => latest[i].id != _favorites[i].id);
@@ -47,9 +48,16 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     super.dispose();
   }
 
+  /// The favourites that are this mode's: anime in Ramen, the rest in
+  /// Popcorn (see AppModeService.belongsIn).
+  static List<Movie> _mine() => [
+        for (final m in SavedMoviesService().favorites)
+          if (AppModeService().shows(isAnime: m.isAnime)) m,
+      ];
+
   void _loadFavorites() {
     setState(() {
-      _favorites = SavedMoviesService().favorites;
+      _favorites = _mine();
     });
   }
 

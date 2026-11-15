@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import '../enums/app_mode.dart';
 import '../models/movie.dart';
+import '../services/app_mode_service.dart';
 import '../services/tmdb_service.dart';
 import '../widgets/smooth_scroll_controller.dart';
 
@@ -17,7 +19,10 @@ import '../services/tv_device.dart';
 import '../widgets/tv_focus.dart';
 
 class SearchScreen extends StatefulWidget {
-  const SearchScreen({super.key});
+  /// Whose search: Popcorn's, or Ramen's (anime only).
+  final AppMode mode;
+
+  const SearchScreen({super.key, this.mode = AppMode.movies});
 
   @override
   State<SearchScreen> createState() => _SearchScreenState();
@@ -60,9 +65,29 @@ class _SearchScreenState extends State<SearchScreen> {
   List<Movie> _trendingMovies = const [];
   List<Movie> _trendingSeries = const [];
 
+  bool get _isRamen => widget.mode == AppMode.anime;
+
+  bool _belongs(Movie m) =>
+      AppModeService.belongsIn(widget.mode, isAnime: m.isAnime);
+
   Future<void> _loadTrending() async {
-    final found = await Future.wait(
-        [_tmdb.getTrendingOf('movie'), _tmdb.getTrendingOf('tv')]);
+    if (_isRamen) {
+      // Anime films and series most watched right now.
+      final found = await Future.wait(
+          [_tmdb.popularAnimeFilms(), _tmdb.popularAnimeSeries()]);
+      if (!mounted) return;
+      setState(() {
+        _trendingMovies = found[0].take(10).toList();
+        _trendingSeries = found[1].take(10).toList();
+      });
+      return;
+    }
+    final found = await Future.wait([
+      for (final type in ['movie', 'tv'])
+        _tmdb
+            .getTrendingOf(type)
+            .then((list) => list.where(_belongs).toList()),
+    ]);
     // Movies that can be watched now, not ones still in cinemas or not out
     // yet (tapped, they'd say there's no copy): most of the week's top
     // ten were, and the next ones fill in.
@@ -154,7 +179,9 @@ class _SearchScreenState extends State<SearchScreen> {
     });
 
     try {
-      final results = await _tmdb.searchMulti(query);
+      final found = await _tmdb.searchMulti(query);
+      // Ramen finds anime only; Popcorn, where there's Ramen, the rest.
+      final results = found.where(_belongs).toList();
       // Response times vary enough that an older query's request can
       // resolve after a newer one already has — only apply this response
       // if nothing newer has been fired since, otherwise it'd silently
@@ -163,7 +190,14 @@ class _SearchScreenState extends State<SearchScreen> {
         setState(() {
           _results = results;
           _isLoading = false;
-          if (results.isEmpty) _error = "No results found.";
+          if (results.isEmpty) {
+            // What was found is all the other mode's: say where it is.
+            _error = found.isEmpty
+                ? "No results found."
+                : _isRamen
+                    ? "Ramen only has anime. Films and shows are in Popcorn."
+                    : "That's anime: you'll find it in Ramen.";
+          }
         });
       }
     } catch (e) {
@@ -185,30 +219,13 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   Widget build(BuildContext context) {
     // The field's at the foot, as Ask's is (see _searchBar); the top has
-    // the tab's name, and the back button — not on a wide window: Home is
-    // in the bar beside it.
-    final wide = windowIsWide(context);
+    // the tab's name alone, as Settings' does (no back button: Home is a
+    // tap away in the tab bar).
     // The keyboard covers the bottom nav bar, which isn't moved up with
     // this tab's content; the field then sits just above the keyboard.
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
     return ScreenScaffold(
       bottomNavTab: BottomNavTab.search,
-      leadingWidth: wide ? 0 : 16 + 40,
-      titleSpacing: wide ? 16 : 12,
-      leading: wide
-          ? const SizedBox.shrink()
-          : Align(
-              alignment: Alignment.centerRight,
-              child: GlassCircleButton(
-                icon: GlassCircleButton.backIcon,
-                iconSize: GlassCircleButton.backIconSize,
-                // Search is a bottom-nav tab, not a pushed route, so there's
-                // no route to pop — "back" here means returning to the Home
-                // tab, same as tapping the Home icon in FloatingBottomNavBar.
-                onPressed: () =>
-                    MovieTabService().currentTab.value = BottomNavTab.home,
-              ),
-            ),
       title: const Text('Search'),
       body: (context, isDesktop, padding) {
         // None in a wide window's side column (its content to its edges).
@@ -342,12 +359,12 @@ class _SearchScreenState extends State<SearchScreen> {
                       controller: _controller,
                       focusNode: _searchFocusNode,
                       style: const TextStyle(color: Colors.white, fontSize: 16),
-                      decoration: const InputDecoration(
-                        hintText: 'Movies & TV shows',
-                        hintStyle: TextStyle(color: Colors.white38),
+                      decoration: InputDecoration(
+                        hintText: _isRamen ? 'Anime' : 'Movies & TV shows',
+                        hintStyle: const TextStyle(color: Colors.white38),
                         border: InputBorder.none,
                         isDense: true,
-                        contentPadding: EdgeInsets.symmetric(vertical: 9),
+                        contentPadding: const EdgeInsets.symmetric(vertical: 9),
                       ),
                       textInputAction: TextInputAction.search,
                       onChanged: _onSearchChanged,
@@ -592,12 +609,12 @@ class _SearchScreenState extends State<SearchScreen> {
           padding: EdgeInsets.fromLTRB(pad.left, pad.top, pad.right, 0),
           sliver: SliverMainAxisGroup(slivers: [
             if (_trendingMovies.isNotEmpty) ...[
-              heading('TRENDING MOVIES'),
+              heading(_isRamen ? 'POPULAR ANIME MOVIES' : 'TRENDING MOVIES'),
               grid(_trendingMovies),
               const SliverToBoxAdapter(child: SizedBox(height: 28)),
             ],
             if (_trendingSeries.isNotEmpty) ...[
-              heading('TRENDING SERIES'),
+              heading(_isRamen ? 'POPULAR ANIME SERIES' : 'TRENDING SERIES'),
               grid(_trendingSeries),
             ],
           ]),

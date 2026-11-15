@@ -5,7 +5,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 
-/// Row of the three mode buttons (Popcorn / Groovy / Library), highlighting
+/// Row of the mode buttons (Popcorn / Ramen; Groovy / Library when they're
+/// on, see AppModeService.modes), highlighting
 /// the current mode with its outline and colour (no filled background or
 /// glow). Shared by the Settings screen and the mode selector so both
 /// always look the same.
@@ -24,7 +25,7 @@ class ModeSwitchRow extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          for (final mode in const [AppMode.movies, AppMode.music, AppMode.books])
+          for (final mode in AppModeService.modes)
             ModeOption(
               mode: mode,
               size: 32,
@@ -37,6 +38,9 @@ class ModeSwitchRow extends StatelessWidget {
     );
   }
 }
+
+/// How faded a mode's logo is while another mode's chosen.
+const _kUnchosenOpacity = 0.35;
 
 class ModeOption extends StatefulWidget {
   final AppMode mode;
@@ -106,13 +110,19 @@ class _ModeOptionState extends State<ModeOption> {
                   SizedBox(
                     height: 48,
                     child: Center(
-                      child: SvgPicture.asset(
-                        mode.logoAsset,
-                        height: widget.size,
-                        width: widget.size,
-                        colorFilter: ColorFilter.mode(
-                          isSelected ? modeColor : Colors.white70,
-                          BlendMode.srcIn,
+                      // Each logo in its own colours (Ramen's bowl as
+                      // drawn, Popcorn's cream), faded when not chosen
+                      // rather than greyed.
+                      child: AnimatedOpacity(
+                        opacity: isSelected ? 1 : _kUnchosenOpacity,
+                        duration: const Duration(milliseconds: 200),
+                        child: SvgPicture.asset(
+                          mode.logoAsset,
+                          height: widget.size,
+                          width: widget.size,
+                          colorFilter: mode.logoHasOwnColors
+                              ? null
+                              : ColorFilter.mode(modeColor, BlendMode.srcIn),
                         ),
                       ),
                     ),

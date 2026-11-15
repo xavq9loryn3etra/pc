@@ -154,12 +154,12 @@ class FloatingBottomNavBar extends StatefulWidget {
 
   /// The tabs [mode] has, left to right — Ask before Settings, though it's
   /// last in BottomNavTab (MovieTabShell's order). Ask (the AI) only
-  /// suggests movies and shows, so it's only in the movies mode.
+  /// suggests movies and shows, so it's only in Popcorn and Ramen.
   static List<BottomNavTab> tabsFor(AppMode mode) => [
         BottomNavTab.home,
         BottomNavTab.search,
         BottomNavTab.favorites,
-        if (mode == AppMode.movies) BottomNavTab.ai,
+        if (mode.isVideo) BottomNavTab.ai,
         BottomNavTab.settings,
       ];
 
@@ -168,7 +168,7 @@ class FloatingBottomNavBar extends StatefulWidget {
   static List<BottomNavTab> topTabsFor(AppMode mode) => [
         BottomNavTab.search,
         BottomNavTab.favorites,
-        if (mode == AppMode.movies) BottomNavTab.ai,
+        if (mode.isVideo) BottomNavTab.ai,
         BottomNavTab.settings,
       ];
 
@@ -294,7 +294,8 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
                   const SizedBox.square(
                     dimension: 22,
                     child: Center(
-                      child: AppIcon(size: 17, color: Colors.white),
+                      child:
+                          AppIcon(size: 17, color: Colors.white, filled: true),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -641,6 +642,7 @@ class _AiCircle extends StatelessWidget {
             child: const AppIcon(
               size: 21,
               color: Colors.white,
+              filled: true,
               semanticLabel: 'Popcorn Ask',
             ),
           ),

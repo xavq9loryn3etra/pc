@@ -28,6 +28,7 @@ import 'widgets/tv_screen_scale.dart';
 import 'services/app_mode_service.dart';
 import 'services/background_download_service.dart';
 import 'services/saved_movies_service.dart';
+import 'services/tmdb_service.dart';
 import 'services/deep_link_service.dart';
 import 'services/feature_flags_service.dart';
 import 'services/gemini_key_service.dart';
@@ -165,6 +166,13 @@ void main() async {
   // Not awaited: warms up the mode selector's background slideshow while
   // the splash plays (needs the TMDB key from .env above).
   unawaited(TrendingService().fetch(AppModeService().currentMode.value));
+
+  // Where anime is Ramen's alone: titles saved before the anime mark
+  // existed are marked, so they show in the right mode (needs the TMDB key).
+  if (AppModeService.splitsAnime) {
+    unawaited(_initStep('MarkAnime',
+        () => SavedMoviesService().markAnime(TMDBService().isAnimeTitle)));
+  }
 
   runApp(const MyApp());
 }

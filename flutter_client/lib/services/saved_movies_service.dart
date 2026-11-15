@@ -429,6 +429,7 @@ class SavedMoviesService with ChangeNotifier {
       description: movie.description,
       type: movie.type,
       inCinemas: movie.inCinemas,
+      isAnime: movie.isAnime,
       director: movie.director,
       cast: movie.cast,
       genres: movie.genres,
@@ -543,6 +544,79 @@ class SavedMoviesService with ChangeNotifier {
   Future<void> _saveHistory() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_historyKey, jsonEncode(_history));
+  }
+
+  /// Marks the titles saved before the anime mark existed (Movie.isAnime)
+  /// — in My List and Continue Watching — as anime or not, asking
+  /// [isAnime] (TMDB) about each: so anime watched before Ramen moves to
+  /// it, out of Popcorn. Run in the background after [init]; titles it
+  /// couldn't ask about (offline) are left for the next start.
+  Future<void> markAnime(
+      Future<bool?> Function(String id, String type) isAnime) async {
+    final prefs = await SharedPreferences.getInstance();
+    // Favourites are kept parsed, which loses whether the mark was there:
+    // from the stored list.
+    final unmarked = <String, (String, String)>{};
+    try {
+      final stored = prefs.getString(_favoritesKey);
+      for (final e in stored == null ? const [] : jsonDecode(stored) as List) {
+        if (e is Map && !e.containsKey('anime') && e['id'] != null) {
+          final type = '${e['type'] ?? 'movie'}';
+          unmarked['${type}_${e['id']}'] = ('${e['id']}', type);
+        }
+      }
+    } catch (_) {}
+    for (final entry in _history.values) {
+      final json = entry is Map ? entry['movie'] : null;
+      if (json is Map && !json.containsKey('anime') && json['id'] != null) {
+        final type = '${json['type'] ?? 'movie'}';
+        unmarked['${type}_${json['id']}'] = ('${json['id']}', type);
+      }
+    }
+    if (unmarked.isEmpty) return;
+
+    // A few at a time, to go easy on TMDB.
+    final found = <String, bool>{};
+    final keys = unmarked.keys.toList();
+    for (var i = 0; i < keys.length; i += 4) {
+      final batch = keys.skip(i).take(4).toList();
+      final answers = await Future.wait([
+        for (final key in batch)
+          isAnime(unmarked[key]!.$1, unmarked[key]!.$2)
+              .catchError((_) => null),
+      ]);
+      for (var j = 0; j < batch.length; j++) {
+        if (answers[j] != null) found[batch[j]] = answers[j]!;
+      }
+    }
+    if (found.isEmpty) return;
+
+    _favorites = [
+      for (final m in _favorites)
+        if (found[m.storageKey] case final anime?)
+          Movie.fromStorageJson({...m.toStorageJson(), 'anime': anime})
+        else
+          m,
+    ];
+    final favouritesChanged =
+        _favorites.any((m) => found.containsKey(m.storageKey));
+    var historyChanged = false;
+    for (final entry in _history.values) {
+      final json = entry is Map ? entry['movie'] : null;
+      if (json is! Map) continue;
+      final anime = found['${json['type'] ?? 'movie'}_${json['id']}'];
+      if (anime != null && !json.containsKey('anime')) {
+        json['anime'] = anime;
+        historyChanged = true;
+      }
+    }
+    if (favouritesChanged) await _saveFavorites();
+    if (historyChanged) await _saveHistory();
+    if (favouritesChanged || historyChanged) {
+      _historyCache = null;
+      _historyById.clear();
+      notifyListeners();
+    }
   }
 
   Future<void> _saveEpisodeHistory() async {

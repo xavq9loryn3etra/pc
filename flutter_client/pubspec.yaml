@@ -104,6 +104,8 @@ flutter:
     - assets/logo.svg
     - assets/music-app-logo.svg
     - assets/book-app-logo.svg
+    - assets/ramen-app-logo.svg
+    - assets/ask-logo.svg
     - assets/reader.html
     - assets/loader.json
     - assets/welcome/movies/

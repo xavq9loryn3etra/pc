@@ -58,9 +58,10 @@ class PosterWall extends StatelessWidget {
 
   /// Books, music and movies in turn, counted from the middle row ([middle]),
   /// which is movies.
-  /// Where the app is Popcorn only (the desktop app, a TV), every row is
-  /// movies: music and books aren't there to show.
-  static int _kindOf(int rowIndex, int middle) => AppModeService.canSwitchMode
+  /// Where there are no Books and Music modes (now everywhere; always in
+  /// the desktop app and on a TV), every row is movies.
+  static int _kindOf(int rowIndex, int middle) =>
+      AppModeService.booksAndMusic && AppModeService.canSwitchMode
       ? ((rowIndex - middle + _movies) % 3 + 3) % 3
       : _movies;
 

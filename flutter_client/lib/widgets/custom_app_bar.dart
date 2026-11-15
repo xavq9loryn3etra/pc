@@ -4,6 +4,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:vector_graphics/vector_graphics_compat.dart'
     show RenderingStrategy;
 import '../theme/app_theme.dart';
+import '../enums/app_mode.dart';
+import '../services/app_mode_service.dart';
 import '../screens/search_screen.dart';
 import '../screens/favorites_screen.dart';
 import 'mode_switcher_dialog.dart';
@@ -73,15 +75,21 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   /// as they're drawn, and the shadow unblurred: tinting a vector drawing,
   /// fading it and blurring it each took a layer of its own on every
   /// frame — four of them, still drawn under a details page sliding in.
+  ///
+  /// Popcorn's in cream; Ramen's in its own colours (its shadow still
+  /// one shape).
   Widget _buildDefaultLogo() {
+    final ramen = AppModeService().currentMode.value == AppMode.anime;
     Widget logo({Color? shadowTint}) => SvgPicture.asset(
-          'assets/logo.svg',
+          ramen ? AppMode.anime.logoAsset : 'assets/logo.svg',
           height: 32,
           renderingStrategy: RenderingStrategy.raster,
-          colorFilter: ColorFilter.mode(
-            shadowTint ?? AppTheme.primaryColor,
-            BlendMode.srcIn,
-          ),
+          colorFilter: ramen && shadowTint == null
+              ? null
+              : ColorFilter.mode(
+                  shadowTint ?? AppTheme.primaryColor,
+                  BlendMode.srcIn,
+                ),
         );
 
     return Stack(

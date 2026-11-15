@@ -24,16 +24,46 @@ class AppModeService {
   /// Turn this back on to bring them back to phones and iPads.
   static const bool booksAndMusic = false;
 
-  /// Where the modes would be when [booksAndMusic] is on: not in the
+  /// Ramen, the anime mode. Phones and iPads for now; not yet in the
+  /// desktop app or on a TV, which have no mode switch.
+  static const bool ramen = true;
+
+  /// The modes there are, in the order the switch shows them.
+  static const List<AppMode> modes = [
+    AppMode.movies,
+    if (ramen) AppMode.anime,
+    if (booksAndMusic) ...[AppMode.music, AppMode.books],
+  ];
+
+  /// Where the modes are, when there's more than Popcorn: not in the
   /// desktop app (Windows; a native Mac or Linux build) or on a TV
   /// (TvDevice.init runs before this is first read). An iPad or the iPad
   /// app on a Mac has them.
-  static final bool canSwitchMode = booksAndMusic &&
+  static final bool canSwitchMode = modes.length > 1 &&
       (kIsWeb ||
           !(Platform.isWindows ||
               Platform.isMacOS ||
               Platform.isLinux ||
               TvDevice.isTv));
+
+  /// Whether anime is Ramen's alone: where Ramen is, Popcorn leaves anime
+  /// out (its home, search, My List, Continue Watching and Ask). The
+  /// desktop app and a TV have no Ramen yet, so Popcorn keeps anime there.
+  static final bool splitsAnime =
+      canSwitchMode && modes.contains(AppMode.anime);
+
+  /// Whether a title marked anime (or not) belongs in [mode]: Ramen shows
+  /// only anime, Popcorn everything else (or everything, without Ramen).
+  static bool belongsIn(AppMode mode, {required bool isAnime}) {
+    if (!splitsAnime) return true;
+    if (mode == AppMode.anime) return isAnime;
+    if (mode == AppMode.movies) return !isAnime;
+    return true;
+  }
+
+  /// [belongsIn] for the mode that's open.
+  bool shows({required bool isAnime}) =>
+      belongsIn(currentMode.value, isAnime: isAnime);
 
   Future<void> init() async {
     if (!canSwitchMode) {
@@ -44,7 +74,9 @@ class AppModeService {
     final savedModeIndex = prefs.getInt(_storageKey);
     if (savedModeIndex != null &&
         savedModeIndex >= 0 &&
-        savedModeIndex < AppMode.values.length) {
+        savedModeIndex < AppMode.values.length &&
+        // One that's switched off now (Books, Music) opens Popcorn.
+        modes.contains(AppMode.values[savedModeIndex])) {
       currentMode.value = AppMode.values[savedModeIndex];
     }
   }

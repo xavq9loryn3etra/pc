@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../theme/app_theme.dart';
+import '../enums/app_mode.dart';
+import '../services/app_mode_service.dart';
 import '../services/feature_flags_service.dart';
 import '../widgets/status_screen.dart';
 
@@ -17,8 +19,31 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final PageController _pageController = PageController();
   int _currentPage = 0;
 
+  // The pages: one for each mode there is (AppModeService.modes).
+  static final _pages = [
+    _allPages[0],
+    if (AppModeService.modes.contains(AppMode.anime)) _ramenPage,
+    if (AppModeService.booksAndMusic) ..._allPages.skip(1),
+  ];
+
+  static const _ramenPage = _OnboardingPageData(
+    title: 'Ramen',
+    subtitle: 'All the anime you love',
+    description:
+        "This season's new shows and the classics everyone talks about, all in one bowl. The same player, subtitles and Ask as Popcorn, just for anime.",
+    hidePlaybackSubtitle: 'Discover anime',
+    hidePlaybackDescription:
+        "Explore this season's new shows and the all-time classics. Save your favorites and find what to watch next.",
+    assetPath: 'assets/ramen-app-logo.svg',
+    isSvg: true,
+    ownColors: true,
+    iconSize: 80,
+    gradientColor: Color(0xFF3A1300), // AppMode.anime.gradientColor
+    accentColor: AppMode.ramenOrange,
+  );
+
   // Gradient colors matching each mode's home screen
-  static const _pages = [
+  static const _allPages = [
     _OnboardingPageData(
       title: 'Popcorn',
       subtitle: 'Stream the latest movies & TV shows',
@@ -345,10 +370,13 @@ class _ModeIntro extends StatelessWidget {
             page.assetPath,
             width: page.iconSize,
             height: page.iconSize,
-            colorFilter: ColorFilter.mode(
-              page.accentColor,
-              BlendMode.srcIn,
-            ),
+            // Ramen's bowl in its own colours.
+            colorFilter: page.ownColors
+                ? null
+                : ColorFilter.mode(
+                    page.accentColor,
+                    BlendMode.srcIn,
+                  ),
           )
         else
           Image.asset(
@@ -533,6 +561,9 @@ class _OnboardingPageData {
   final String description;
   final String assetPath;
   final bool isSvg;
+  // A logo drawn in its own colours (Ramen's), not tinted with
+  // [accentColor].
+  final bool ownColors;
   final double iconSize;
   final Color gradientColor;
   final Color accentColor;
@@ -546,6 +577,7 @@ class _OnboardingPageData {
     required this.description,
     required this.assetPath,
     required this.isSvg,
+    this.ownColors = false,
     required this.iconSize,
     required this.gradientColor,
     required this.accentColor,

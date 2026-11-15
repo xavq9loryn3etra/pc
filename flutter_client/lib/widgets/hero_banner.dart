@@ -19,6 +19,8 @@ class MovieHeroBanner extends StatelessWidget {
   /// Where [movie] stands in TMDB's weekly trending list (1 = top), for the
   /// "#3 Trending This Week" line; 0 or less hides it.
   final int trendingRank;
+  /// What the rank's of ("Trending This Week", Ramen's "Popular Right Now").
+  final String rankLabel;
 
   const MovieHeroBanner({
     super.key,
@@ -27,6 +29,7 @@ class MovieHeroBanner extends StatelessWidget {
     this.onTrailer,
     this.scrollController,
     this.trendingRank = 0,
+    this.rankLabel = 'Trending This Week',
   });
 
   // The banner's images and decode sizes, shared by build() and
@@ -152,7 +155,7 @@ class MovieHeroBanner extends StatelessWidget {
                   if (trendingRank > 0) ...[
                     const SizedBox(height: 4),
                     Text(
-                      '#$trendingRank Trending This Week',
+                      '#$trendingRank $rankLabel',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 15,

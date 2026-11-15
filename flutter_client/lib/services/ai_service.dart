@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
+import '../enums/app_mode.dart';
 import '../models/movie.dart';
+import 'app_mode_service.dart';
 import 'gemini_key_service.dart';
 import 'tmdb_service.dart';
 import 'wikipedia_plot.dart';
@@ -121,6 +123,23 @@ Only when they ask to be spoiled about a particular title, set "spoiler" to {"ti
 Reply with JSON only, no markdown:
 {"offTopic": false, "service": null, "spoiler": null, "message": "usually 2-3 warm, chatty sentences, like a friend who loves films: why these fit what they asked for, with a little enthusiasm; no spoilers or titles by name (as some may not be shown) unless answering a question about a particular title or its ending, no lists. When they asked to be spoiled, the full spoiler instead, as long as the story needs", "titles": [{"title": "its widely known English or original title, in the Latin alphabet where one exists, whatever language the reply is in", "year": 2014, "type": "movie" or "tv", "language": "its original language as an ISO 639-1 code, e.g. en, ml, ko", "country": "the country it was made in as an ISO 3166-1 code, e.g. US, GB, AU, IN, KR (it tells apart titles that share a name: the US, UK and Australian Ghosts)"}]}''';
 
+  // Added to [_instructions] in Ramen, and in Popcorn where anime is
+  // Ramen's (AppModeService.splitsAnime).
+  static const _ramenInstructions =
+      '''You're inside Ramen, the app's anime mode. Suggest only anime: Japanese animated series and films. If they ask for something that isn't anime, suggest anime like it, and say in "message" that films and shows that aren't anime are in Popcorn mode.''';
+  static const _noAnimeInstructions =
+      '''Never suggest anime (Japanese animated series or films): anime has its own mode in the app, Ramen. If they ask for anime, leave "titles" empty and say warmly in "message" that anime lives in Ramen, which they can switch to in Settings.''';
+
+  /// What's added to [_instructions] in [mode], if anything.
+  static String _modeInstructions(AppMode mode) {
+    if (!AppModeService.splitsAnime) return '';
+    return switch (mode) {
+      AppMode.anime => '\n$_ramenInstructions',
+      AppMode.movies => '\n$_noAnimeInstructions',
+      _ => '',
+    };
+  }
+
   final Dio _dio =
       Dio(BaseOptions(connectTimeout: const Duration(seconds: 10)));
 
@@ -138,10 +157,14 @@ Reply with JSON only, no markdown:
   /// first. [onModel] hears each model as it's tried, by its index in
   /// [_models] (see [slowFrom]). Throws [AiUnavailable] when there's no key
   /// or no model could answer.
+  ///
+  /// In Ramen ([mode] anime) it suggests anime only; in Popcorn, where
+  /// there's Ramen, anything but.
   Future<AiAnswer> suggest(
     String request, {
     List<(String, AiAnswer)> history = const [],
     void Function(int model)? onModel,
+    AppMode mode = AppMode.movies,
   }) async {
     if (!available) {
       throw const AiUnavailable('Add your free Gemini key to ask.');
@@ -153,10 +176,10 @@ Reply with JSON only, no markdown:
       if (resting != null && DateTime.now().isBefore(resting)) continue;
       onModel?.call(i);
       try {
-        final reply =
-            await _ask(model, request, history: history, slow: i >= slowFrom);
+        final reply = await _ask(model, request,
+            history: history, slow: i >= slowFrom, mode: mode);
         if (reply != null) {
-          var answer = await _answerFrom(reply);
+          var answer = await _answerFrom(reply, mode: mode);
           // A spoiler: retold from the film's plot on Wikipedia, not from
           // the model's memory (which made up a little-known one's).
           final spoiler = await _spoilerFromWikipedia(reply, request, answer);
@@ -187,6 +210,7 @@ Reply with JSON only, no markdown:
     String request, {
     required List<(String, AiAnswer)> history,
     required bool slow,
+    AppMode mode = AppMode.movies,
   }) async {
     Map<String, Object> turn(String role, String text) => {
           'role': role,
@@ -209,7 +233,7 @@ Reply with JSON only, no markdown:
             // Today's date, so "new releases" and "this year" mean
             // something: models know only up to some time before.
             {
-              'text': '$_instructions\nToday is '
+              'text': '$_instructions${_modeInstructions(mode)}\nToday is '
                   '${DateTime.now().toIso8601String().substring(0, 10)}.'
             }
           ]
@@ -370,7 +394,8 @@ Reply in the language their request is written in.''';
   @visibleForTesting
   static String inParagraphs(String message) => _inParagraphs(message);
 
-  Future<AiAnswer> _answerFrom(String reply) async {
+  Future<AiAnswer> _answerFrom(String reply,
+      {AppMode mode = AppMode.movies}) async {
     // Some models wrap it in a ```json block anyway.
     final start = reply.indexOf('{'), end = reply.lastIndexOf('}');
     if (start < 0 || end <= start) throw const FormatException('no JSON');
@@ -429,6 +454,25 @@ Reply in the language their request is written in.''';
       for (final movie in found)
         if (movie != null && seen.add('${movie.type}_${movie.id}')) movie,
     ];
+    // Only this mode's: anime in Ramen, the rest in Popcorn. All of them
+    // the other's: say where they are, rather than "couldn't find them".
+    final mine = [
+      for (final movie in titles)
+        if (AppModeService.belongsIn(mode, isAnime: movie.isAnime)) movie,
+    ];
+    if (mine.isEmpty && titles.isNotEmpty) {
+      return AiAnswer(
+        reply: reply,
+        offTopic: false,
+        message: mode == AppMode.anime
+            ? "Those aren't anime, so they're in Popcorn mode. Ask me for "
+                'some anime like them!'
+            : "Those are anime, so they're in Ramen. Switch to it in "
+                'Settings to see them.',
+        titles: const [],
+      );
+    }
+    titles = mine;
 
     // A service asked for: only titles really on it where the user is —
     // its pages show its button. The model only knows roughly what's on

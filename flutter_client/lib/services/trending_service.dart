@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../enums/app_mode.dart';
+import 'app_mode_service.dart';
 import 'books_service.dart';
 import 'tmdb_service.dart';
 
@@ -65,7 +66,7 @@ class TrendingService {
   static const _count = 3;
   // Bump the version when TrendingItem's shape or content changes, so a
   // stale cache from an older build isn't shown.
-  static String _cacheKey(AppMode mode) => 'trending_cache_v3_${mode.name}';
+  static String _cacheKey(AppMode mode) => 'trending_cache_v4_${mode.name}';
 
   final Dio _dio = Dio(
     BaseOptions(
@@ -122,6 +123,7 @@ class TrendingService {
     try {
       final items = switch (mode) {
         AppMode.movies => await _movies(),
+        AppMode.anime => await _movies(anime: true),
         AppMode.music => await _music(),
         AppMode.books => await _books(),
       };
@@ -140,10 +142,16 @@ class TrendingService {
     }
   }
 
-  Future<List<TrendingItem>> _movies() async {
+  /// Popcorn's this week's trending (no anime, where anime is Ramen's),
+  /// or with [anime], Ramen's most watched anime series.
+  Future<List<TrendingItem>> _movies({bool anime = false}) async {
     final tmdb = TMDBService();
-    final movies = (await tmdb.getTrending())
+    final mode = anime ? AppMode.anime : AppMode.movies;
+    final movies = (await (anime
+            ? tmdb.popularAnimeSeries()
+            : tmdb.getTrending()))
         .where((m) => m.image != null)
+        .where((m) => AppModeService.belongsIn(mode, isAnime: m.isAnime))
         .take(_count)
         .toList();
     // Trending results don't include title logos or textless art; the

@@ -114,7 +114,7 @@ class MovieTabShell extends StatelessWidget {
         // Not built until the movie home has loaded: the bar plays a
         // staggered pop-in the first time it's built, which should show
         // as the home's skeleton fades rather than happen while it loads.
-        if (onHome && mode == AppMode.movies && !homeRevealed) {
+        if (onHome && mode.isVideo && !homeRevealed) {
           return const SizedBox.shrink();
         }
         return Positioned.fill(
@@ -143,6 +143,15 @@ class MovieTabShell extends StatelessWidget {
           FavoritesScreen(),
           SettingsScreen(),
           AskScreen(),
+        ];
+      // Ramen: Popcorn's tabs, each showing anime only.
+      case AppMode.anime:
+        return const [
+          MovieHomeScreen(mode: AppMode.anime),
+          SearchScreen(mode: AppMode.anime),
+          FavoritesScreen(),
+          SettingsScreen(),
+          AskScreen(mode: AppMode.anime),
         ];
       case AppMode.books:
         return const [

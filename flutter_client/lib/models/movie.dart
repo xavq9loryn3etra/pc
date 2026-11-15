@@ -27,6 +27,9 @@ class Movie {
   // and kept out of Popcorn where there's Ramen (AppModeService.belongsIn).
   // Persisted; entries saved before it was are taken as not anime.
   final bool isAnime;
+  // IMDb's rating ("8.6"), from Cinemeta: shown instead of TMDB's
+  // [rating] where there is one. Details only, not persisted.
+  final String? imdbRating;
 
   // Extra Details
   final String? director;
@@ -133,6 +136,7 @@ class Movie {
     this.releaseDateRaw,
     this.homeReleaseRaw,
     this.isAnime = false,
+    this.imdbRating,
     this.lastAirYear,
     this.originalLanguage,
     this.director,

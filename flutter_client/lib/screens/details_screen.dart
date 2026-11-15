@@ -1318,13 +1318,26 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                           size: 16,
                                         ),
                                         const SizedBox(width: 4),
+                                        // IMDb's rating (from Cinemeta),
+                                        // named; TMDB's score without one.
                                         Text(
-                                          m.rating,
+                                          m.imdbRating ?? m.rating,
                                           style: const TextStyle(
                                             fontWeight: FontWeight.bold,
                                             color: Colors.amber,
                                           ),
                                         ),
+                                        if (m.imdbRating != null) ...[
+                                          const SizedBox(width: 5),
+                                          const Text(
+                                            'IMDb',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                              color: Colors.white54,
+                                            ),
+                                          ),
+                                        ],
                                       ],
                                     ),
                                     // Genres as quiet metadata under the

@@ -1,3 +1,4 @@
+import 'dart:async' show TimeoutException;
 import 'dart:io' show Platform;
 import 'dart:ui' show PlatformDispatcher;
 import 'package:flutter/services.dart' show MethodChannel;
@@ -733,10 +734,13 @@ class TMDBService {
           },
           cancelToken: cancelToken,
         );
+        // The IMDb rating looked up while the rest is.
+        final imdb = _imdbRatingFor(response.data, 'movie');
         await _addOriginalLanguageExtras(
             response.data, 'movie', id, cancelToken);
         // A black logo can come first (see LogoBrightness).
         await LogoBrightness().preferLight(response.data, _imageBase);
+        response.data['_imdb_rating'] = await imdb;
         final movie = _formatMovieDetails(response.data,
             isTv: false, watchCountry: await watchCountry);
         _cache[key] = _CacheEntry(movie);
@@ -763,9 +767,11 @@ class TMDBService {
         },
         cancelToken: cancelToken,
       );
+      final imdb = _imdbRatingFor(response.data, 'tv');
       await _addOriginalLanguageExtras(response.data, 'tv', id, cancelToken);
       await LogoBrightness().preferLight(response.data, _imageBase);
       final split = await _splitSeasons(id, response.data['seasons']);
+      response.data['_imdb_rating'] = await imdb;
       if (split != null) {
         response.data['seasons'] = [
           ...(response.data['seasons'] as List)
@@ -959,6 +965,39 @@ class TMDBService {
       releaseDateRaw: (m['release_date'] ?? m['first_air_date'])?.toString(),
       isAnime: isAnime(m),
     );
+  }
+
+  /// IMDb ratings from Cinemeta (Stremio's own catalogue, free and
+  /// keyless), by IMDb id: kept for the session.
+  static final Map<String, String?> _imdbRatings = {};
+
+  /// The IMDb rating ("8.6") of the title in the TMDB details [m] of
+  /// [type] ('movie' or 'tv'), from Cinemeta; null when it has none, or
+  /// it's slow to answer (the page doesn't wait on it long: TMDB's score
+  /// shows instead, until the page's details are next fetched).
+  Future<String?> _imdbRatingFor(Map m, String type) async {
+    final id = m['imdb_id'] ?? (m['external_ids'] as Map?)?['imdb_id'];
+    if (id is! String || !id.startsWith('tt')) return null;
+    if (_imdbRatings.containsKey(id)) return _imdbRatings[id];
+    final lookup = _dio
+        .get(
+          'https://v3-cinemeta.strem.io/meta/'
+          '${type == 'tv' ? 'series' : 'movie'}/$id.json',
+          options: Options(receiveTimeout: const Duration(seconds: 8)),
+        )
+        .then<String?>((response) {
+      final rating = (response.data['meta'] as Map?)?['imdbRating'];
+      final value = double.tryParse('$rating');
+      // "0" or nothing: no rating to show.
+      final found = value != null && value > 0 ? value.toStringAsFixed(1) : null;
+      _imdbRatings[id] = found;
+      return found;
+    }).catchError((Object _) => null);
+    try {
+      return await lookup.timeout(const Duration(milliseconds: 1500));
+    } on TimeoutException {
+      return null;
+    }
   }
 
   /// TMDB's Animation genre.
@@ -1223,6 +1262,7 @@ class TMDBService {
       inCinemas: base.inCinemas,
       releaseDateRaw: base.releaseDateRaw,
       isAnime: base.isAnime,
+      imdbRating: m['_imdb_rating'] as String?,
       homeReleaseRaw: homeReleaseRaw,
       originalLanguage: m['original_language'] as String?,
       lastAirYear: isTv

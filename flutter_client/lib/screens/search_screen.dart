@@ -40,6 +40,12 @@ class _SearchScreenState extends State<SearchScreen> {
   final TMDBService _tmdb = TMDBService();
 
   List<Movie> _results = [];
+  // What the search found that's the other mode's (anime in Popcorn, the
+  // rest in Ramen): shown under the results, opened in that mode.
+  List<Movie> _elsewhere = [];
+  // A title to open once the results are up: one carried over from the
+  // other mode's search (MovieTabService.handOff).
+  Movie? _pendingOpen;
   bool _isLoading = false;
   Timer? _debounce;
   String? _error;
@@ -56,6 +62,17 @@ class _SearchScreenState extends State<SearchScreen> {
     // keyboard over the page). Unfocused when they switch away.
     MovieTabService().currentTab.addListener(_onActiveTabChanged);
     SearchHistoryService().load();
+    // A search carried over from the other mode, with a title from it to
+    // open (see _openInOtherMode).
+    final handOff = MovieTabService().handOff;
+    if (handOff != null && handOff.mode == widget.mode) {
+      MovieTabService().handOff = null;
+      _controller.text = handOff.query;
+      _pendingOpen = handOff.movie;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _performSearch(handOff.query);
+      });
+    }
     // Not on a TV: the remote wandered into the trending posters on its
     // way to and from the search bar.
     if (!TvDevice.isTv) _loadTrending();
@@ -159,6 +176,7 @@ class _SearchScreenState extends State<SearchScreen> {
       _searchRequestId++; // invalidate any in-flight request
       setState(() {
         _results = [];
+        _elsewhere = [];
         _error = null;
         _isLoading = false;
       });
@@ -181,7 +199,9 @@ class _SearchScreenState extends State<SearchScreen> {
     try {
       final found = await _tmdb.searchMulti(query);
       // Ramen finds anime only; Popcorn, where there's Ramen, the rest.
+      // The other mode's are kept, to open there.
       final results = found.where(_belongs).toList();
+      final elsewhere = found.where((m) => !_belongs(m)).toList();
       // Response times vary enough that an older query's request can
       // resolve after a newer one already has — only apply this response
       // if nothing newer has been fired since, otherwise it'd silently
@@ -189,15 +209,9 @@ class _SearchScreenState extends State<SearchScreen> {
       if (mounted && requestId == _searchRequestId) {
         setState(() {
           _results = results;
+          _elsewhere = elsewhere;
           _isLoading = false;
-          if (results.isEmpty) {
-            // What was found is all the other mode's: say where it is.
-            _error = found.isEmpty
-                ? "No results found."
-                : _isRamen
-                    ? "Ramen only has anime. Films and shows are in Popcorn."
-                    : "That's anime: you'll find it in Ramen.";
-          }
+          if (found.isEmpty) _error = "No results found.";
         });
       }
     } catch (e) {
@@ -536,26 +550,80 @@ class _SearchScreenState extends State<SearchScreen> {
       );
     }
 
-    return GridView.builder(
-      controller: _scrollController,
-      padding: _resultsPadding(context, isDesktop, padding),
-      gridDelegate: _resultsGrid(isDesktop),
-      itemCount: _results.length,
-      itemBuilder: (context, index) {
-        final movie = _results[index];
-        return MoviePoster(
-          movie: movie,
-          width: double.infinity,
-          height: double.infinity,
-          showTitle: true,
-          onTap: () {
-            // Opening a result marks the query as a real search.
-            SearchHistoryService().add(_controller.text);
-            _open(movie, isDesktop);
-          },
+    // A title carried over from the other mode's search: opened once its
+    // results are here.
+    final pending = _pendingOpen;
+    if (pending != null && !_isLoading) {
+      _pendingOpen = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _open(pending, isDesktop);
+      });
+    }
+
+    Widget grid(List<Movie> titles, void Function(Movie) onTap) =>
+        SliverGrid.builder(
+          gridDelegate: _resultsGrid(isDesktop),
+          itemCount: titles.length,
+          itemBuilder: (context, index) => MoviePoster(
+            movie: titles[index],
+            width: double.infinity,
+            height: double.infinity,
+            showTitle: true,
+            onTap: () => onTap(titles[index]),
+          ),
         );
-      },
+    final pad = _resultsPadding(context, isDesktop, padding);
+    final headingInset = SideColumnScope.inColumn(context) ? 12.0 : 0.0;
+    return CustomScrollView(
+      controller: _scrollController,
+      slivers: [
+        SliverPadding(
+          padding: pad,
+          sliver: SliverMainAxisGroup(slivers: [
+            grid(_results, (movie) {
+              // Opening a result marks the query as a real search.
+              SearchHistoryService().add(_controller.text);
+              _open(movie, isDesktop);
+            }),
+            // The other mode's: tapped, opened there.
+            if (_elsewhere.isNotEmpty) ...[
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    left: headingInset,
+                    top: _results.isEmpty ? 0 : 28,
+                    bottom: 12,
+                  ),
+                  child: Text(
+                    _isRamen ? 'IN POPCORN' : 'IN RAMEN',
+                    style: const TextStyle(
+                      color: Colors.white38,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ),
+              ),
+              grid(_elsewhere, _openInOtherMode),
+            ],
+          ]),
+        ),
+      ],
     );
+  }
+
+  /// Opens [movie], the other mode's (anime in Popcorn, the rest in
+  /// Ramen), in that mode: switches to it, its search carrying on with
+  /// this query, and the title's page opens over it (Back is the results).
+  void _openInOtherMode(Movie movie) {
+    final query = _controller.text.trim();
+    SearchHistoryService().add(query);
+    final other = movie.isAnime ? AppMode.anime : AppMode.movies;
+    MovieTabService().handOff = (mode: other, query: query, movie: movie);
+    AppModeService().setMode(other);
+    // setMode opens the mode's home: its search instead.
+    MovieTabService().currentTab.value = BottomNavTab.search;
   }
 
   /// Opens [movie]: beside the results on a wide window, else its page.

@@ -1,5 +1,7 @@
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/cupertino.dart';
+import '../enums/app_mode.dart';
+import '../models/movie.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 
 /// Tracks which movies-mode tab (Home/Search/Favorites/Settings) is active.
@@ -16,6 +18,11 @@ class MovieTabService {
 
   final ValueNotifier<BottomNavTab> currentTab =
       ValueNotifier(BottomNavTab.home);
+
+  /// A search carried over to the other mode, and the title from it to
+  /// open there: a result that's that mode's (anime in Ramen, the rest in
+  /// Popcorn), tapped in this one's search. Taken by [mode]'s SearchScreen.
+  ({AppMode mode, String query, Movie movie})? handOff;
 
   /// The side details panels open over the tabs (the wide layout's — see
   /// DesktopHomeScreen and ScreenScaffold). While there are any, the tab

@@ -32,6 +32,13 @@ class DesktopHomeScreen extends StatefulWidget {
   /// What the rank's of ("Trending This Week", Ramen's "Popular Right Now").
   final String rankLabel;
 
+  /// Ramen's: its rows between the trending and top rated ones (this
+  /// season's series, anime films), its own row names, and its logo.
+  final List<Movie> newSeries;
+  final List<Movie> films;
+  final String topRatedTitle;
+  final bool ramen;
+
   const DesktopHomeScreen({
     super.key,
     required this.featuredMovie,
@@ -44,6 +51,10 @@ class DesktopHomeScreen extends StatefulWidget {
     this.onRemoveHistory,
     this.trendingRank = 0,
     this.rankLabel = 'Trending This Week',
+    this.newSeries = const [],
+    this.films = const [],
+    this.topRatedTitle = 'Top Rated',
+    this.ramen = false,
   });
 
   // The hero's images and decode sizes, shared by the state's build and
@@ -195,7 +206,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                         // Trending List
                         _buildSectionList(
                           context,
-                          title: "Trending This Week",
+                          title: widget.rankLabel,
                           movies: widget.trendingMovies,
                           heroPrefix: "desktop_trending",
                           posterHeight: 300,
@@ -204,9 +215,27 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                         ),
                         const SizedBox(height: 40),
 
+                        // Ramen's.
+                        for (final (title, movies, prefix) in [
+                          ('New This Season', widget.newSeries, 'desktop_new'),
+                          ('Anime Movies', widget.films, 'desktop_films'),
+                        ])
+                          if (movies.isNotEmpty) ...[
+                            _buildSectionList(
+                              context,
+                              title: title,
+                              movies: movies,
+                              heroPrefix: prefix,
+                              posterHeight: 300,
+                              posterWidth: 200,
+                              onTap: _onMovieSelect,
+                            ),
+                            const SizedBox(height: 40),
+                          ],
+
                         _buildSectionList(
                           context,
-                          title: "Top Rated",
+                          title: widget.topRatedTitle,
                           movies: widget.topRatedMovies,
                           heroPrefix: "desktop_top_rated",
                           posterHeight: 300,
@@ -353,13 +382,16 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 24),
       child: Row(
         children: [
+          // Ramen's in its own colours, Popcorn's in cream.
           SvgPicture.asset(
-            'assets/logo.svg',
+            widget.ramen ? 'assets/ramen-app-logo.svg' : 'assets/logo.svg',
             height: 32,
-            colorFilter: const ColorFilter.mode(
-              AppTheme.primaryColor,
-              BlendMode.srcIn,
-            ),
+            colorFilter: widget.ramen
+                ? null
+                : const ColorFilter.mode(
+                    AppTheme.primaryColor,
+                    BlendMode.srcIn,
+                  ),
           ),
           // The tab buttons sit at the right of this row (see
           // FloatingBottomNavBar), over it.

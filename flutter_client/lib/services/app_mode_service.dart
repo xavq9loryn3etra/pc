@@ -24,8 +24,8 @@ class AppModeService {
   /// Turn this back on to bring them back to phones and iPads.
   static const bool booksAndMusic = false;
 
-  /// Ramen, the anime mode. Phones and iPads for now; not yet in the
-  /// desktop app or on a TV, which have no mode switch.
+  /// Ramen, the anime mode: on phones, iPads and in the Windows app; not
+  /// yet on a TV, which has no mode switch.
   static const bool ramen = true;
 
   /// The modes there are, in the order the switch shows them.
@@ -35,20 +35,17 @@ class AppModeService {
     if (booksAndMusic) ...[AppMode.music, AppMode.books],
   ];
 
-  /// Where the modes are, when there's more than Popcorn: not in the
-  /// desktop app (Windows; a native Mac or Linux build) or on a TV
-  /// (TvDevice.init runs before this is first read). An iPad or the iPad
-  /// app on a Mac has them.
+  /// Where the modes are, when there's more than Popcorn: phones, iPads
+  /// (and the iPad app on a Mac) and the Windows app. Not on a TV
+  /// (TvDevice.init runs before this is first read), or a native Mac or
+  /// Linux build, which there isn't.
   static final bool canSwitchMode = modes.length > 1 &&
       (kIsWeb ||
-          !(Platform.isWindows ||
-              Platform.isMacOS ||
-              Platform.isLinux ||
-              TvDevice.isTv));
+          !(Platform.isMacOS || Platform.isLinux || TvDevice.isTv));
 
   /// Whether anime is Ramen's alone: where Ramen is, Popcorn leaves anime
-  /// out (its home, search, My List, Continue Watching and Ask). The
-  /// desktop app and a TV have no Ramen yet, so Popcorn keeps anime there.
+  /// out (its home, search, My List, Continue Watching and Ask). A TV has
+  /// no Ramen yet, so Popcorn keeps anime there.
   static final bool splitsAnime =
       canSwitchMode && modes.contains(AppMode.anime);
 

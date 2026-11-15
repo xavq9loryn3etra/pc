@@ -274,6 +274,10 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
                 .indexWhere((m) => m.id == _featuredMovie!.id) +
             1,
         rankLabel: _rankLabel,
+        newSeries: _newSeries,
+        films: _films,
+        topRatedTitle: _isRamen ? 'Top Rated of All Time' : 'Top Rated',
+        ramen: _isRamen,
         onTrailerHero: onTrailer,
         onInfoHero: () => _navigateToDetails(
           _featuredMovie!,

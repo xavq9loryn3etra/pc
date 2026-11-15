@@ -18,15 +18,22 @@ class AppModeService {
 
   final ValueNotifier<AppMode> currentMode = ValueNotifier(AppMode.movies);
 
-  /// The desktop app (Windows; a native Mac or Linux build) is Popcorn
-  /// only: no mode selector after the splash, no mode switch in Settings.
-  /// An iPad or the iPad app on a Mac still has them. A TV is Popcorn only
-  /// too (TvDevice.init runs before this is first read).
-  static final bool canSwitchMode = kIsWeb ||
-      !(Platform.isWindows ||
-          Platform.isMacOS ||
-          Platform.isLinux ||
-          TvDevice.isTv);
+  /// Books and Music are switched off everywhere for now, so every device
+  /// is Popcorn only: no three-mode introduction, no mode selector after
+  /// the splash, no mode switch in Settings, and a movies-only welcome.
+  /// Turn this back on to bring them back to phones and iPads.
+  static const bool booksAndMusic = false;
+
+  /// Where the modes would be when [booksAndMusic] is on: not in the
+  /// desktop app (Windows; a native Mac or Linux build) or on a TV
+  /// (TvDevice.init runs before this is first read). An iPad or the iPad
+  /// app on a Mac has them.
+  static final bool canSwitchMode = booksAndMusic &&
+      (kIsWeb ||
+          !(Platform.isWindows ||
+              Platform.isMacOS ||
+              Platform.isLinux ||
+              TvDevice.isTv));
 
   Future<void> init() async {
     if (!canSwitchMode) {

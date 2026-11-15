@@ -370,6 +370,16 @@ class _PlayerScreenState extends State<PlayerScreen>
   ({int torrentId, int bytes, DateTime at})? _openingBaseline;
   bool _recoveringStream = false;
 
+  // When playback was last reconnected in place mid-film (see
+  // _reconnectInPlace): stuck again soon after, the full recovery runs.
+  DateTime? _lastInPlaceReconnectAt;
+  static const Duration _inPlaceReconnectHolds = Duration(minutes: 2);
+
+  // The spot the seek bar holds at while the video reopens there after a
+  // stall: the reopened file reports 0 at first, and the bar jumped to the
+  // start. Cleared once it's playing again.
+  Duration? _heldPosition;
+
   /// True while playback is paused because the device ran low on storage
   /// (see TorrentEngineService.lowDiskSpace), so it only resumes what it
   /// paused itself.
@@ -807,7 +817,10 @@ class _PlayerScreenState extends State<PlayerScreen>
             _seekStartedAt != null &&
             DateTime.now().difference(_seekStartedAt!) <
                 const Duration(milliseconds: 300);
-        if (!inInitialSeekWindow) {
+        // Reopening after a stall: the bar stays where it was until the
+        // video's playing there again.
+        final holding = _heldPosition != null && _isMediaOpening;
+        if (!inInitialSeekWindow && !holding) {
           // Not wrapped in setState — only the seek bar (via _positionNotifier)
           // needs to react to this, not the whole screen, since this fires
           // several times a second during playback.
@@ -989,6 +1002,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           '${_openingStopwatch.elapsedMilliseconds} ms');
     }
     if (step > Duration.zero && step < const Duration(seconds: 2)) {
+      _heldPosition = null;
       setState(() => _isMediaOpening = false);
       print('[timing] video playing ${_openingStopwatch.elapsedMilliseconds} '
           'ms after the player opened it');
@@ -1167,6 +1181,17 @@ class _PlayerScreenState extends State<PlayerScreen>
   Future<void> _attemptStreamRecovery({String? reason}) async {
     if (_recoveringStream || _switchingQuality || !mounted) return;
 
+    // Mid-film, first just reopen this copy where it was (see
+    // _reconnectInPlace); only if it's stuck again soon after does the
+    // rest happen.
+    final lastInPlace = _lastInPlaceReconnectAt;
+    if (!_isMediaOpening &&
+        (lastInPlace == null ||
+            DateTime.now().difference(lastInPlace) > _inPlaceReconnectHolds)) {
+      await _reconnectInPlace(reason: reason);
+      return;
+    }
+
     if (_autoRecoverAttempts >= _maxAutoRecoverAttempts) {
       // Already auto-retried enough times this session — if it's still
       // stuck, the torrent itself is likely the problem (e.g. no real
@@ -1188,6 +1213,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _autoRecoverAttempts++;
     _recoveringStream = true;
     final resumeAt = _resumePointForSwitch();
+    _heldPosition = resumeAt;
     final staleInfoHash = _currentStream.infoHash;
     final stuckTorrentId = _torrentId;
     // Fully downloaded: the stall can't be missing data (download bytes are
@@ -1285,6 +1311,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       return;
     } catch (e) {
       if (_closedDuringSwitch(started)) return;
+      _heldPosition = null;
       if (otherCopies.isNotEmpty) {
         // No other copy started either: carry on waiting for the first
         // one (the watchdog checks it again).
@@ -1311,14 +1338,55 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  /// Reopens the video being played where it was, from the same copy,
+  /// keeping everything downloaded. Mid-film, a stall is most often the
+  /// app's own connection to the download dropping (mpv then stops, or
+  /// takes it for the end of the file) rather than the copy failing, and
+  /// the full recovery deleted the whole download and started over: the
+  /// picture went back to the start and loaded again, the saved progress
+  /// then taking it back to the spot. A colleague hit it twice in one film.
+  Future<void> _reconnectInPlace({String? reason}) async {
+    print('Stream reconnect in place: $reason');
+    _lastInPlaceReconnectAt = DateTime.now();
+    _recoveringStream = true;
+    final resumeAt = _currentPosition;
+    _heldPosition = resumeAt;
+    if (mounted) {
+      setState(() {
+        _switchingQuality = true;
+        _switchingMessage = 'Reconnecting…';
+        _controlsVisible = true;
+      });
+    }
+    try {
+      await _openMediaWithResume(_streamUrl, precisePosition: resumeAt);
+      if (!mounted || _closing) return;
+      player.play();
+    } catch (e) {
+      debugPrint('Reconnecting in place failed: $e');
+      _heldPosition = null;
+    } finally {
+      _recoveringStream = false;
+      if (mounted) {
+        setState(() {
+          _switchingQuality = false;
+          _resetControlsTimer();
+        });
+      }
+    }
+  }
+
   /// Where another copy of this video should start: the spot being watched,
   /// or null — the saved progress (see _openMediaWithResume) — while it's
   /// still opening or near the start, when the position is still 0 and not
   /// where the viewer had got to.
+  ///
+  /// Reopening after a stall (see _heldPosition), the spot it was at.
   Duration? _resumePointForSwitch() =>
-      (_isMediaOpening || _currentPosition < const Duration(seconds: 5))
+      _heldPosition ??
+      ((_isMediaOpening || _currentPosition < const Duration(seconds: 5))
           ? null
-          : _currentPosition;
+          : _currentPosition);
 
   /// Remembers [stream] as the torrent this title/episode plays from — for
   /// resuming with it later, and for Settings > Storage.

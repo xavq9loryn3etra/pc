@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../../models/movie.dart';
 import '../audio_language_service.dart';
@@ -307,6 +308,11 @@ class StreamResolver {
   /// the title itself ("Blade Runner 2049").
   static bool _fitsTitle(TorrentStream stream, Movie? title) {
     if (title == null || title.year <= 0) return true;
+    if (title.type == 'tv' &&
+        namesAnotherShow('${stream.name}\n${stream.title}',
+            showTitle: title.title, startYear: title.year)) {
+      return false;
+    }
     final titleNumbers =
         _yearPattern.allMatches(title.title).map((m) => m[0]).toSet();
     final years = _yearPattern
@@ -329,6 +335,32 @@ class StreamResolver {
       }
     }
     return years.any((y) => y >= first && y <= last);
+  }
+
+  /// Whether a release [name] is of another show called the same as
+  /// [showTitle]: right after the name it gives a year (release names'
+  /// way of telling such shows apart: "One.Piece.2023.S02E03") that isn't
+  /// the year [startYear] the show began, give or take one. Torrentio filed
+  /// the live-action One Piece (2023) under the anime's season 2 episode 3,
+  /// the anime's episode 11 by IMDb's numbering; the anime has aired since
+  /// 1999, so the year alone was within its years, and a reconnect landed
+  /// on the live-action show. "One Piece (1999-2000) s01e01" still fits.
+  @visibleForTesting
+  static bool namesAnotherShow(String name,
+      {required String showTitle, required int startYear}) {
+    String words(String s) => s
+        .toLowerCase()
+        .replaceAll(RegExp(r"['’]"), '')
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .trim();
+    final show = words(showTitle);
+    if (show.isEmpty) return false;
+    final release = ' ${words(name)} ';
+    for (final m in RegExp(' ${RegExp.escape(show)} ' r'((?:19|20)\d\d) ')
+        .allMatches(release)) {
+      if ((int.parse(m[1]!) - startYear).abs() > 1) return true;
+    }
+    return false;
   }
 
   /// Starting from the highest available quality tier, keep stepping down

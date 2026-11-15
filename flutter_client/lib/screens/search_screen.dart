@@ -454,8 +454,9 @@ class _SearchScreenState extends State<SearchScreen> {
 
   EdgeInsets _resultsPadding(
       BuildContext context, bool isDesktop, EdgeInsets padding) {
-    final horizontal =
-        isDesktop ? 60.0 : (SideColumnScope.inColumn(context) ? 0.0 : 16.0);
+    // A phone's margins in a wide window's side column too, as Ask's: the
+    // posters ran to its glowing panel's edges.
+    final horizontal = isDesktop ? 60.0 : 16.0;
     return padding.copyWith(
       left: horizontal,
       right: horizontal,
@@ -575,7 +576,7 @@ class _SearchScreenState extends State<SearchScreen> {
           ),
         );
     final pad = _resultsPadding(context, isDesktop, padding);
-    final headingInset = SideColumnScope.inColumn(context) ? 12.0 : 0.0;
+    const headingInset = 0.0;
     return CustomScrollView(
       controller: _scrollController,
       slivers: [
@@ -646,7 +647,7 @@ class _SearchScreenState extends State<SearchScreen> {
       BuildContext context, bool isDesktop, EdgeInsets padding) {
     final pad = _resultsPadding(context, isDesktop, padding);
     // In from the side column's edges, which the posters reach.
-    final headingInset = SideColumnScope.inColumn(context) ? 12.0 : 0.0;
+    const headingInset = 0.0;
     Widget heading(String text) => SliverToBoxAdapter(
           child: Padding(
             padding: EdgeInsets.only(left: headingInset, bottom: 12),

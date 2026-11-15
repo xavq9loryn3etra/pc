@@ -292,10 +292,8 @@ class _SectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      // In line with the rows' content, inside their card (whose own
-      // margin is none in a wide window's side column).
-      padding: EdgeInsets.fromLTRB(
-          SideColumnScope.inColumn(context) ? 16 : 32, topPadding, 16, 8),
+      // In line with the rows' content, inside their card.
+      padding: EdgeInsets.fromLTRB(32, topPadding, 16, 8),
       child: Text(
         text,
         style: const TextStyle(
@@ -341,8 +339,7 @@ class _SettingsGroup extends StatelessWidget {
           ),
           if (footnote != null)
             Padding(
-              padding: EdgeInsets.fromLTRB(
-                  SideColumnScope.inColumn(context) ? 16 : 32, 8, 16, 0),
+              padding: const EdgeInsets.fromLTRB(32, 8, 16, 0),
               child: Text(
                 footnote!,
                 style: const TextStyle(
@@ -371,9 +368,8 @@ class _FrostedCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      // None in a wide window's side column (the cards to its edges).
-      padding: EdgeInsets.symmetric(
-          horizontal: SideColumnScope.inColumn(context) ? 0 : 16),
+      // A phone's margins in a wide window's side column too, as Ask's.
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Material(
         color: kGlassTint,
         shape: RoundedRectangleBorder(

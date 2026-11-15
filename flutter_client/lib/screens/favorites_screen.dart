@@ -116,9 +116,8 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
           );
         }
 
-        // None in a wide window's side column (its content to its edges).
-        final horizontalPadding =
-            isDesktop ? 60.0 : (SideColumnScope.inColumn(context) ? 0.0 : 16.0);
+        // A phone's margins in a wide window's side column too, as Ask's.
+        final horizontalPadding = isDesktop ? 60.0 : 16.0;
         return GridView.builder(
           controller: _scrollController,
           padding: padding.copyWith(

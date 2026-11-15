@@ -210,8 +210,11 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
     final lift = (wide ? 40 : 16) + bottomInset;
     return Padding(
       padding: EdgeInsets.fromLTRB(wide ? 0 : 16, 0, wide ? 0 : 16, lift),
+      // As wide as its modes need (it was sized for three: with Popcorn
+      // and Ramen alone, mostly empty on a wide window).
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640),
+        constraints: BoxConstraints(
+            maxWidth: AppModeService.modes.length * 180.0 + 48),
         child: ClipRRect(
           borderRadius: radius,
           child: Stack(

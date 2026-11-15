@@ -4889,6 +4889,16 @@ class _PlayerScreenState extends State<PlayerScreen>
   List<({double start, double end})> _skipRanges = const [];
   List<double> _partitions = const [];
 
+  /// The most chapters drawn as gaps on the seek bar (see
+  /// _partitionFractionsFor).
+  static const _maxChapterGaps = 8;
+
+  /// The Quality button's label: the quality playing ("HD", "Full HD").
+  String get _qualityLabel =>
+      const {4: 'Ultra HD', 3: 'Full HD', 2: 'HD', 1: 'SD'}[
+          StreamResolver.tierOf(_currentStream)] ??
+      'Quality';
+
   void _updateTimelineShapes() {
     _skipRanges = _skipRangesFor(_duration);
     _partitions = _partitionFractionsFor(_duration);
@@ -4917,7 +4927,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     final totalMs = totalDuration.inMilliseconds;
     if (totalMs <= 0) return const [];
     final rawPoints = <double>[];
-    for (final ch in _mkvChapters) {
+    // Chapters only when there are a few: an episode's parts (opening,
+    // the episode, ending). A film's disc copy has 20 or more, which cut
+    // the bar into pieces; their names still show when it's pointed at.
+    final fewChapters = _mkvChapters.length <= _maxChapterGaps;
+    for (final ch in fewChapters ? _mkvChapters : const <VideoChapter>[]) {
       // Not inside a highlighted part: a chapter starting partway through
       // the credits cut them in two, which read as two credit sections.
       final inside = _skipSegments
@@ -6105,8 +6119,9 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                                     _qualityButtonKey,
                                                                 icon: Icons
                                                                     .hd_rounded,
+                                                                // The quality playing.
                                                                 label:
-                                                                    'Quality',
+                                                                    _qualityLabel,
                                                                 selected:
                                                                     _menuOpen(
                                                                         'quality'),

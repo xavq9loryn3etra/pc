@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import '../../models/movie.dart';
 import '../audio_language_service.dart';
+import '../episode_numbering.dart';
 import 'free_space.dart';
 import 'torrent_download_registry.dart';
 import 'torrent_engine_service.dart';
@@ -84,7 +85,7 @@ class StreamResolver {
     AudioLanguage? audioLanguage,
   }) async {
     final stopwatch = Stopwatch()..start();
-    final found = await _find(imdbId, type, season, episode);
+    final found = await _find(imdbId, type, season, episode, title);
     print('[timing] found ${found.length} copies in '
         '${stopwatch.elapsedMilliseconds} ms');
     final cinemaOnly = title?.isCinemaOnly ?? false;
@@ -141,8 +142,14 @@ class StreamResolver {
       <String, ({DateTime at, List<TorrentStream> streams})>{};
   static const _foundFor = Duration(minutes: 20);
 
-  Future<List<TorrentStream>> _find(
-      String imdbId, String type, int? season, int? episode) async {
+  Future<List<TorrentStream>> _find(String imdbId, String type, int? season,
+      int? episode, Movie? title) async {
+    // The finders go by IMDb's numbering, which for some shows (long
+    // anime: One Piece) isn't TMDB's, shown in the app.
+    if (type != 'movie' && title != null && season != null && episode != null) {
+      (season, episode) = await EpisodeNumbering().toImdb(
+          imdbId: imdbId, tmdbId: title.id, season: season, episode: episode);
+    }
     final key = type == 'movie'
         ? 'movie:$imdbId'
         : 'tv:$imdbId:${season ?? 1}:${episode ?? 1}';
@@ -266,16 +273,22 @@ class StreamResolver {
       r'|(?<!\d)\d{1,3}\s*[-~]\s*\d{1,3}(?!\d)',
       caseSensitive: false);
 
-  static final _customPattern =
-      RegExp(r'(?<![A-Za-z])custom(?![A-Za-z])', caseSensitive: false);
+  static final _customPattern = RegExp(
+      r'(?<![A-Za-z])(custom|one[ ._-]?pace)(?![A-Za-z])',
+      caseSensitive: false);
 
-  /// Whether [stream] is a fan edit ("[N-Custom] Naruto …"): these cut the
-  /// opening, ending and recaps, so an episode plays at 17 minutes instead
-  /// of 23 and doesn't match what people expect. Not when "custom" is part
-  /// of [title]'s own name.
-  static bool _isCustomEdit(TorrentStream stream, Movie? title) =>
-      _customPattern.hasMatch(stream.name) &&
-      !(title?.title.toLowerCase().contains('custom') ?? false);
+  /// Whether [stream] is a fan edit ("[N-Custom] Naruto …", One Pace's
+  /// One Piece): these cut the opening, ending and recaps, so an episode
+  /// plays at 17 minutes instead of 23 and doesn't match what people
+  /// expect. One Pace re-cuts whole arcs, its parts numbered its own way:
+  /// Torrentio filed an Enies Lobby part under Amazon Lily's first
+  /// episode, and it came first. Not when the edit's name is part of
+  /// [title]'s own.
+  static bool _isCustomEdit(TorrentStream stream, Movie? title) {
+    final name = title?.title.toLowerCase() ?? '';
+    return _customPattern.allMatches(stream.name).any((m) => !name
+        .contains(m[0]!.toLowerCase().replaceAll(RegExp('[ ._-]'), ' ')));
+  }
 
   // A year standing on its own in a release name ("Baki (2018)",
   // "Show.2019.1080p"), not part of a longer number like "1920x1080".

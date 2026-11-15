@@ -74,14 +74,34 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
     return size.width > size.height;
   }
 
-  ImageProvider _imageFor(TrendingItem item) =>
+  ImageProvider _networkImageFor(TrendingItem item) =>
       CachedNetworkImageProvider(item.imageFor(wide: _isWide));
+
+  /// The slide: the full-size original (see TrendingService), decoded only
+  /// as wide as filling this screen needs, with room for the slow zoom —
+  /// sharp, without holding a 3000px picture in memory. A portrait poster
+  /// (2:3) or a landscape backdrop (16:9) covers the screen, so it can
+  /// need to be wider than the screen when it's the screen's height that
+  /// it has to fill.
+  ImageProvider _imageFor(TrendingItem item) {
+    final size = MediaQuery.sizeOf(context);
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final aspect = _isWide ? 16 / 9 : 2 / 3;
+    final width =
+        (size.width > size.height * aspect ? size.width : size.height * aspect) *
+            dpr *
+            1.15;
+    return ResizeImage.resizeIfNeeded(
+        width.round(), null, _networkImageFor(item));
+  }
 
   // The mode panel's "frosted glass": the slide decoded tiny and stretched
   // smoothly reads as the artwork blurred, without a live BackdropFilter —
   // which re-blurred the always-zooming slideshow on every frame.
   ImageProvider _blurredImageFor(TrendingItem item) =>
-      ResizeImage.resizeIfNeeded(40, null, _imageFor(item));
+      ResizeImage.resizeIfNeeded(40, null, _networkImageFor(item));
+
+  ImageProvider _logoFor(String url) => _titleLogo(context, url);
 
   /// Shows [items][index] once its image has loaded (skipping it if it
   /// fails), then schedules the next slide.
@@ -99,9 +119,10 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
         precacheImage(_blurredImageFor(item), context, onError: (_, __) {}),
         // A logo that fails to load just falls back to the text title.
         if (item.logoUrl != null)
-          precacheImage(CachedNetworkImageProvider(item.logoUrl!), context,
+          precacheImage(_logoFor(item.logoUrl!), context,
               onError: (_, __) {}),
-      ]).timeout(const Duration(seconds: 8));
+        // Full-size pictures: a little longer to arrive.
+      ]).timeout(const Duration(seconds: 12));
     } catch (_) {
       loaded = false;
     }
@@ -364,7 +385,7 @@ class _HeroCaption extends StatelessWidget {
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 260, maxHeight: 80),
             child: Image(
-              image: CachedNetworkImageProvider(item.logoUrl!),
+              image: _titleLogo(context, item.logoUrl!),
               fit: BoxFit.contain,
               errorBuilder: (_, __, ___) => title,
             ),
@@ -443,3 +464,10 @@ class _Placeholder extends StatelessWidget {
     );
   }
 }
+
+/// A slide's title logo: the original, decoded at its box's size (80 tall).
+ImageProvider _titleLogo(BuildContext context, String url) =>
+    ResizeImage.resizeIfNeeded(
+        null,
+        (80 * MediaQuery.devicePixelRatioOf(context)).round(),
+        CachedNetworkImageProvider(url));

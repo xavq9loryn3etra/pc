@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:async' show TimeoutException;
 import 'dart:io' show Platform;
 import 'dart:ui' show PlatformDispatcher;
@@ -1000,6 +1001,20 @@ class TMDBService {
     }
   }
 
+  /// Of TMDB [images] (posters or backdrops), the largest of the best
+  /// rated: they're often tied (One Piece's top text-free posters all at
+  /// 3.33), and the first of them was 853px wide where another was 1000 —
+  /// soft on a phone's whole screen or a big monitor. Null if none.
+  static Map? _sharpestOfBest(List<Map> images) {
+    if (images.isEmpty) return null;
+    double vote(Map i) => (i['vote_average'] as num?)?.toDouble() ?? 0;
+    int width(Map i) => (i['width'] as num?)?.toInt() ?? 0;
+    final top = images.map(vote).reduce(math.max);
+    return images
+        .where((i) => vote(i) >= top - 0.05)
+        .reduce((a, b) => width(b) > width(a) ? b : a);
+  }
+
   /// TMDB's Animation genre.
   static const animationGenre = 16;
 
@@ -1161,13 +1176,12 @@ class TMDBService {
     String? backdrop = base.backdrop;
     final backdrops = images is Map ? images['backdrops'] : null;
     if (backdrops is List && backdrops.isNotEmpty) {
-      final candidates = backdrops.whereType<Map>();
-      final best = candidates.firstWhere(
-        (b) => b['iso_639_1'] == null,
-        orElse: () => candidates.first,
-      );
-      if (best['file_path'] != null) {
-        backdrop = '$_backdropBase${best['file_path']}';
+      final candidates = backdrops.whereType<Map>().toList();
+      final textless =
+          candidates.where((b) => b['iso_639_1'] == null).toList();
+      final best = _sharpestOfBest(textless.isNotEmpty ? textless : candidates);
+      if (best?['file_path'] != null) {
+        backdrop = '$_backdropBase${best!['file_path']}';
       }
     }
 
@@ -1177,12 +1191,11 @@ class TMDBService {
     String? textlessPoster;
     final posters = images is Map ? images['posters'] : null;
     if (posters is List) {
-      for (final p in posters.whereType<Map>()) {
-        if (p['iso_639_1'] == null && p['file_path'] is String) {
-          textlessPoster = '$_imageBase${p['file_path']}';
-          break;
-        }
-      }
+      final best = _sharpestOfBest([
+        for (final p in posters.whereType<Map>())
+          if (p['iso_639_1'] == null && p['file_path'] is String) p,
+      ]);
+      if (best != null) textlessPoster = '$_imageBase${best['file_path']}';
     }
 
     // Runtime

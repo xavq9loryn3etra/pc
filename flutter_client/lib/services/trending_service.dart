@@ -66,7 +66,7 @@ class TrendingService {
   static const _count = 3;
   // Bump the version when TrendingItem's shape or content changes, so a
   // stale cache from an older build isn't shown.
-  static String _cacheKey(AppMode mode) => 'trending_cache_v4_${mode.name}';
+  static String _cacheKey(AppMode mode) => 'trending_cache_v5_${mode.name}';
 
   final Dio _dio = Dio(
     BaseOptions(
@@ -166,11 +166,14 @@ class TrendingService {
         TrendingItem(
           title: movies[i].title,
           subtitle: '',
-          // w500 is soft full-screen on modern phones
-          imageUrl: (details[i]?.textlessPoster ?? movies[i].image!)
-              .replaceFirst('/w500/', '/w780/'),
-          wideImageUrl: details[i]?.backdrop ?? movies[i].backdrop,
-          logoUrl: details[i]?.logoUrl,
+          // The originals (full size): w780 posters and w1280 backdrops
+          // were soft stretched across a phone's or a monitor's whole
+          // screen. Decoded at the screen's size (see ModeSelectorScreen).
+          imageUrl: details[i]?.textlessPosterHighRes ??
+              movies[i].image!.replaceFirst('/w500/', '/original/'),
+          wideImageUrl: details[i]?.backdropHighRes ??
+              movies[i].backdropHighRes,
+          logoUrl: details[i]?.logoHighRes,
         ),
     ];
   }

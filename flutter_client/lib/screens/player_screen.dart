@@ -47,6 +47,7 @@ import '../services/scraper_service.dart';
 import '../services/skip_segments_service.dart';
 import '../services/subtitle_service.dart';
 import '../services/subtitle_translator.dart';
+import '../services/episode_numbering.dart';
 import '../services/gemini_key_service.dart';
 import '../widgets/gemini_key_form.dart';
 import '../services/subtitle_retime.dart';
@@ -4018,11 +4019,13 @@ class _PlayerScreenState extends State<PlayerScreen>
       final videoSizeBytes =
           TorrentDownloadRegistry.parseSizeBytes(stream.size);
       List<SubtitleTrackData> subs;
-      if (isTv && _currentSeason != null && _currentEpisode != null) {
+      final imdbEpisode = isTv ? await _imdbEpisode(imdbId) : null;
+      if (!mounted) return;
+      if (imdbEpisode != null) {
         subs = await SubtitleService().fetchSubtitles(
           imdbId,
-          season: _currentSeason,
-          episode: _currentEpisode,
+          season: imdbEpisode.$1,
+          episode: imdbEpisode.$2,
           videoSizeBytes: videoSizeBytes,
           filename: stream.name,
         );
@@ -4051,6 +4054,24 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  /// The episode playing in IMDb's numbering, which the subtitle finder
+  /// (OpenSubtitles) goes by, like the stream finders — for long anime it
+  /// isn't TMDB's, shown in the app (One Piece: TMDB's season 12 episode
+  /// 408 is IMDb's season 13 episode 27). Asked by TMDB's numbers, it found
+  /// nothing or another episode's: no subtitles, so no Sinhala either.
+  /// Null without a season and episode.
+  Future<(int, int)?> _imdbEpisode(String imdbId) async {
+    final season = _currentSeason;
+    final episode = _currentEpisode;
+    if (season == null || episode == null) return null;
+    return EpisodeNumbering().toImdb(
+      imdbId: imdbId,
+      tmdbId: widget.details.id,
+      season: season,
+      episode: episode,
+    );
+  }
+
   // The stream fingerprinted for subtitles already (see
   // _fingerprintSubtitles): once per video.
   String? _fingerprinted;
@@ -4075,10 +4096,12 @@ class _PlayerScreenState extends State<PlayerScreen>
       return;
     }
     final isTv = widget.movie.type == 'tv';
+    final imdbEpisode = isTv ? await _imdbEpisode(imdbId) : null;
+    if (!mounted || _streamUrl != url) return;
     final found = await SubtitleService().fetchSubtitles(
       imdbId,
-      season: isTv ? _currentSeason : null,
-      episode: isTv ? _currentEpisode : null,
+      season: imdbEpisode?.$1,
+      episode: imdbEpisode?.$2,
       videoSizeBytes: fingerprint.size,
       filename: _currentStream.name,
       videoHash: fingerprint.hash,

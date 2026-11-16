@@ -111,6 +111,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // cinemas (Movie.isCinemaOnly) its Play button is disabled unless it
   // did — rarely, a proper online copy is out before TMDB says so.
   bool _movieCopyFound = false;
+  // Whether that look-up has finished. Until it has, a movie in cinemas
+  // shows Play with a spinner, not "Still in cinemas": that showed first
+  // for films with good copies, then turned into Play.
+  bool _movieCopySearchDone = false;
   // The other services streaming this title that have a direct link to it
   // (see _loadAlsoOn) — the "Also on" logos under the buttons.
   List<StreamingProvider> _alsoOn = const [];
@@ -598,10 +602,15 @@ class _DetailsScreenState extends State<DetailsScreen> {
         }
         // Only matters (and only rebuilds the page) while it's in cinemas.
         _movieStreams!.then((streams) {
-          if (mounted && streams.isNotEmpty && _details!.isCinemaOnly) {
-            setState(() => _movieCopyFound = true);
+          if (mounted && _details!.isCinemaOnly) {
+            setState(() {
+              _movieCopySearchDone = true;
+              if (streams.isNotEmpty) _movieCopyFound = true;
+            });
           }
-        }, onError: (_) {});
+        }, onError: (_) {
+          if (mounted) setState(() => _movieCopySearchDone = true);
+        });
       }
 
       // Init Season 1 if TV
@@ -1392,10 +1401,17 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                 // a good copy turned up after all (see
                                 // _movieCopyFound): there'd be nothing to
                                 // pick in the qualities popup.
-                                final movieInCinemas = !isTv &&
+                                final cinemaNoCopyYet = !isTv &&
                                     !movieUnreleased &&
                                     m.isCinemaOnly &&
                                     !_movieCopyFound;
+                                // Still looking for a good copy: Play, with
+                                // a spinner, not to be tapped yet.
+                                final movieChecking = cinemaNoCopyYet &&
+                                    _movieStreams != null &&
+                                    !_movieCopySearchDone;
+                                final movieInCinemas =
+                                    cinemaNoCopyYet && !movieChecking;
                                 final movieBlocked =
                                     movieUnreleased || movieInCinemas;
                                 Episode? tvTargetEpisode;
@@ -1491,7 +1507,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                       // starts on the page.
                                                       autofocus:
                                                           TvDevice.isTv,
-                                                      onTap: movieBlocked
+                                                      onTap: movieBlocked ||
+                                                              movieChecking
                                                           ? null
                                                           : _openMovie,
                                                       borderRadius:
@@ -1502,6 +1519,19 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                                             MainAxisAlignment
                                                                 .center,
                                                         children: [
+                                                          if (movieChecking)
+                                                            const SizedBox
+                                                                .square(
+                                                              dimension: 20,
+                                                              child:
+                                                                  CircularProgressIndicator(
+                                                                strokeWidth:
+                                                                    2.5,
+                                                                color: Colors
+                                                                    .black,
+                                                              ),
+                                                            )
+                                                          else
                                                           Icon(
                                                             movieInCinemas
                                                                 ? Icons

@@ -942,12 +942,12 @@ class TMDBService {
   /// Stand-up specials ("movie_823754", "tv_819"), from TMDB's stand-up
   /// keywords: TMDB files them as plain Comedy, the same as Superbad, so
   /// only the keyword tells them apart. Saved, and fetched again weekly
-  /// (see [loadStandUpSpecials]).
+  /// (see [loadTaggedLists]).
   @visibleForTesting
   static Set<String> standUpSpecials = {};
 
+  // Its saved time is under '<key>_at' (see _due), as before.
   static const _standUpPrefsKey = 'standup_specials';
-  static const _standUpAtPrefsKey = 'standup_specials_at';
 
   /// Whether a title tagged stand-up is a special itself — Comedy (or a
   /// TV movie) only. A sitcom about a comedian also has Drama (Louie),
@@ -955,31 +955,85 @@ class TMDBService {
   static bool _isOnlyComedy(Map m) =>
       _genreIds(m).every((g) => g == _comedy || g == _tvMovie);
 
-  /// Loads the stand-up specials saved last time; when they're a week
-  /// old, or there are none yet, fetches them again in the background
-  /// (some 90 pages from TMDB).
-  Future<void> loadStandUpSpecials() async {
+  /// TMDB's keywords for softcore: "pink film", "softcore", "erotic
+  /// movie", "roman porno", "pinku eiga", "gay pinku", "erotic" and
+  /// "sexploitation".
+  static const _eroticKeywords =
+      '159551|155477|190370|348517|381597|374679|256466|10053';
+
+  /// Softcore films ("movie_1225795"), from TMDB's keywords for it, with
+  /// under 100 votes: TMDB doesn't mark them adult — Japan's "pink films"
+  /// (Kimono Madam, A Kimono Chaste Wife) came up in search. The few
+  /// well-known films tagged so (Nymphomaniac, Antichrist) aren't in it.
+  /// Not series: their tags take in mainstream anime. Saved, and fetched
+  /// again weekly (see [loadTaggedLists]).
+  @visibleForTesting
+  static Set<String> eroticFilms = {};
+
+  static const _eroticPrefsKey = 'erotic_films';
+
+  /// Loads the lists of titles kept out by TMDB's keywords — stand-up
+  /// specials, softcore films — saved last time; one a week old, or not
+  /// there yet, is fetched again in the background.
+  Future<void> loadTaggedLists() async {
     final prefs = await SharedPreferences.getInstance();
-    standUpSpecials =
-        (prefs.getStringList(_standUpPrefsKey) ?? const []).toSet();
-    final at = DateTime.fromMillisecondsSinceEpoch(
-        prefs.getInt(_standUpAtPrefsKey) ?? 0);
-    if (standUpSpecials.isNotEmpty &&
-        DateTime.now().difference(at) < const Duration(days: 7)) {
-      return;
+    standUpSpecials = _savedList(prefs, _standUpPrefsKey);
+    eroticFilms = _savedList(prefs, _eroticPrefsKey);
+    if (_due(prefs, _standUpPrefsKey, standUpSpecials)) {
+      unawaited(_refreshTagged(
+        prefs,
+        _standUpPrefsKey,
+        keywords: _standUpKeywords,
+        types: const ['movie', 'tv'],
+        keep: _isOnlyComedy,
+        found: (ids) => standUpSpecials = ids,
+      ));
     }
-    unawaited(_refreshStandUpSpecials(prefs));
+    if (_due(prefs, _eroticPrefsKey, eroticFilms)) {
+      // Some 290 pages: the low-voted ones are most of them.
+      unawaited(_refreshTagged(
+        prefs,
+        _eroticPrefsKey,
+        keywords: _eroticKeywords,
+        types: const ['movie'],
+        query: const {'vote_count.lte': '99'},
+        keep: (_) => true,
+        found: (ids) => eroticFilms = ids,
+      ));
+    }
   }
 
-  Future<void> _refreshStandUpSpecials(SharedPreferences prefs) async {
+  static Set<String> _savedList(SharedPreferences prefs, String key) =>
+      (prefs.getStringList(key) ?? const []).toSet();
+
+  static bool _due(SharedPreferences prefs, String key, Set<String> list) {
+    final at =
+        DateTime.fromMillisecondsSinceEpoch(prefs.getInt('${key}_at') ?? 0);
+    return list.isEmpty ||
+        DateTime.now().difference(at) >= const Duration(days: 7);
+  }
+
+  /// Every title of [types] TMDB tags with any of [keywords] (and
+  /// [query]) that [keep] takes, as "movie_123": saved under [key] and
+  /// handed to [found].
+  Future<void> _refreshTagged(
+    SharedPreferences prefs,
+    String key, {
+    required String keywords,
+    required List<String> types,
+    Map<String, String> query = const {},
+    required bool Function(Map) keep,
+    required void Function(Set<String>) found,
+  }) async {
     try {
-      final found = <String>{};
-      for (final type in ['movie', 'tv']) {
+      final ids = <String>{};
+      for (final type in types) {
         Future<Map> page(int n) async => (await _dio.get(
               '$_baseUrl/discover/$type',
               queryParameters: {
                 'api_key': _apiKey,
-                'with_keywords': _standUpKeywords,
+                'with_keywords': keywords,
+                ...query,
                 'page': n,
               },
             ))
@@ -996,20 +1050,39 @@ class TMDBService {
         }
         for (final p in pages) {
           for (final r in p['results'] as List? ?? const []) {
-            if (r is Map && _isOnlyComedy(r)) found.add('${type}_${r['id']}');
+            if (r is Map && keep(r)) ids.add('${type}_${r['id']}');
           }
         }
       }
-      if (found.isEmpty) return;
-      standUpSpecials = found;
+      if (ids.isEmpty) return;
+      found(ids);
       _cache.clear(); // Lists fetched before now may hold some.
-      await prefs.setStringList(_standUpPrefsKey, found.toList());
-      await prefs.setInt(
-          _standUpAtPrefsKey, DateTime.now().millisecondsSinceEpoch);
+      await prefs.setStringList(key, ids.toList());
+      await prefs.setInt('${key}_at', DateTime.now().millisecondsSinceEpoch);
     } catch (e) {
-      debugPrint('Stand-up specials not fetched: $e');
+      debugPrint('$key not fetched: $e');
     }
   }
+
+  // Explicit words in Japanese, Chinese and Korean titles, which have no
+  // spaces between words: 巨乳 (big breasts), 淫 (lewd), 痴漢 (groper),
+  // 痴女, 熟女 (mature woman), 人妻 (married woman), 変態 (pervert), 官能
+  // (sensual), 色情 (erotic), 悶絶, 凌辱/陵辱/強姦 (rape), 調教, 緊縛
+  // (bondage), ポルノ (porno), エロ (ero), 에로 (ero), 야동 (porn clip),
+  // 三級/三级 (Category III). Kimono Madam is 和服巨乳妻 不倫・淫乱・悶絶.
+  static final _explicitCjk = RegExp(
+      '巨乳|淫|痴漢|痴女|熟女|人妻|変態|官能|色情|悶絶|凌辱|陵辱|強姦|調教|緊縛'
+      '|ポルノ|エロ|에로|야동|三級|三级');
+
+  // The same in English (and Japanese romanised: chikan, groper).
+  static final _explicitEnglish = RegExp(
+      r'(?<![A-Za-z])(grop(e|es|ed|ing|er|ers)|chikan|softcore|erotica?'
+      r'|erotomaniac|lewd)(?![A-Za-z])',
+      caseSensitive: false);
+
+  /// The languages whose unlabelled films, with no genre and next to no
+  /// votes, are mostly softcore (Wet Kimono): Japanese, Korean, Chinese.
+  static const _softcoreLanguages = {'ja', 'ko', 'zh', 'cn'};
 
   /// A TMDB result never to show: one marked adult, one with an explicit
   /// word in its title, a talk, news or reality show, a documentary or
@@ -1028,6 +1101,9 @@ class TMDBService {
       m['original_name'],
     ].whereType<String>().join(' ');
     if (_explicitTitle.hasMatch(titles)) return true;
+    if (_explicitCjk.hasMatch(titles) || _explicitEnglish.hasMatch(titles)) {
+      return true;
+    }
     if (_extrasTitle.hasMatch(titles)) return true;
     final genres = m['genre_ids'] ?? m['genres'];
     final ids = _genreIds(m);
@@ -1042,9 +1118,21 @@ class TMDBService {
     if (standUpSpecials.contains('${type}_${m['id']}') && _isOnlyComedy(m)) {
       return true;
     }
+    if (type == 'movie' && eroticFilms.contains('movie_${m['id']}')) {
+      return true;
+    }
     final date = (m['release_date'] ?? m['first_air_date'] ?? '').toString();
     final votes = (m['vote_count'] as num?) ?? 0;
-    return (genres is! List || genres.isEmpty) && date.isEmpty && votes == 0;
+    final noGenre = genres is! List || genres.isEmpty;
+    // A Japanese, Korean or Chinese film with no genre and next to no
+    // votes: mostly unlabelled softcore (Wet Kimono). Not other
+    // languages': a small Sinhala film can be just as bare (Neera).
+    if (noGenre &&
+        votes < 10 &&
+        _softcoreLanguages.contains(m['original_language'])) {
+      return true;
+    }
+    return noGenre && date.isEmpty && votes == 0;
   }
 
   Movie? _formatMovie(Map<String, dynamic> m) {

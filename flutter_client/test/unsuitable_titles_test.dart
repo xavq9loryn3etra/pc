@@ -213,6 +213,94 @@ void main() {
         isFalse);
   });
 
+  test("softcore TMDB doesn't mark adult is hidden", () {
+    // Its original title: 和服巨乳妻 不倫・淫乱・悶絶.
+    expect(
+        hidden({
+          'id': 1225795,
+          'title': 'Kimono Madam',
+          'original_title': '和服巨乳妻 不倫・淫乱・悶絶',
+          'original_language': 'ja',
+          'genre_ids': [],
+          'vote_count': 2,
+          'release_date': '1998-05-01',
+        }),
+        isTrue);
+    expect(
+        hidden({
+          'id': 1665394,
+          'title': 'Groping Voyeur – Kimono-Clad Wife, Teasing and Crying',
+          'original_title': 'Chikan nozoki-ma – wafuku-zuma ijiri naki',
+          'original_language': 'ja',
+          'genre_ids': [],
+          'vote_count': 0,
+          'release_date': '1998-01-01',
+        }),
+        isTrue);
+    // No telling word: Japanese, no genre, next to no votes.
+    expect(
+        hidden({
+          'id': 1054799,
+          'title': 'Wet Kimono',
+          'original_title': '四畳半色の濡衣',
+          'original_language': 'ja',
+          'genre_ids': [],
+          'vote_count': 2,
+          'release_date': '1983-03-12',
+        }),
+        isTrue);
+    // Tagged softcore on TMDB (see TMDBService.eroticFilms).
+    TMDBService.eroticFilms = {'movie_1496096'};
+    addTearDown(() => TMDBService.eroticFilms = {});
+    expect(
+        hidden({
+          'id': 1496096,
+          'media_type': 'movie',
+          'title': 'A Kimono Chaste Wife',
+          'original_language': 'ja',
+          'genre_ids': [18],
+          'vote_count': 12,
+          'release_date': '2001-08-10',
+        }),
+        isTrue);
+  });
+
+  test('films with kimono in their name stay', () {
+    expect(
+        hidden({
+          'id': 27045,
+          'title': 'The Crimson Kimono',
+          'original_language': 'en',
+          'genre_ids': [10749, 18, 80],
+          'vote_count': 74,
+          'release_date': '1959-10-21',
+        }),
+        isFalse);
+    // Japanese and small, but with genres.
+    expect(
+        hidden({
+          'id': 826909,
+          'title': 'The Devil Wears Ju-Ni Hitoe Kimono',
+          'original_title': '十二単衣を着た悪魔',
+          'original_language': 'ja',
+          'genre_ids': [14, 36],
+          'vote_count': 2,
+          'release_date': '2020-11-06',
+        }),
+        isFalse);
+    // No genre either, but not Japanese, Korean or Chinese (a short).
+    expect(
+        hidden({
+          'id': 438719,
+          'title': "The Caterpillar's Kimono",
+          'original_language': 'en',
+          'genre_ids': [],
+          'vote_count': 2,
+          'release_date': '2013-06-29',
+        }),
+        isFalse);
+  });
+
   test('real films stay, however small', () {
     // Neera: Sinhala, a handful of details.
     expect(

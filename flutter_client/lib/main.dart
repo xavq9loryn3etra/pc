@@ -164,9 +164,10 @@ void main() async {
     );
   }
 
-  // Stand-up specials to leave out of every list: the saved ones, read
-  // before any list loads (a week-old list is fetched again behind).
-  await _initStep('StandUpSpecials', TMDBService().loadStandUpSpecials);
+  // Stand-up specials and softcore films to leave out of every list: the
+  // saved ones, read before any list loads (a week-old list is fetched
+  // again behind).
+  await _initStep('TaggedLists', TMDBService().loadTaggedLists);
 
   // Not awaited: warms up the mode selector's background slideshow while
   // the splash plays (needs the TMDB key from .env above).

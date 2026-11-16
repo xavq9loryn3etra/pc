@@ -1022,9 +1022,16 @@ class _PlayerScreenState extends State<PlayerScreen>
       _fingerprintSubtitles();
       // Loaded: now the controls can start counting down to hide.
       _resetControlsTimer();
+      // Where it really carries on from: a resume lands on the keyframe
+      // before the saved spot (see 'hr-seek'), up to several seconds
+      // earlier, and the notice gave the saved spot ("Resumed from 00:08"
+      // over a picture at 00:06).
       final resumedFrom = _pendingResumeBadge;
       _pendingResumeBadge = null;
-      if (resumedFrom != null) _showResumeBadge(resumedFrom);
+      if (resumedFrom != null) {
+        _showResumeBadge(
+            'Resumed from ${_formatDuration(_currentPosition)}');
+      }
     }
   }
 

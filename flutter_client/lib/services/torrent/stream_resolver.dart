@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import '../../models/movie.dart';
 import '../audio_language_service.dart';
 import '../episode_numbering.dart';
+import '../tmdb_service.dart';
 import 'free_space.dart';
 import 'torrent_download_registry.dart';
 import 'torrent_engine_service.dart';
@@ -86,7 +87,12 @@ class StreamResolver {
     AudioLanguage? audioLanguage,
   }) async {
     final stopwatch = Stopwatch()..start();
-    final found = await _find(imdbId, type, season, episode, title);
+    // Alongside the finders: the copies of films with the same name.
+    final namesakes = type == 'movie' && title != null
+        ? _namesakeCopies(title)
+        : Future.value(const <TorrentStream>[]);
+    final found = withoutNamesakes(
+        await _find(imdbId, type, season, episode, title), await namesakes);
     print('[timing] found ${found.length} copies in '
         '${stopwatch.elapsedMilliseconds} ms');
     final cinemaOnly = title?.isCinemaOnly ?? false;
@@ -100,6 +106,7 @@ class StreamResolver {
             _fitsTitle(s, title) &&
             // Never a fan edit, not even when there's nothing else.
             !_isCustomEdit(s, title) &&
+            !saysAnotherFilm(s, title) &&
             !tooSmallFor(s, title))
         .toList();
     // English audio for titles made in English. For one made in another
@@ -179,6 +186,68 @@ class StreamResolver {
       });
     }
     return found.streams;
+  }
+
+  // The copies of each movie's namesakes, by TMDB id (see
+  // [_namesakeCopies]).
+  static final _namesakesOf = <String, List<TorrentStream>>{};
+
+  /// YTS's copies of the films with [title]'s name, out within a year of
+  /// it (TMDBService.namesakesOf): the finders file some of them under
+  /// [title] too. YTS's own are surely theirs (see [withoutNamesakes]).
+  /// Not waited on for more than a few seconds: none then.
+  Future<List<TorrentStream>> _namesakeCopies(Movie title) async {
+    final cached = _namesakesOf[title.id];
+    if (cached != null) return cached;
+    try {
+      final ids = await TMDBService().namesakesOf(title);
+      final lists =
+          await Future.wait(ids.map(_indexService.ytsStreams));
+      if (lists.any((l) => l == null)) {
+        return [for (final l in lists) ...?l];
+      }
+      return _namesakesOf[title.id] = [for (final l in lists) ...l!];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// [streams] without the copies of another film with the same name —
+  /// one of [namesakes], or the same size at the same quality (another
+  /// upload of it). Torrentio listed The Asylum's The Odyssey (2026) under
+  /// Nolan's: its YTS copies, and re-uploads of them shared by thousands,
+  /// came first for HD and Full HD, and played The Asylum's film.
+  @visibleForTesting
+  static List<TorrentStream> withoutNamesakes(
+      List<TorrentStream> streams, List<TorrentStream> namesakes) {
+    if (namesakes.isEmpty) return streams;
+    final hashes = {for (final n in namesakes) n.infoHash.toLowerCase()};
+    bool sameCopy(TorrentStream s, TorrentStream n) {
+      final a = _sizeInMB(s.size), b = _sizeInMB(n.size);
+      if (a == null || b == null || tierOf(s) != tierOf(n)) return false;
+      return (a - b).abs() <= math.max(4, b * 0.006);
+    }
+
+    return [
+      for (final s in streams)
+        if (!hashes.contains(s.infoHash.toLowerCase()) &&
+            !namesakes.any((n) => sameCopy(s, n)))
+          s,
+    ];
+  }
+
+  // A release saying it isn't the film it's filed under: "The Odyssey 2026
+  // (NOT The Chris Nolan FILM)".
+  static final _anotherFilmPattern = RegExp(
+      r'(?<![A-Za-z])not[ ._-]+the[ ._-]+.{0,40}?(?<![A-Za-z])(film|movie)(?![A-Za-z])',
+      caseSensitive: false);
+
+  /// Whether [stream]'s name says it's another film than [title] (whose
+  /// own name may say "not the").
+  @visibleForTesting
+  static bool saysAnotherFilm(TorrentStream stream, Movie? title) {
+    if (_anotherFilmPattern.hasMatch(title?.title ?? '')) return false;
+    return _anotherFilmPattern.hasMatch('${stream.name}\n${stream.title}');
   }
 
   // Words that mark a release as filmed in a cinema: camera (CAM, HDCAM),

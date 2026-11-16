@@ -1081,6 +1081,52 @@ class TMDBService {
     );
   }
 
+  // Each movie's namesakes, by TMDB id (see [namesakesOf]).
+  final Map<String, List<String>> _namesakes = {};
+
+  /// The IMDb ids of other films with [movie]'s name, out within a year
+  /// of it — The Asylum's The Odyssey (2026, 86 minutes) beside Nolan's —
+  /// whose copies the finders sometimes file under it. At most three;
+  /// none for a series, or when TMDB doesn't answer.
+  Future<List<String>> namesakesOf(Movie movie) async {
+    if (movie.type != 'movie' || movie.year <= 0) return const [];
+    final cached = _namesakes[movie.id];
+    if (cached != null) return cached;
+    String plain(Object? s) =>
+        '$s'.toLowerCase().replaceAll(RegExp('[^a-z0-9]+'), ' ').trim();
+    try {
+      final response = await _dio.get(
+        '$_baseUrl/search/movie',
+        queryParameters: {'api_key': _apiKey, 'query': movie.title},
+      );
+      final name = plain(movie.title);
+      final others = [
+        for (final r in response.data['results'] as List? ?? const [])
+          if (r is Map &&
+              '${r['id']}' != movie.id &&
+              plain(r['title']) == name &&
+              ((int.tryParse('${r['release_date']}'.split('-').first) ?? 0) -
+                          movie.year)
+                      .abs() <=
+                  1)
+            r['id'],
+      ].take(3);
+      final ids = await Future.wait(others.map((id) => _dio
+          .get('$_baseUrl/movie/$id/external_ids',
+              queryParameters: {'api_key': _apiKey})
+          .then<String?>((r) => r.data['imdb_id'] as String?)
+          .catchError((Object _) => null)));
+      final found = [
+        for (final id in ids)
+          if (id != null && id.startsWith('tt')) id,
+      ];
+      _namesakes[movie.id] = found;
+      return found;
+    } catch (_) {
+      return const [];
+    }
+  }
+
   /// IMDb ratings from Cinemeta (Stremio's own catalogue, free and
   /// keyless), by IMDb id: kept for the session.
   static final Map<String, String?> _imdbRatings = {};

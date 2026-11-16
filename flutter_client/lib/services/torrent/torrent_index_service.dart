@@ -492,6 +492,11 @@ class TorrentIndexService {
         receiveTimeout: const Duration(seconds: 8),
       );
 
+  /// YTS's copies of the movie [imdbId] alone: YTS files each copy under
+  /// its own movie, so these are surely that movie's (see
+  /// StreamResolver.withoutNamesakes). Null if YTS didn't answer.
+  Future<List<TorrentStream>?> ytsStreams(String imdbId) => _yts(imdbId);
+
   Future<List<TorrentStream>?> _yts(String imdbId) async {
     for (final api in _ytsApis) {
       try {

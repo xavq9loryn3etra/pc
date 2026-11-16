@@ -2296,6 +2296,7 @@ class _TorrentQualitySelectorSheetState
         stream,
         option.streams,
         isCancelled: () => !mounted,
+        title: widget.details,
       );
       final resolvedStream = resolved.stream;
       final result = resolved.result;

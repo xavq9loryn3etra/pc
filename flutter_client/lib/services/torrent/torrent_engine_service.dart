@@ -773,6 +773,16 @@ class TorrentEngineService {
 
   int _findLargestVideoFile(List<FileInfo> files) => chooseVideoFile(files);
 
+  /// The files of the connected torrent [id] (empty until its metadata is
+  /// in).
+  List<FileInfo> filesOf(int id) {
+    try {
+      return engine.getFiles(id);
+    } catch (_) {
+      return const [];
+    }
+  }
+
   // Bonus clips in a release, not the feature.
   static final _bonusPattern = RegExp(
       r'(?<![A-Za-z])(samples?|trailers?|extras|featurettes?|'

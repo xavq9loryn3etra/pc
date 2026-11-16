@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:libtorrent_flutter/libtorrent_flutter.dart' show FileInfo;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/movie.dart';
 import '../audio_language_service.dart';
@@ -96,8 +98,10 @@ class StreamResolver {
     print('[timing] found ${found.length} copies in '
         '${stopwatch.elapsedMilliseconds} ms');
     final cinemaOnly = title?.isCinemaOnly ?? false;
+    await _loadWrongCopies();
     var streams = found
         .where((s) =>
+            !isWrongCopy(imdbId, s.infoHash) &&
             tierOf(s) > 0 &&
             !_isCamRecording(s, title) &&
             (!cinemaOnly || _isHomeRelease(s, title)) &&
@@ -250,6 +254,99 @@ class StreamResolver {
     return _anotherFilmPattern.hasMatch('${stream.name}\n${stream.title}');
   }
 
+  // Files that run as programs on Windows or Android. A real copy of a film
+  // never has one; fakes of a new film often do (a short clip, and a
+  // "player" or "codec" to install). Not ".com": a text file named
+  // "...Demonoid.com" has it too.
+  static const _programTypes = {
+    'exe', 'msi', 'scr', 'bat', 'cmd', 'lnk', 'pif', 'vbs', 'vbe', 'wsf',
+    'hta', 'ps1', 'jar', 'apk', 'xapk',
+  };
+
+  /// What's wrong inside a copy, from its [files] — once connected, before
+  /// it plays — or null if nothing: a program among them, or the file to
+  /// play (the one [fileIdx] names, or the largest video) named for
+  /// another film or year than [title] ("Bonus/The.Odyssey.1997.mkv").
+  @visibleForTesting
+  static String? insideProblem(
+      List<FileInfo> files, int? fileIdx, Movie? title) {
+    if (files.isEmpty) return null;
+    for (final f in files) {
+      final name = f.name.toLowerCase();
+      final dot = name.lastIndexOf('.');
+      if (dot > 0 && _programTypes.contains(name.substring(dot + 1))) {
+        return 'it holds a program (${f.name})';
+      }
+    }
+    if (title == null) return null;
+    FileInfo? playing;
+    if (fileIdx != null) {
+      for (final f in files) {
+        if (f.index == fileIdx) playing = f;
+      }
+    } else {
+      try {
+        final index = TorrentEngineService.chooseVideoFile(files);
+        playing = files.firstWhere((f) => f.index == index);
+      } catch (_) {}
+    }
+    if (playing == null) return null;
+    final path = playing.path.isNotEmpty ? playing.path : playing.name;
+    final fits = title.year <= 0 ||
+        (_yearsFit(path, title) &&
+            !(title.type == 'tv' &&
+                namesAnotherShow(path,
+                    showTitle: title.title, startYear: title.year)));
+    return fits ? null : 'its video is named for another film ($path)';
+  }
+
+  // Copies found to be of another film than the one they're listed for
+  // (the player saw their length was wrong — see [wrongLength]), as
+  // "<imdb id>:<info hash>": never offered for it again. Saved.
+  static Set<String> _wrongCopies = {};
+  static Future<void>? _wrongCopiesLoaded;
+  static const _wrongCopiesKey = 'wrong_copies_v1';
+
+  static Future<void> _loadWrongCopies() =>
+      _wrongCopiesLoaded ??= SharedPreferences.getInstance().then((prefs) {
+        _wrongCopies = {...?prefs.getStringList(_wrongCopiesKey)};
+      }).catchError((Object _) {});
+
+  /// Whether [infoHash] was found to be another film than [imdbId].
+  static bool isWrongCopy(String imdbId, String infoHash) =>
+      _wrongCopies.contains('$imdbId:${infoHash.toLowerCase()}');
+
+  /// Notes [infoHash] as another film than [imdbId], or ([wrong] false)
+  /// takes that back.
+  static Future<void> markWrongCopy(String imdbId, String infoHash,
+      {bool wrong = true}) async {
+    await _loadWrongCopies();
+    final key = '$imdbId:${infoHash.toLowerCase()}';
+    wrong ? _wrongCopies.add(key) : _wrongCopies.remove(key);
+    // The latest 500.
+    final list = _wrongCopies.toList();
+    final kept = list.length > 500 ? list.sublist(list.length - 500) : list;
+    _wrongCopies = kept.toSet();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_wrongCopiesKey, kept);
+    } catch (_) {}
+  }
+
+  /// Whether a video [length] can't be the film [expectedMinutes] long:
+  /// under two thirds of it (The Asylum's 86-minute The Odyssey for
+  /// Nolan's 173), or over 1.8 times (extended cuts run up to a third
+  /// longer). Never when the film's length isn't known, or is under half
+  /// an hour (a short's listed length can be well off).
+  @visibleForTesting
+  static bool wrongLength(Duration length, int? expectedMinutes) {
+    if (expectedMinutes == null || expectedMinutes < 30) return false;
+    if (length <= Duration.zero) return false;
+    final minutes = length.inSeconds / 60;
+    return minutes < expectedMinutes * 0.65 ||
+        minutes > expectedMinutes * 1.8;
+  }
+
   // Words that mark a release as filmed in a cinema: camera (CAM, HDCAM),
   // telesync (TS, HDTS), telecine (TC), screeners (SCR, DVDScr, HdTScr) and
   // the names Indian releases use for them ("PreDVDRip", "HQ Pre",
@@ -385,10 +482,16 @@ class StreamResolver {
             showTitle: title.title, startYear: title.year)) {
       return false;
     }
+    return _yearsFit(stream.name, title);
+  }
+
+  /// Whether the years [name] gives (if any) are [title]'s own — see
+  /// [_fitsTitle].
+  static bool _yearsFit(String name, Movie title) {
     final titleNumbers =
         _yearPattern.allMatches(title.title).map((m) => m[0]).toSet();
     final years = _yearPattern
-        .allMatches(stream.name)
+        .allMatches(name)
         .map((m) => m[0]!)
         .where((y) => !titleNumbers.contains(y))
         .map(int.parse);
@@ -401,7 +504,7 @@ class StreamResolver {
         : title.year + 1;
     // A collection spanning the title's years ("The Christopher Nolan
     // Collection (2000-2023)") holds it too.
-    for (final range in _yearRangePattern.allMatches(stream.name)) {
+    for (final range in _yearRangePattern.allMatches(name)) {
       if (int.parse(range[1]!) <= last && int.parse(range[2]!) >= first) {
         return true;
       }
@@ -942,6 +1045,9 @@ class StreamResolver {
     // sharing them. A hopeless case now gives up after ~35 s, not ~26.
     int maxAttempts = 6,
     bool Function()? isCancelled,
+    // What's being played, to look inside each copy for (see
+    // [insideProblem]).
+    Movie? title,
   }) async {
     var ordered = [
       selected,
@@ -991,6 +1097,14 @@ class StreamResolver {
           return;
         }
         try {
+          // Its files, before a byte of video: another film's, or a
+          // program, and it's a failed start — the next copy goes.
+          final problem =
+              insideProblem(_engine.filesOf(id), candidate.fileIdx, title);
+          if (problem != null) {
+            print('Copy $number left out: $problem');
+            throw Exception(problem);
+          }
           final result =
               await _engine.startStream(id, fileIndex: candidate.fileIdx);
           if (outcome.isCompleted) {

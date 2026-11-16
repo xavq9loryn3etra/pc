@@ -788,6 +788,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _durationNotifier.value = dur;
       _updateMediaSessionMetadata();
       _rememberEpisodeLength(dur);
+      _scheduleLengthCheck();
       _reparseMkvChaptersForDuration(dur);
       _updateActiveSkipSegment(_currentPosition);
 
@@ -1183,6 +1184,146 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// keeps failing. Previously this required the user to notice playback
   /// had died, back out to Settings, and delete the cached file by hand;
   /// this does the same thing automatically, in place.
+  // ── The copy's length (see _checkLength) ──
+
+  Timer? _lengthCheckTimer;
+  // The copy whose length has been checked.
+  String? _lengthCheckedHash;
+  // Copies left this session for their length. A third in a row, and it's
+  // the film's listed length that's off rather than the copies: that one
+  // plays, and none of them count as wrong.
+  final List<String> _wrongLengthHashes = [];
+  bool _lengthCheckOff = false;
+
+  /// Checks the length of the copy playing, once it's settled (see
+  /// _checkLength).
+  void _scheduleLengthCheck() {
+    if (_lengthCheckOff || widget.movie.type != 'movie') return;
+    _lengthCheckTimer?.cancel();
+    _lengthCheckTimer =
+        Timer(const Duration(milliseconds: 1500), _checkLength);
+  }
+
+  /// A film's copy far shorter or longer than the film (see
+  /// StreamResolver.wrongLength) is another film filed under it — The
+  /// Asylum's 86-minute The Odyssey played for Nolan's 173 — and the next
+  /// copy goes instead (see _leaveWrongCopy). Once per copy.
+  void _checkLength() {
+    if (!mounted || _lengthCheckOff) return;
+    // Mid-switch, the length may be the last copy's: once it's settled.
+    if (_switchingQuality || _recoveringStream) {
+      _scheduleLengthCheck();
+      return;
+    }
+    final hash = _currentStream.infoHash.toLowerCase();
+    if (hash == _lengthCheckedHash) return;
+    _lengthCheckedHash = hash;
+    final expected = StreamResolver.minutesOf(widget.details.runtime);
+    if (!StreamResolver.wrongLength(_duration, expected)) return;
+    print('This copy is ${_duration.inMinutes} min, the film $expected: '
+        'another film');
+    unawaited(_leaveWrongCopy());
+  }
+
+  /// Leaves the copy playing, found to be another film: it's never offered
+  /// for this one again (StreamResolver.markWrongCopy), its download is
+  /// deleted, and the next copy — of the same quality first — plays from
+  /// the saved spot.
+  Future<void> _leaveWrongCopy() async {
+    if (_switchingQuality || _recoveringStream || !mounted) return;
+    final wrong = _currentStream;
+    final hash = wrong.infoHash.toLowerCase();
+    final imdbId = widget.details.imdbId ?? widget.details.id;
+    _wrongLengthHashes.add(hash);
+    if (_wrongLengthHashes.length >= 3) {
+      _lengthCheckOff = true;
+      for (final h in _wrongLengthHashes) {
+        unawaited(StreamResolver.markWrongCopy(imdbId, h, wrong: false));
+      }
+      return;
+    }
+    unawaited(StreamResolver.markWrongCopy(imdbId, hash));
+    _triedStartHashes.add(hash);
+    bool untried(TorrentStream s) =>
+        !_triedStartHashes.contains(s.infoHash.toLowerCase());
+    final rest = [
+      for (final s in _availableStreams)
+        if (s.infoHash.toLowerCase() != hash) s,
+    ];
+    final same = StreamResolver.sameQuality(wrong, rest)
+        .where((s) => s.infoHash.toLowerCase() != hash && untried(s))
+        .toList();
+    final candidates = [
+      ...same,
+      ...rest.where((s) => !same.contains(s) && untried(s)),
+    ];
+    setState(() => _availableStreams = rest);
+    if (candidates.isEmpty) {
+      showAppMessage(
+        context,
+        'This copy seems to be a different film, and there are no others.',
+        error: true,
+      );
+      return;
+    }
+
+    _recoveringStream = true;
+    setState(() {
+      _switchingQuality = true;
+      _switchingMessage = 'Finding the right copy…';
+      _initialPositionRestored = false;
+      _forgetFileSubtitles();
+    });
+    player.pause();
+    StreamResult? started;
+    try {
+      final resolved = await _resolver.resolveWithFallback(
+        candidates.first,
+        candidates,
+        isCancelled: () => !mounted,
+        title: widget.details,
+      );
+      final result = started = resolved.result;
+      if (_closedDuringSwitch(started)) return;
+      await _rememberPlayedTorrent(resolved.stream);
+      if (_closedDuringSwitch(started)) return;
+      await _openMediaWithResume(result.streamUrl);
+      if (_closedDuringSwitch(started)) return;
+      player.play();
+      setState(() {
+        _currentStream = resolved.stream;
+        _torrentId = result.torrentId;
+        _streamId = result.streamId;
+        _streamUrl = result.streamUrl;
+        _switchingQuality = false;
+        _resetControlsTimer();
+      });
+      _subscribeToTorrent(_torrentId);
+      _loadSubtitles();
+      // The other film's download.
+      unawaited(TorrentStorageService.deleteByInfoHash(hash));
+    } on ResolveCancelledException {
+      return;
+    } catch (e) {
+      if (_closedDuringSwitch(started)) return;
+      _returnAfterFailedSwitch(resumePlayback: false);
+      if (mounted) {
+        setState(() {
+          _switchingQuality = false;
+          _initialPositionRestored = true;
+        });
+        showAppMessage(
+          context,
+          "This copy seems to be a different film, and another wouldn't "
+          'start. Try another quality.',
+          error: true,
+        );
+      }
+    } finally {
+      _recoveringStream = false;
+    }
+  }
+
   Future<void> _attemptStreamRecovery({String? reason}) async {
     if (_recoveringStream || _switchingQuality || !mounted) return;
 
@@ -1266,6 +1407,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           otherCopies.first,
           otherCopies,
           isCancelled: () => !mounted,
+          title: widget.details,
         );
         started = resolved.result;
         if (_closedDuringSwitch(started)) return;
@@ -1282,6 +1424,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           _currentStream,
           _availableStreams,
           isCancelled: () => !mounted,
+          title: widget.details,
         );
         started = resolved.result;
         if (_closedDuringSwitch(started)) return;
@@ -2350,6 +2493,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         newStream,
         fallbacks ?? StreamResolver.sameQuality(newStream, _availableStreams),
         isCancelled: () => !mounted,
+        title: widget.details,
       );
       final resolvedStream = resolved.stream;
       final result = started = resolved.result;
@@ -2957,6 +3101,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           ...streams.where((s) => !sameTier.contains(s)),
         ],
         isCancelled: () => !mounted,
+        title: widget.details,
       );
       started = resolved.result;
       // Closed meanwhile: before the new episode goes in the history.
@@ -3052,6 +3197,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         stream,
         StreamResolver.sameQuality(stream, allStreams),
         isCancelled: () => !mounted,
+        title: widget.details,
       );
       started = resolved.result;
       if (_closedDuringSwitch(started)) return;
@@ -3561,6 +3707,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _controlsTimer?.cancel();
     _volumeCollapseTimer?.cancel();
     _stallWatchdogTimer?.cancel();
+    _lengthCheckTimer?.cancel();
     _resumeBadgeTimer?.cancel();
     _syncedBadgeTimer?.cancel();
     _mediaActionSub?.cancel();

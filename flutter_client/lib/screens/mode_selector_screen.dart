@@ -118,6 +118,7 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
       });
       // On the device now: shown at once next time.
       unawaited(TrendingService().markShown(_mode, items[index]));
+      _preload(items[(index + 1) % items.length]);
     } else if (!identical(items, _fallback) && _fallback.isNotEmpty) {
       // A new slide that won't load (a slow connection): carry on with
       // last time's, which are on the device.
@@ -128,6 +129,18 @@ class _ModeSelectorScreenState extends State<ModeSelectorScreen> {
       return;
     }
     _timer = Timer(loaded ? _slideDuration : Duration.zero, _next);
+  }
+
+  /// Starts loading [item]'s pictures now, while the slide before it shows:
+  /// fetched only when it was due, a slow one left the slide before it at
+  /// the end of its zoom, still, until it arrived.
+  void _preload(TrendingItem item) {
+    if (!mounted) return;
+    precacheImage(_imageFor(item), context, onError: (_, __) {});
+    precacheImage(_blurredImageFor(item), context, onError: (_, __) {});
+    if (item.logoUrl != null) {
+      precacheImage(_logoFor(item.logoUrl!), context, onError: (_, __) {});
+    }
   }
 
   void _next() {
@@ -404,7 +417,9 @@ class _HeroCaption extends StatelessWidget {
   }
 }
 
-/// Slowly zooms into its image for as long as it's on screen.
+/// Slowly zooms into its image for as long as it's on screen: 15% over
+/// [duration], at the same pace on past it — the next slide can be late,
+/// and the zoom stopping there showed as the slide freezing.
 class _KenBurnsImage extends StatelessWidget {
   final ImageProvider image;
   final Alignment focus;
@@ -421,9 +436,12 @@ class _KenBurnsImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A minute of zooming at that pace: far longer than any slide stays.
+    const minute = Duration(minutes: 1);
+    final end = 1 + 0.15 * minute.inMilliseconds / duration.inMilliseconds;
     return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 1.0, end: 1.15),
-      duration: duration,
+      tween: Tween(begin: 1.0, end: end),
+      duration: minute,
       builder: (context, scale, child) => Transform.scale(
         scale: scale,
         alignment: focus,

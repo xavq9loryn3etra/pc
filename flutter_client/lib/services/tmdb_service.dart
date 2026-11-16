@@ -85,6 +85,16 @@ class TMDBService {
 
   void clearCache() => _cache.clear();
 
+  /// Whether the TMDB title [m] is out: released (a movie) or first aired
+  /// (a series) by today. Trending lists show only these — TMDB's had
+  /// films and series not out yet, with nothing to play. One with no date
+  /// at all isn't out either (not even announced).
+  static bool isOut(Map m) {
+    final date = DateTime.tryParse(
+        '${m['release_date'] ?? m['first_air_date'] ?? ''}');
+    return date != null && !date.isAfter(DateTime.now());
+  }
+
   /// This week's trending movies ([type] 'movie') or series ('tv'), most
   /// trending first — the same filtering as [getTrending].
   Future<List<Movie>> getTrendingOf(String type) async {
@@ -103,7 +113,7 @@ class TMDBService {
       final movies = [
         for (final response in pages) ...(response.data['results'] as List),
       ]
-          .where((m) => !isUnsuitable(m as Map))
+          .where((m) => !isUnsuitable(m as Map) && isOut(m))
           .map((m) =>
               _formatMovie({...m as Map<String, dynamic>, 'media_type': type}))
           .whereType<Movie>()
@@ -166,7 +176,7 @@ class TMDBService {
         queryParameters: {'api_key': _apiKey},
       );
       final movies = (response.data['results'] as List)
-          .where((m) => !isUnsuitable(m as Map))
+          .where((m) => !isUnsuitable(m as Map) && isOut(m))
           .map((m) => _formatMovie(m))
           .whereType<Movie>()
           .toList();
@@ -274,7 +284,7 @@ class TMDBService {
       final movies = [
         for (final response in responses) ...(response.data['results'] as List),
       ]
-          .where((m) => isAnime(m as Map) && !isUnsuitable(m))
+          .where((m) => isAnime(m as Map) && !isUnsuitable(m) && isOut(m))
           .map((m) =>
               _formatMovie({...m as Map<String, dynamic>, 'media_type': type}))
           .whereType<Movie>()

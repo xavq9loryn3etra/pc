@@ -1094,15 +1094,17 @@ class _AskScreenState extends State<AskScreen>
           ),
         ),
         const SizedBox(height: 22),
-        Wrap(
-          spacing: 8,
-          runSpacing: 10,
+        // One under the other, each as wide as its words.
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            for (final (i, example) in _examplesHere.indexed)
+            for (final (i, example) in _examplesHere.indexed) ...[
+              if (i > 0) const SizedBox(height: 10),
               _Appear(
                 delay: Duration(milliseconds: 380 + 70 * i),
                 child: _ExamplePill(text: example, onTap: () => _ask(example)),
               ),
+            ],
           ],
         ),
     ];

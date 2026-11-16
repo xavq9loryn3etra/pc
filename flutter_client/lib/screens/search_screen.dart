@@ -74,52 +74,12 @@ class _SearchScreenState extends State<SearchScreen> {
         if (mounted) _performSearch(handOff.query);
       });
     }
-    // Not on a TV: the remote wandered into the trending posters on its
-    // way to and from the search bar.
-    if (!TvDevice.isTv) _loadTrending();
   }
-
-  // This week's top ten of each, for the screen before a search.
-  List<Movie> _trendingMovies = const [];
-  List<Movie> _trendingSeries = const [];
 
   bool get _isRamen => widget.mode == AppMode.anime;
 
   bool _belongs(Movie m) =>
       AppModeService.belongsIn(widget.mode, isAnime: m.isAnime);
-
-  Future<void> _loadTrending() async {
-    if (_isRamen) {
-      // Anime films and series most watched right now.
-      final found = await Future.wait(
-          [_tmdb.popularAnimeFilms(), _tmdb.popularAnimeSeries()]);
-      if (!mounted) return;
-      setState(() {
-        _trendingMovies = found[0].take(10).toList();
-        _trendingSeries = found[1].take(10).toList();
-      });
-      return;
-    }
-    final found = await Future.wait([
-      for (final type in ['movie', 'tv'])
-        _tmdb
-            .getTrendingOf(type)
-            .then((list) => list.where(_belongs).toList()),
-    ]);
-    // Movies that can be watched now, not ones still in cinemas or not out
-    // yet (tapped, they'd say there's no copy): most of the week's top
-    // ten were, and the next ones fill in.
-    final candidates = found[0].take(30).toList();
-    final out = await Future.wait(candidates.map(_tmdb.isOutAtHome));
-    if (!mounted) return;
-    setState(() {
-      _trendingMovies = [
-        for (var i = 0; i < candidates.length; i++)
-          if (out[i]) candidates[i],
-      ].take(10).toList();
-      _trendingSeries = found[1].take(10).toList();
-    });
-  }
 
   /// Runs [query] right away (no debounce) and records it as a deliberate
   /// search — used for keyboard submit and tapping a recent search.
@@ -276,10 +236,12 @@ class _SearchScreenState extends State<SearchScreen> {
               return Stack(
                 children: [
                   Positioned.fill(
+                    key: const ValueKey('body'),
                     child: _buildBody(context, isDesktop,
                         padding.copyWith(bottom: padding.bottom + 16)),
                   ),
                   Positioned(
+                    key: const ValueKey('bar'),
                     left: side,
                     right: side,
                     top: fieldTop,
@@ -287,6 +249,7 @@ class _SearchScreenState extends State<SearchScreen> {
                   ),
                   if (recents)
                     Positioned(
+                      key: const ValueKey('recents'),
                       left: 0,
                       right: 0,
                       top: fieldTop + _fieldHeight + 10,
@@ -301,20 +264,27 @@ class _SearchScreenState extends State<SearchScreen> {
                 _fieldHeight +
                 (recents ? _recentsHeight + 10 : 0) +
                 24;
+            // Each layer keyed: unkeyed, the pills going (the first letter's
+            // search starting) left the field's layer matched to theirs, and
+            // the field was built anew — the phone's keyboard closed, and a
+            // computer stopped taking what was typed.
             return Stack(
               children: [
                 Positioned.fill(
+                  key: const ValueKey('body'),
                   child: _buildBody(context, isDesktop,
                       padding.copyWith(bottom: contentBottom)),
                 ),
                 if (recents)
                   Positioned(
+                    key: const ValueKey('recents'),
                     left: 0,
                     right: 0,
                     bottom: fieldBottom + _fieldHeight + 10,
                     child: _recentSearches(history, side),
                   ),
                 Positioned(
+                  key: const ValueKey('bar'),
                   left: side,
                   right: side,
                   bottom: fieldBottom,
@@ -528,29 +498,9 @@ class _SearchScreenState extends State<SearchScreen> {
       );
     }
 
+    // Nothing until something's searched: no trending lists, no posters.
     if (_results.isEmpty && _controller.text.isEmpty) {
-      return Builder(
-        builder: (context) {
-          if (_trendingMovies.isNotEmpty || _trendingSeries.isNotEmpty) {
-            return _buildTrending(context, isDesktop, padding);
-          }
-          {
-            return const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.search_rounded, size: 64, color: Colors.white12),
-                  SizedBox(height: 16),
-                  Text(
-                    'Find your next favorite.',
-                    style: TextStyle(color: Colors.white24),
-                  ),
-                ],
-              ),
-            );
-          }
-        },
-      );
+      return const SizedBox.shrink();
     }
 
     // A title carried over from the other mode's search: opened once its
@@ -639,60 +589,6 @@ class _SearchScreenState extends State<SearchScreen> {
         CupertinoPageRoute(builder: (context) => DetailsScreen(movie: movie)),
       );
     }
-  }
-
-  /// Before a search: this week's top ten movies, then series, as the
-  /// results' poster grid.
-  Widget _buildTrending(
-      BuildContext context, bool isDesktop, EdgeInsets padding) {
-    final pad = _resultsPadding(context, isDesktop, padding);
-    // In from the side column's edges, which the posters reach.
-    const headingInset = 0.0;
-    Widget heading(String text) => SliverToBoxAdapter(
-          child: Padding(
-            padding: EdgeInsets.only(left: headingInset, bottom: 12),
-            child: Text(
-              text,
-              style: const TextStyle(
-                color: Colors.white38,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1,
-              ),
-            ),
-          ),
-        );
-    Widget grid(List<Movie> titles) => SliverGrid.builder(
-          gridDelegate: _resultsGrid(isDesktop),
-          itemCount: titles.length,
-          itemBuilder: (context, i) => MoviePoster(
-            movie: titles[i],
-            width: double.infinity,
-            height: double.infinity,
-            showTitle: true,
-            onTap: () => _open(titles[i], isDesktop),
-          ),
-        );
-    return CustomScrollView(
-      controller: _scrollController,
-      slivers: [
-        SliverPadding(
-          padding: EdgeInsets.fromLTRB(pad.left, pad.top, pad.right, 0),
-          sliver: SliverMainAxisGroup(slivers: [
-            if (_trendingMovies.isNotEmpty) ...[
-              heading(_isRamen ? 'POPULAR ANIME MOVIES' : 'TRENDING MOVIES'),
-              grid(_trendingMovies),
-              const SliverToBoxAdapter(child: SizedBox(height: 28)),
-            ],
-            if (_trendingSeries.isNotEmpty) ...[
-              heading(_isRamen ? 'POPULAR ANIME SERIES' : 'TRENDING SERIES'),
-              grid(_trendingSeries),
-            ],
-          ]),
-        ),
-        SliverToBoxAdapter(child: SizedBox(height: pad.bottom)),
-      ],
-    );
   }
 
   static const double _recentsHeight = 36;

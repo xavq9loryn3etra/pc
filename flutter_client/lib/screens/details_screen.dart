@@ -153,11 +153,110 @@ class _DetailsScreenState extends State<DetailsScreen> {
     // depth 0 = the page's own scroll view, not nested ones (the cast row).
     if (notification is ScrollUpdateNotification && notification.depth == 0) {
       _setScroll(notification.metrics.pixels);
+      _updateJump();
     } else if (notification is ScrollMetricsNotification &&
         notification.depth == 0) {
       _setScroll(notification.metrics.pixels);
+      _updateJump();
     }
     return false;
+  }
+
+  // ── The episode being watched (a series) ──
+
+  /// The season and episode this series was last watched at, if it has
+  /// been.
+  ({int season, int episode})? get _watching {
+    if (widget.movie.type != 'tv') return null;
+    final saved = SavedMoviesService()
+        .getMovieFromHistory(widget.movie.id, type: widget.movie.type);
+    final s = saved?.currentSeason, e = saved?.currentEpisode;
+    return s == null || e == null ? null : (season: s, episode: e);
+  }
+
+  // The card of the episode being watched, while it's built.
+  final GlobalKey _watchingCardKey = GlobalKey();
+  // An episode row's height with the gap under it (see the episode grid).
+  double _episodeRowExtent = 0;
+
+  /// The arrow to the episode being watched: 1 pointing down, -1 up, 0
+  /// hidden — shown while its season's listed and its card isn't on
+  /// screen.
+  final ValueNotifier<int> _jumpDirection = ValueNotifier(0);
+
+  /// The index in [_episodes] of the episode being watched, when it's the
+  /// season listed.
+  int? get _watchingIndex {
+    final w = _watching;
+    if (w == null ||
+        _loadingEpisodes ||
+        _selectedSeason?.seasonNumber != w.season) {
+      return null;
+    }
+    final i = _episodes.indexWhere((ep) => ep.episodeNumber == w.episode);
+    return i < 0 ? null : i;
+  }
+
+  /// Where the page would be scrolled to show the watched episode's row a
+  /// third of the way down the screen. The grid is the page's last part,
+  /// its rows all one height, so it's worked out from the page's end —
+  /// right even while the card itself isn't built.
+  double? _jumpTarget(int index) {
+    if (!_scrollController.hasClients || _episodeRowExtent <= 0) return null;
+    final position = _scrollController.position;
+    final rows = (_episodes.length / 2).ceil();
+    final rowsBelow = rows - index ~/ 2;
+    final end = position.maxScrollExtent + position.viewportDimension;
+    final rowTop = end -
+        MediaQuery.paddingOf(context).bottom -
+        24 -
+        rowsBelow * _episodeRowExtent +
+        12;
+    return (rowTop - position.viewportDimension * 0.33)
+        .clamp(0.0, position.maxScrollExtent);
+  }
+
+  void _updateJump() {
+    final index = _watchingIndex;
+    var direction = 0;
+    if (index != null && _scrollController.hasClients) {
+      final card = _watchingCardKey.currentContext?.findRenderObject();
+      final height = MediaQuery.sizeOf(context).height;
+      if (card is RenderBox && card.attached && card.hasSize) {
+        final top = card.localToGlobal(Offset.zero).dy;
+        if (top + card.size.height < 80) {
+          direction = -1;
+        } else if (top > height - 80) {
+          direction = 1;
+        }
+      } else {
+        final target = _jumpTarget(index);
+        if (target != null) {
+          direction = target > _scrollController.offset ? 1 : -1;
+        }
+      }
+    }
+    _jumpDirection.value = direction;
+  }
+
+  /// Scrolls to the episode being watched.
+  Future<void> _jumpToWatching() async {
+    final index = _watchingIndex;
+    if (index == null) return;
+    if (_watchingCardKey.currentContext == null) {
+      final target = _jumpTarget(index);
+      if (target == null) return;
+      await _scrollController.animateTo(target,
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeInOutCubic);
+    }
+    final card = _watchingCardKey.currentContext;
+    if (card != null && card.mounted) {
+      await Scrollable.ensureVisible(card,
+          alignment: 0.33,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut);
+    }
   }
 
   final Dio _shareDio = Dio();
@@ -467,6 +566,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     _detailsCancelToken.cancel();
     _scrollController.dispose();
     _scrollOffset.dispose();
+    _jumpDirection.dispose();
     _showTitle.dispose();
     FeatureFlagsService().hidePlayback.removeListener(_onFlagsChanged);
     super.dispose();
@@ -613,17 +713,23 @@ class _DetailsScreenState extends State<DetailsScreen> {
         });
       }
 
-      // Init Season 1 if TV
+      // A series opens on the season of the episode being watched (see
+      // _watching), else its first.
       if (_details?.type == 'tv' &&
           _details?.seasons != null &&
           _details!.seasons!.isNotEmpty) {
-        _selectedSeason = _details!.seasons!.firstWhere(
-          (s) => s.seasonNumber == 1,
-          orElse: () => _details!.seasons!.firstWhere(
-            (s) => s.seasonNumber > 0,
-            orElse: () => _details!.seasons!.first,
-          ),
-        );
+        final seasons = _details!.seasons!;
+        final watchingSeason = _watching?.season;
+        _selectedSeason = seasons
+                .where((s) => s.seasonNumber == watchingSeason)
+                .firstOrNull ??
+            seasons.firstWhere(
+              (s) => s.seasonNumber == 1,
+              orElse: () => seasons.firstWhere(
+                (s) => s.seasonNumber > 0,
+                orElse: () => seasons.first,
+              ),
+            );
       }
     });
 
@@ -755,6 +861,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
     setState(() {
       _episodes = processedEpisodes;
       _loadingEpisodes = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _updateJump();
     });
   }
 
@@ -1934,6 +2043,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                           _selectedEpisode =
                                               null; // Reset episode
                                         });
+                                        _jumpDirection.value = 0;
                                         _loadSeasonDetails(val);
                                       },
                                     ),
@@ -1974,6 +2084,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                 const gap = 12.0;
                                 final cardWidth =
                                     (constraints.crossAxisExtent - gap) / 2;
+                                _episodeRowExtent = EpisodeCard.heightFor(
+                                      cardWidth,
+                                      MediaQuery.textScalerOf(context),
+                                    ) +
+                                    gap;
+                                final watching = _watchingIndex;
                                 return SliverGrid.builder(
                                   gridDelegate:
                                       SliverGridDelegateWithFixedCrossAxisCount(
@@ -2004,6 +2120,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                             ) ??
                                             ep.progress;
                                     return EpisodeCard(
+                                      key: index == watching
+                                          ? _watchingCardKey
+                                          : null,
                                       episode: ep,
                                       fallbackImage: m.backdrop,
                                       progress: currentProgress,
@@ -2047,6 +2166,39 @@ class _DetailsScreenState extends State<DetailsScreen> {
         NotificationListener<Notification>(
           onNotification: _onPageScroll,
           child: page,
+        ),
+        // To the episode being watched, while its season's listed and it's
+        // off screen (see _updateJump).
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: MediaQuery.paddingOf(context).bottom + 20,
+          child: ValueListenableBuilder<int>(
+            valueListenable: _jumpDirection,
+            builder: (context, direction, _) => IgnorePointer(
+              ignoring: direction == 0,
+              child: AnimatedOpacity(
+                opacity: direction == 0 ? 0 : 1,
+                duration: const Duration(milliseconds: 200),
+                child: AnimatedScale(
+                  scale: direction == 0 ? 0.8 : 1,
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOutBack,
+                  child: Center(
+                    child: Tooltip(
+                      message: "Go to the episode you're watching",
+                      child: GlassCircleButton(
+                        icon: direction < 0
+                            ? Icons.arrow_upward_rounded
+                            : Icons.arrow_downward_rounded,
+                        onPressed: _jumpToWatching,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
         if (!_skeletonDone)
           IgnorePointer(

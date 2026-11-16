@@ -97,7 +97,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildScreen(AppMode mode) {
-    return MovieTabShell(key: ValueKey(mode));
+    return MovieTabShell(key: ValueKey(mode), mode: mode);
   }
 }
 

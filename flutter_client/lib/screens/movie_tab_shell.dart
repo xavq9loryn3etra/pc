@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import '../enums/app_mode.dart';
-import '../services/app_mode_service.dart';
 import '../services/movie_tab_service.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/glass_blur.dart';
@@ -29,13 +28,17 @@ const _kTabFadeDuration = Duration(milliseconds: 200);
 /// faded over each other on every switch — the glass flickered lighter —
 /// and the bar's own slide between the Home and Search layouts never ran.
 class MovieTabShell extends StatelessWidget {
-  const MovieTabShell({super.key});
+  /// Its mode, for good: a mode change builds a new shell (MainScreen), and
+  /// this one, fading out, stays as it was — rather than rebuilding every
+  /// tab in the new mode only to be thrown away.
+  final AppMode mode;
+
+  const MovieTabShell({super.key, required this.mode});
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<AppMode>(
-      valueListenable: AppModeService().currentMode,
-      builder: (context, mode, _) {
+    return Builder(
+      builder: (context) {
         final screens = _getScreensForMode(mode);
 
         return ValueListenableBuilder<BottomNavTab>(
@@ -50,6 +53,7 @@ class MovieTabShell extends StatelessWidget {
             // beside it, shown as on a phone.
             if (navBarAtTop(context)) {
               return _WideTabs(
+                mode: mode,
                 home: screens.first,
                 activeTab: activeTab,
                 navBar: _navLayer(mode, activeTab),
@@ -183,11 +187,13 @@ const _kColumnDuration = Duration(milliseconds: 280);
 /// the home narrowing beside it, on any tab but Home or when a title is
 /// open in it; Home closes it.
 class _WideTabs extends StatelessWidget {
+  final AppMode mode;
   final Widget home;
   final BottomNavTab activeTab;
   final Widget navBar;
 
   const _WideTabs({
+    required this.mode,
     required this.home,
     required this.activeTab,
     required this.navBar,
@@ -313,7 +319,7 @@ class _WideTabs extends StatelessWidget {
                       excluding: !open,
                       child: TickerMode(
                         enabled: open,
-                        child: _SideColumn(size: columnSize),
+                        child: _SideColumn(mode: mode, size: columnSize),
                       ),
                     ),
                   ),
@@ -406,9 +412,10 @@ class _HomePanelClipper extends CustomClipper<Path> {
 /// opened over it as on a phone. Players and popups open over the whole
 /// window instead (from the root navigator).
 class _SideColumn extends StatefulWidget {
+  final AppMode mode;
   final Size size;
 
-  const _SideColumn({required this.size});
+  const _SideColumn({required this.mode, required this.size});
 
   @override
   State<_SideColumn> createState() => _SideColumnState();
@@ -416,6 +423,11 @@ class _SideColumn extends StatefulWidget {
 
 class _SideColumnState extends State<_SideColumn> {
   final _counter = ColumnPageCounter();
+  // Its own navigator key: the shell fading out on a mode change still has
+  // its column for a moment, and with one key for both, the new shell took
+  // the old one's whole column — Settings and its switch included, still
+  // in the old mode, so the next switch did nothing.
+  late final _navigatorKey = MovieTabService().newColumnNavigator();
   // Its own, as a navigator can't share the app's.
   final _heroes = MaterialApp.createMaterialHeroController();
 
@@ -453,10 +465,10 @@ class _SideColumnState extends State<_SideColumn> {
                 // left, to the home) rather than nowhere.
                 child: TvFocusPassThrough(
                   child: Navigator(
-                    key: MovieTabService().columnNavigator,
+                    key: _navigatorKey,
                     observers: [_counter],
                     onGenerateRoute: (_) => PageRouteBuilder(
-                      pageBuilder: (_, __, ___) => const _ColumnTabs(),
+                      pageBuilder: (_, __, ___) => _ColumnTabs(mode: widget.mode),
                     ),
                   ),
                 ),
@@ -473,13 +485,14 @@ class _SideColumnState extends State<_SideColumn> {
 /// the shell's tabs do; nothing on Home (a title opened from the home is
 /// over it).
 class _ColumnTabs extends StatelessWidget {
-  const _ColumnTabs();
+  final AppMode mode;
+
+  const _ColumnTabs({required this.mode});
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<AppMode>(
-      valueListenable: AppModeService().currentMode,
-      builder: (context, mode, _) {
+    return Builder(
+      builder: (context) {
         final screens = MovieTabShell._getScreensForMode(mode);
         return ValueListenableBuilder<BottomNavTab>(
           valueListenable: MovieTabService().currentTab,

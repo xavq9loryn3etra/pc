@@ -36,9 +36,13 @@ class _ModeSwitchRowState extends State<ModeSwitchRow> {
     if (onSelected != null) return onSelected(mode);
     if (mode == AppModeService().currentMode.value || _picked != null) return;
     setState(() => _picked = mode);
-    // Once the cards have resized: the mode, staying on Settings.
+    // Once the cards have resized: the mode, staying on Settings. Then
+    // the tap's done with, should this switch still be here (it's usually
+    // rebuilt with the new mode's screens): one left set ignored every
+    // tap after it.
     Future.delayed(ModeOption.resize + const Duration(milliseconds: 60), () {
       AppModeService().setMode(mode, keepTab: true);
+      if (mounted) setState(() => _picked = null);
     });
   }
 

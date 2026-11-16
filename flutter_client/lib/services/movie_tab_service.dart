@@ -34,7 +34,13 @@ class MovieTabService {
   /// The navigator of the column beside the home on a wide window, where
   /// the other tabs, and the titles opened from any of them, show as on a
   /// phone. Its first page is the open tab; titles go on top of it.
-  final GlobalKey<NavigatorState> columnNavigator = GlobalKey();
+  GlobalKey<NavigatorState> get columnNavigator => _columnNavigator;
+  GlobalKey<NavigatorState> _columnNavigator = GlobalKey();
+
+  /// A key for a new column's navigator, which [columnNavigator] then
+  /// means: each mode's shell has its own column (see _SideColumnState).
+  GlobalKey<NavigatorState> newColumnNavigator() =>
+      _columnNavigator = GlobalKey();
 
   /// How many pages are open on top of the column's tab: while there are
   /// any, the column stays open even on the Home tab (a title opened from

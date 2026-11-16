@@ -1849,7 +1849,15 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
       _lastSaveTime = now;
 
-      final double progress = _currentPosition.inSeconds / _duration.inSeconds;
+      // Into the end credits (where Up Next shows: their start when it's
+      // known, else 25 s from the end), and it's watched: an anime's
+      // ending song and preview start at about 90%, short of the 95% that
+      // counts as watched, and an episode stopped there showed "2m left".
+      final atCredits = _duration > const Duration(minutes: 2) &&
+          _currentPosition >= _upNextStart();
+      final double progress = atCredits
+          ? 1.0
+          : _currentPosition.inSeconds / _duration.inSeconds;
       await SavedMoviesService().addToHistory(
         widget.movie,
         season: _currentSeason,

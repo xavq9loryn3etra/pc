@@ -49,10 +49,24 @@ class TrendingItem {
   factory TrendingItem.fromJson(Map<String, dynamic> json) => TrendingItem(
         title: json['title'] as String,
         subtitle: json['subtitle'] as String,
-        imageUrl: json['imageUrl'] as String,
-        wideImageUrl: json['wideImageUrl'] as String?,
-        logoUrl: json['logoUrl'] as String?,
+        imageUrl: original(json['imageUrl'] as String),
+        wideImageUrl: _originalOrNull(json['wideImageUrl'] as String?),
+        logoUrl: _originalOrNull(json['logoUrl'] as String?),
       );
+
+  static final _tmdbSize = RegExp(r'(image\.tmdb\.org/t/p/)w\d+/');
+
+  /// A TMDB picture's [url] at its full size. Slides saved on the device
+  /// before the start screen used the originals (15 Nov 2026) still had
+  /// TMDB's smaller sizes (w780 posters, w1280 backdrops), and showed
+  /// softer than the same picture on the home: the start screen begins
+  /// with the slides it showed last time.
+  @visibleForTesting
+  static String original(String url) =>
+      url.replaceFirstMapped(_tmdbSize, (m) => '${m[1]}original/');
+
+  static String? _originalOrNull(String? url) =>
+      url == null ? null : original(url);
 }
 
 /// Top trending movies / albums / books for the mode selector. The last
@@ -116,7 +130,8 @@ class TrendingService {
       final list = [
         item,
         for (final i in _decode(prefs.getString(_shownKey(mode))))
-          if (i.imageUrl != item.imageUrl) i,
+          // One slide per title: an old one's picture differs.
+          if (i.imageUrl != item.imageUrl && i.title != item.title) i,
       ].take(_shownKept).toList();
       await prefs.setString(
           _shownKey(mode), jsonEncode([for (final i in list) i.toJson()]));

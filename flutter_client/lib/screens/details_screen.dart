@@ -907,7 +907,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   /// with playback hidden, a button to the streaming service carrying the
   /// show (none if there isn't one). Episodes that haven't aired yet show
   /// their info only.
-  void _openEpisode(Episode ep) {
+  void _openEpisode(Episode ep, {bool autoPlay = false}) {
     setState(() => _selectedEpisode = ep.episodeNumber);
     final m = _details ?? widget.movie;
     final image = ep.stillPath ?? m.backdrop;
@@ -926,7 +926,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
     );
 
     if (!hidePlayback && !ep.isUnreleased) {
-      _playWithTorrent(header: header, backgroundImage: image);
+      _playWithTorrent(
+          header: header, backgroundImage: image, autoPlay: autoPlay);
       return;
     }
 
@@ -974,6 +975,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     Widget? header,
     String? backgroundImage,
     Future<List<TorrentStream>>? streams,
+    bool autoPlay = false,
   }) async {
     if (_details == null) return;
     if (_isSelectionUnreleased()) {
@@ -1005,6 +1007,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           header: header,
           backgroundImage: backgroundImage,
           prefetchedStreams: streams,
+          autoPlay: autoPlay,
         );
       },
     );
@@ -2136,6 +2139,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                       // Unaired episodes' cards are greyed
                                       // out and ignore taps (EpisodeCard).
                                       onTap: () => _openEpisode(ep),
+                                      // Part-way watched: its play button
+                                      // starts it straight away.
+                                      onPlay: () =>
+                                          _openEpisode(ep, autoPlay: true),
                                     );
                                     if (index != watching) return card;
                                     // The one being watched: a light sweeps
@@ -2274,7 +2281,13 @@ class TorrentQualitySelectorSheet extends StatefulWidget {
     this.header,
     this.backgroundImage,
     this.prefetchedStreams,
+    this.autoPlay = false,
   });
+
+  /// Starts the option it would suggest (last watched, else recommended)
+  /// as soon as the qualities are in, without a pick: an episode card's
+  /// play button.
+  final bool autoPlay;
 
   /// "Alternative Web Servers (No Torrenting)" is hidden for now; flip this
   /// to bring the menu back. (EpisodeBrowser has the same switch.)
@@ -2428,6 +2441,15 @@ class _TorrentQualitySelectorSheetState
           _recommendedTier = recommendedTier;
           _loading = false;
         });
+        if (widget.autoPlay && !_autoPlayed) {
+          _autoPlayed = true;
+          final pick = _suggestedOption();
+          if (pick != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _selectQuality(pick);
+            });
+          }
+        }
         // Not for a movie: its page already did, and owns it — closing
         // this popup mustn't end the page's head start. (Unless the audio
         // language changed: the page's head start is for the old one.)
@@ -2453,6 +2475,23 @@ class _TorrentQualitySelectorSheetState
         });
       }
     }
+  }
+
+  bool _autoPlayed = false;
+
+  /// The option the list suggests: the one last watched, else the
+  /// recommended quality, else the first.
+  QualityOption? _suggestedOption() {
+    final options = _options;
+    if (options == null || options.isEmpty) return null;
+    final last = _lastPlayedHash?.toLowerCase();
+    return options
+            .where((o) =>
+                last != null &&
+                o.streams.any((s) => s.infoHash.toLowerCase() == last))
+            .firstOrNull ??
+        options.where((o) => o.tier == _recommendedTier).firstOrNull ??
+        options.first;
   }
 
   void _selectQuality(QualityOption option) async {

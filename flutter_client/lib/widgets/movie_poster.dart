@@ -43,7 +43,9 @@ class MoviePoster extends StatefulWidget {
 }
 
 class _MoviePosterState extends State<MoviePoster> {
-  static const double _playSize = 24;
+  // The play button's circle, and the target round it a finger can hit.
+  static const double _playSize = 28;
+  static const double _playTarget = 44;
 
   // Under the mouse: only the poster's zoom listens (see _zoomed), not the
   // whole card rebuilt on every hover.
@@ -123,8 +125,11 @@ class _MoviePosterState extends State<MoviePoster> {
                 widget.onPlay != null && hasProgress && progress < 0.95;
             final lineHeight =
                 MediaQuery.textScalerOf(context).scale(11) * 1.2;
-            final rowHeight =
-                resumable ? math.max(lineHeight, _playSize) : lineHeight;
+            // With play buttons (Continue Watching), every poster's bar sits
+            // on the button's line, so they're level side by side.
+            final rowHeight = widget.onPlay != null
+                ? math.max(lineHeight, _playSize)
+                : lineHeight;
             final showBadge = widget.movie.type == 'tv' &&
                 currentSeason != null &&
                 currentEpisode != null;
@@ -216,31 +221,15 @@ class _MoviePosterState extends State<MoviePoster> {
                   // One text line high whether or not there's an "S1 · E3"
                   // in it, so the bar sits at the same height on movie and
                   // show cards side by side — or the play button's height,
-                  // centred on that same line.
-                  bottom: 8 - (rowHeight - lineHeight) / 2,
+                  // 8px in from the edge, as the bar is.
+                  bottom: 8,
                   height: rowHeight,
                   child: Row(
                     children: [
-                      if (resumable) ...[
-                        SizedBox.square(
-                          dimension: _playSize,
-                          child: Tooltip(
-                            message: 'Resume',
-                            child: Material(
-                              color: Colors.white,
-                              shape: const CircleBorder(),
-                              child: InkWell(
-                                mouseCursor: WidgetStateMouseCursor.clickable,
-                                customBorder: const CircleBorder(),
-                                onTap: widget.onPlay,
-                                child: const Icon(Icons.play_arrow_rounded,
-                                    size: 17, color: Colors.black),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
+                      // Room for the play button (drawn below, with a
+                      // finger-sized target round it).
+                      if (resumable)
+                        const SizedBox(width: _playSize + 8),
                       if (hasProgress)
                         Expanded(
                           child: Container(
@@ -277,6 +266,41 @@ class _MoviePosterState extends State<MoviePoster> {
                     ],
                   ),
                 ),
+                // The play button: a 28px white circle, 8px in from the
+                // corner, in a 44px target (a finger's) centred on it —
+                // the extra reaching into the poster's corner.
+                if (resumable)
+                  Positioned(
+                    left: 8 - (_playTarget - _playSize) / 2,
+                    bottom: 8 +
+                        (rowHeight - _playSize) / 2 -
+                        (_playTarget - _playSize) / 2,
+                    width: _playTarget,
+                    height: _playTarget,
+                    child: Tooltip(
+                      message: 'Resume',
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: InkWell(
+                          mouseCursor: WidgetStateMouseCursor.clickable,
+                          customBorder: const CircleBorder(),
+                          onTap: widget.onPlay,
+                          child: Center(
+                            child: Container(
+                              width: _playSize,
+                              height: _playSize,
+                              decoration: const BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.play_arrow_rounded,
+                                  size: 20, color: Colors.black),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             );
           },

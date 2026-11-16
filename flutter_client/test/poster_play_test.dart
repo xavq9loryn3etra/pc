@@ -44,6 +44,21 @@ void main() {
     expect(r.taps, 0, reason: "the title's page mustn't open too");
   });
 
+  testWidgets('a finger-sized button, clear of the edges', (tester) async {
+    await pump(tester, 0.4);
+    final poster = tester.getRect(find.byType(MoviePoster));
+    final target = tester.getRect(find.byTooltip('Resume'));
+    expect(target.width, 44);
+    expect(target.height, 44);
+    final circle = tester.getRect(find.byWidgetPredicate((w) =>
+        w is Container &&
+        w.decoration is BoxDecoration &&
+        (w.decoration as BoxDecoration).shape == BoxShape.circle));
+    expect(circle.width, 28);
+    expect(poster.bottom - circle.bottom, 8);
+    expect(circle.left - poster.left, 8);
+  });
+
   testWidgets('no play button when not started, watched, or not asked for',
       (tester) async {
     await pump(tester, null);

@@ -69,6 +69,23 @@ class TorrentStream {
         trackers: trackers,
       );
 
+  /// This stream with [count] sharers: its trackers' live count (see
+  /// TrackerScrape), in place of a finder's dated one.
+  TorrentStream withSeeders(int count) => TorrentStream(
+        infoHash: infoHash,
+        title: title,
+        name: name,
+        quality: quality,
+        size: size,
+        source: source,
+        fileIdx: fileIdx,
+        seeders: count,
+        languages: languages,
+        isPack: isPack,
+        wantedAudio: wantedAudio,
+        trackers: trackers,
+      );
+
   /// This stream, as also found by another finder ([other], the same
   /// torrent): the higher of the two sharer counts — finders' counts age
   /// at different rates — and both tracker lists.

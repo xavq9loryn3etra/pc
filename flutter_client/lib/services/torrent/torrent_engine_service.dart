@@ -146,7 +146,9 @@ class TorrentEngineService {
   // instead of relying solely on DHT bootstrap (which can take 1–2 min).
   // Long-running ones from ngosang/trackerslist's "best" list (Oct 2026);
   // UDP only, as our own engine build has no HTTPS support.
-  static const _trackers = [
+  /// Public trackers, asked for every torrent (and, by StreamResolver,
+  /// for live sharer counts — see TrackerScrape).
+  static const publicTrackers = [
     'udp://tracker.opentrackr.org:1337/announce',
     'udp://open.stealth.si:80/announce',
     'udp://tracker.torrent.eu.org:451/announce',
@@ -274,7 +276,7 @@ class TorrentEngineService {
     final added = id == null;
     if (id == null) {
       // Build magnet with tracker list for instant swarm discovery
-      final trackerParams = {..._trackers, ...trackers}
+      final trackerParams = {...publicTrackers, ...trackers}
           .map((t) => '&tr=${Uri.encodeComponent(t)}')
           .join();
       final magnetUri = 'magnet:?xt=urn:btih:$key$trackerParams';

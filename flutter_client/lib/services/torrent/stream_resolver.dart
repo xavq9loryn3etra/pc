@@ -12,6 +12,7 @@ import 'free_space.dart';
 import 'torrent_download_registry.dart';
 import 'torrent_engine_service.dart';
 import 'torrent_index_service.dart';
+import 'tracker_scrape.dart';
 
 /// The result of resolving a stream, possibly after falling back away from
 /// the originally-requested one.
@@ -89,6 +90,9 @@ class StreamResolver {
     AudioLanguage? audioLanguage,
   }) async {
     final stopwatch = Stopwatch()..start();
+    // Connecting to the trackers while the finders search, for the live
+    // sharer counts below (see TrackerScrape).
+    TrackerScrape.prepare(TorrentEngineService.publicTrackers);
     // Alongside the finders: the copies of films with the same name.
     final namesakes = type == 'movie' && title != null
         ? _namesakeCopies(title)
@@ -142,10 +146,44 @@ class StreamResolver {
     // No copy in the language: nothing to play.
     streams = streams.where((s) => languageRank(s) < 2).toList();
 
+    // Ranked by how many share each copy now, not when the finders last
+    // looked (see TrackerScrape).
+    streams = await _withLiveCounts(streams);
+
     final recommendedTier = _recommendedTierRank(streams);
     streams.sort((a, b) =>
         _score(b, recommendedTier).compareTo(_score(a, recommendedTier)));
     return streams;
+  }
+
+  /// [streams] with their trackers' live sharer counts wherever they
+  /// answered in time (a second and a half at most, usually a fraction);
+  /// the others keep their finders' counts.
+  Future<List<TorrentStream>> _withLiveCounts(
+      List<TorrentStream> streams) async {
+    if (streams.isEmpty) return streams;
+    try {
+      final live = await TrackerScrape.counts(
+        streams.map((s) => s.infoHash),
+        [
+          ...TorrentEngineService.publicTrackers,
+          for (final s in streams) ...s.trackers,
+        ],
+      );
+      if (live.isNotEmpty) {
+        print('[timing] live sharer counts for ${live.length} of '
+            '${streams.length} copies');
+      }
+      return [
+        for (final s in streams)
+          if (live[s.infoHash.toLowerCase()] case final count?)
+            s.withSeeders(count.seeders)
+          else
+            s,
+      ];
+    } catch (_) {
+      return streams;
+    }
   }
 
   // What the finders listed for each movie / episode lately, so ranking

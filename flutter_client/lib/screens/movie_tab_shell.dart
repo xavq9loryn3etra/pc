@@ -260,7 +260,14 @@ class _WideTabs extends StatelessWidget {
                   duration: _kColumnDuration,
                   curve: Curves.easeOutCubic,
                   left: open ? _kColumnGap : 0,
-                  top: open ? _kColumnGap : 0,
+                  // Below the top safe area, as the tab bar is (see
+                  // FloatingBottomNavBar's top row), so the collapse button
+                  // in the corner lines up with its pills: on an iPad, and
+                  // the iPad app on a Mac, the area's not 0 as on Windows,
+                  // and the button sat higher than the bar.
+                  top: open
+                      ? MediaQuery.paddingOf(context).top + _kColumnGap
+                      : 0,
                   bottom: open ? _kColumnGap : 0,
                   right: open ? _kColumnWidth + _kColumnGap * 2 : 0,
                   child: TweenAnimationBuilder<double>(

@@ -775,7 +775,8 @@ class TorrentEngineService {
 
   // Bonus clips in a release, not the feature.
   static final _bonusPattern = RegExp(
-      r'(?<![A-Za-z])(samples?|trailers?|extras)(?![A-Za-z])',
+      r'(?<![A-Za-z])(samples?|trailers?|extras|featurettes?|'
+      r'behind[ ._-]the[ ._-]scenes|making[ ._-]of|deleted[ ._-]scenes)(?![A-Za-z])',
       caseSensitive: false);
 
   /// The file to play when the finder didn't say which: the largest video

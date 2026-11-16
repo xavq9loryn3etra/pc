@@ -84,6 +84,50 @@ void main() {
         isTrue);
   });
 
+  test('documentaries and behind-the-scenes extras are hidden', () {
+    expect(
+        hidden({
+          'title': 'Free Solo',
+          'genre_ids': [99],
+          'vote_count': 2000,
+          'release_date': '2018-09-28',
+        }),
+        isTrue);
+    expect(
+        hidden({
+          'title': 'The Making of Dune',
+          'genre_ids': [],
+          'vote_count': 4,
+          'release_date': '2021-10-01',
+        }),
+        isTrue);
+    expect(
+        hidden({
+          'title': 'Oppenheimer: Behind the Scenes',
+          'genre_ids': [],
+          'vote_count': 2,
+          'release_date': '2023-07-01',
+        }),
+        isTrue);
+    expect(
+        hidden({
+          'title': 'Barbie Featurette',
+          'genre_ids': [],
+          'vote_count': 1,
+          'release_date': '2023-07-01',
+        }),
+        isTrue);
+    // A drama, not a making-of.
+    expect(
+        hidden({
+          'title': 'The Making of a Lady',
+          'genre_ids': [18, 10770],
+          'vote_count': 60,
+          'release_date': '2012-12-09',
+        }),
+        isFalse);
+  });
+
   test('real films stay, however small', () {
     // Neera: Sinhala, a handful of details.
     expect(

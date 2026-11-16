@@ -894,12 +894,23 @@ class TMDBService {
     caseSensitive: false,
   );
 
-  /// TMDB's genres for talk shows, news and reality TV (Jimmy Kimmel
-  /// Live!, The Daily Show, Survivor): not what the app is for.
-  static const _talkNewsAndReality = {10767, 10763, 10764};
+  /// TMDB's genres for talk shows, news, reality TV and documentaries
+  /// (Jimmy Kimmel Live!, The Daily Show, Survivor, "The Making of Dune"):
+  /// not what the app is for.
+  static const _notStories = {10767, 10763, 10764, 99};
+
+  // Titles of behind-the-scenes extras ("Dune: Behind the Scenes",
+  // "Oppenheimer Featurette", "Making-of"), which TMDB doesn't always mark
+  // as documentaries. Not "The Making of a Lady" (a drama).
+  static final _extrasTitle = RegExp(
+    r'(?<![A-Za-z])(behind[- ]the[- ]scenes|featurettes?|making[- ]of(?![- ]+(a|an)(?![A-Za-z]))|'
+    r'deleted scenes|gag reel|bloopers)(?![A-Za-z])',
+    caseSensitive: false,
+  );
 
   /// A TMDB result never to show: one marked adult, one with an explicit
-  /// word in its title, a talk, news or reality show, or an upload with no genre, no
+  /// word in its title, a talk, news or reality show, a documentary or
+  /// behind-the-scenes extra, or an upload with no genre, no
   /// release date and no ratings at all — "Super Boobs: Volume 1" and its
   /// sequels aren't marked adult, so `include_adult: false` let them into
   /// search. Real titles, however small (Neera), have at least one of
@@ -913,10 +924,10 @@ class TMDBService {
       m['original_name'],
     ].whereType<String>().join(' ');
     if (_explicitTitle.hasMatch(titles)) return true;
+    if (_extrasTitle.hasMatch(titles)) return true;
     final genres = m['genre_ids'] ?? m['genres'];
     if (genres is List &&
-        genres
-            .any((g) => _talkNewsAndReality.contains(g is Map ? g['id'] : g))) {
+        genres.any((g) => _notStories.contains(g is Map ? g['id'] : g))) {
       return true;
     }
     final date = (m['release_date'] ?? m['first_air_date'] ?? '').toString();

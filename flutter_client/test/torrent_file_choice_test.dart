@@ -32,6 +32,17 @@ void main() {
       expect(TorrentEngineService.chooseVideoFile(files), 3);
     });
 
+    test('leaves out behind-the-scenes and making-of clips', () {
+      final files = [
+        file(0, 'Movie/Featurettes/vfx.mkv', 9000),
+        file(1, 'Movie/Movie.Behind.the.Scenes.mkv', 8000),
+        file(2, 'Movie/Movie.Making.Of.mkv', 7000),
+        file(3, 'Movie/Deleted Scenes.mkv', 6000),
+        file(4, 'Movie/Movie.2023.1080p.mkv', 3000),
+      ];
+      expect(TorrentEngineService.chooseVideoFile(files), 4);
+    });
+
     test('keeps words that only contain a bonus word', () {
       final files = [
         file(0, 'Examples.of.Samplers.S01E01.mkv', 3000),

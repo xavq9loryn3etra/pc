@@ -222,7 +222,8 @@ class StreamResolver {
 
   // Words that mark a pack's file as a bonus clip rather than the feature.
   static final _extraPattern = RegExp(
-      r'(?<![A-Za-z])(menu|sample|trailer|NCOP|NCED|creditless)(?![A-Za-z])',
+      r'(?<![A-Za-z])(menu|sample|trailer|NCOP|NCED|creditless|featurettes?|'
+      r'behind[ ._-]the[ ._-]scenes|making[ ._-]of|deleted[ ._-]scenes)(?![A-Za-z])',
       caseSensitive: false);
 
   /// Whether [stream] is a disc menu, sample, trailer or similar extra that
@@ -238,7 +239,8 @@ class StreamResolver {
         lines.length > 1 &&
         _extraPattern
             .allMatches(lines[1])
-            .any((m) => !ownName.contains(m[0]!.toLowerCase()))) {
+            .any((m) => !ownName
+                .contains(m[0]!.toLowerCase().replaceAll(RegExp(r'[._-]'), ' ')))) {
       return true;
     }
     final mb = _sizeInMB(stream.size);

@@ -1864,6 +1864,18 @@ class _PlayerScreenState extends State<PlayerScreen>
         episode: _currentEpisode,
         progress: progress,
       );
+      // A series' episode watched: where it's at moves on to the next one
+      // (when it's out) — what Resume, the posters' S·E and the series
+      // page go by — as on Netflix, rather than staying on the one
+      // finished, which Resume played again from its start.
+      final next = atCredits ? _nextUp : null;
+      if (next != null && !next.episode.isUnreleased) {
+        await SavedMoviesService().addToHistory(
+          widget.movie,
+          season: next.season,
+          episode: next.episode.episodeNumber,
+        );
+      }
     }
   }
 

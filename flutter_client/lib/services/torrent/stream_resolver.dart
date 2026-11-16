@@ -203,14 +203,19 @@ class StreamResolver {
   Future<List<TorrentStream>> _namesakeCopies(Movie title) async {
     final cached = _namesakesOf[title.id];
     if (cached != null) return cached;
-    try {
+    Future<List<TorrentStream>> lookUp() async {
       final ids = await TMDBService().namesakesOf(title);
-      final lists =
-          await Future.wait(ids.map(_indexService.ytsStreams));
+      final lists = await Future.wait(ids.map(_indexService.ytsStreams));
       if (lists.any((l) => l == null)) {
         return [for (final l in lists) ...?l];
       }
       return _namesakesOf[title.id] = [for (final l in lists) ...l!];
+    }
+
+    try {
+      // Late, and the copies are listed without it (the player's length
+      // check is still there): YTS can take half a minute to fail.
+      return await lookUp().timeout(const Duration(seconds: 6));
     } catch (_) {
       return const [];
     }

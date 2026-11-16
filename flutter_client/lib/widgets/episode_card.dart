@@ -44,18 +44,7 @@ class EpisodeCard extends StatelessWidget {
     this.hidePlayback = false,
     this.playing = false,
     this.onTap,
-    this.onPlay,
   });
-
-  /// Plays the episode at once, from where it was left. Given, an episode
-  /// part-way watched has a round play button beside its progress bar
-  /// for it (the rest of the card still opens the popup).
-  final VoidCallback? onPlay;
-
-  // The play button's size, and how far it reaches out past the bottom
-  // row's start and foot (it's centred on the row).
-  static const _playSize = 30.0;
-  static const _playOverhang = 7.0;
 
   static const _radius = 16.0;
   static const _padding = 10.0;
@@ -141,11 +130,6 @@ class EpisodeCard extends StatelessWidget {
     final airDate =
         episode.airDate == null ? null : DateTime.tryParse(episode.airDate!);
     final dpr = MediaQuery.devicePixelRatioOf(context);
-    final resumable = onPlay != null &&
-        !hidePlayback &&
-        !unreleased &&
-        (progress ?? 0) > 0 &&
-        (progress ?? 0) < _watchedAt;
 
     return LayoutBuilder(builder: (context, constraints) {
       final width = constraints.maxWidth;
@@ -227,12 +211,7 @@ class EpisodeCard extends StatelessWidget {
                   else
                     Row(
                       children: [
-                        // Room for the play button, drawn over the card's
-                        // ink (see below).
-                        if (resumable)
-                          const SizedBox(
-                              width: _playSize - _playOverhang + 4)
-                        else if (!hidePlayback) ...[
+                        if (!hidePlayback) ...[
                           const Icon(Icons.play_arrow_rounded,
                               size: 16, color: Colors.white70),
                           const SizedBox(width: 4),
@@ -317,29 +296,6 @@ class EpisodeCard extends StatelessWidget {
               type: MaterialType.transparency,
               child: InkWell(mouseCursor: WidgetStateMouseCursor.clickable, onTap: unreleased ? null : onTap),
             ),
-
-            // Part-way watched: play from where it was left, at once.
-            if (resumable)
-              Positioned(
-                left: _padding - _playOverhang,
-                bottom: _padding - _playOverhang,
-                width: _playSize,
-                height: _playSize,
-                child: Tooltip(
-                  message: 'Resume',
-                  child: Material(
-                    color: Colors.white,
-                    shape: const CircleBorder(),
-                    child: InkWell(
-                      mouseCursor: WidgetStateMouseCursor.clickable,
-                      customBorder: const CircleBorder(),
-                      onTap: onPlay,
-                      child: const Icon(Icons.play_arrow_rounded,
-                          size: 20, color: Colors.black),
-                    ),
-                  ),
-                ),
-              ),
           ],
         ),
       );

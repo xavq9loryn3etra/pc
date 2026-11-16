@@ -382,7 +382,8 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
     return scaffold;
   }
 
-  Future<void> _navigateToDetails(Movie movie, {String? heroTag}) async {
+  Future<void> _navigateToDetails(Movie movie,
+      {String? heroTag, bool autoPlay = false}) async {
     // No manual refresh needed on return — _buildContent is wrapped in a
     // ListenableBuilder(SavedMoviesService()), so it already reacts on its
     // own if history actually changed (and skips a rebuild entirely for
@@ -390,7 +391,8 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
     await Navigator.push(
       context,
       CupertinoPageRoute(
-        builder: (_) => DetailsScreen(movie: movie, heroTag: heroTag),
+        builder: (_) =>
+            DetailsScreen(movie: movie, heroTag: heroTag, autoPlay: autoPlay),
       ),
     );
   }
@@ -462,6 +464,11 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
                 onTap: () => _navigateToDetails(movieDisplay, heroTag: tag),
                 onLongPress: heroPrefix == 'history'
                     ? () => _confirmRemoveHistory(movieDisplay)
+                    : null,
+                // Continue Watching: straight back into it.
+                onPlay: heroPrefix == 'history'
+                    ? () => _navigateToDetails(movieDisplay,
+                        heroTag: tag, autoPlay: true)
                     : null,
               );
             },

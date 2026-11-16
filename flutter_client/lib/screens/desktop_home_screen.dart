@@ -103,13 +103,20 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     super.dispose();
   }
 
-  void _onMovieSelect(Movie movie) {
+  // Whether the side panel's title plays at once (see DetailsScreen.autoPlay).
+  bool _selectedAutoPlay = false;
+
+  void _onMovieSelect(Movie movie, {bool autoPlay = false}) {
     // In the side column beside the home, as on a phone (see
     // MovieTabShell); this side panel only where there's no column.
-    if (MovieTabService().openInColumn(DetailsScreen(movie: movie))) return;
+    if (MovieTabService().openInColumn(
+        DetailsScreen(movie: movie, autoPlay: autoPlay))) {
+      return;
+    }
     if (_selectedMovie == null) MovieTabService().panelsOpen.value++;
     setState(() {
       _selectedMovie = movie;
+      _selectedAutoPlay = autoPlay;
     });
   }
 
@@ -200,6 +207,9 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                             posterHeight: 300,
                             posterWidth: 200,
                             onTap: _onMovieSelect,
+                            // Straight back into it.
+                            onPlay: (movie) =>
+                                _onMovieSelect(movie, autoPlay: true),
                           ),
                           const SizedBox(height: 40),
                         ],
@@ -277,6 +287,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                     child: DesktopDetailsPanel(
                       movie: _selectedMovie!,
                       onClose: _closeSidePanel,
+                      autoPlay: _selectedAutoPlay,
                     )
                         .animate()
                         .slideX(
@@ -578,6 +589,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     required String heroPrefix,
     Function(Movie)? onLongPress,
     Function(Movie)? onTap,
+    Function(Movie)? onPlay,
     double posterHeight = 220,
     double posterWidth = 145,
   }) {
@@ -586,6 +598,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
       movies: movies,
       heroPrefix: heroPrefix,
       onLongPress: onLongPress,
+      onPlay: onPlay,
       onTap: onTap != null ? onTap : (movie) => widget.onMovieTap(movie),
       posterHeight: posterHeight,
       posterWidth: posterWidth,
@@ -599,6 +612,7 @@ class _DesktopSectionList extends StatefulWidget {
   final String heroPrefix;
   final Function(Movie)? onLongPress;
   final Function(Movie) onTap;
+  final Function(Movie)? onPlay;
   final double posterHeight;
   final double posterWidth;
 
@@ -607,6 +621,7 @@ class _DesktopSectionList extends StatefulWidget {
     required this.movies,
     required this.heroPrefix,
     this.onLongPress,
+    this.onPlay,
     required this.onTap,
     required this.posterHeight,
     required this.posterWidth,
@@ -669,6 +684,9 @@ class _DesktopSectionListState extends State<_DesktopSectionList> {
                       onTap: () => widget.onTap(movie),
                       onLongPress: widget.onLongPress != null
                           ? () => widget.onLongPress!(movie)
+                          : null,
+                      onPlay: widget.onPlay != null
+                          ? () => widget.onPlay!(movie)
                           : null,
                       width: widget.posterWidth,
                       height: widget.posterHeight,

@@ -50,6 +50,11 @@ class DetailsScreen extends StatefulWidget {
   // background for a movie the user hasn't chosen to play.
   final bool fromDeepLink;
 
+  /// Opened from a Continue Watching poster's play button: once loaded,
+  /// it plays what Resume would — the film, or the series' episode being
+  /// watched — with no pick of quality (see _startAutoPlay).
+  final bool autoPlay;
+
   const DetailsScreen({
     super.key,
     required this.movie,
@@ -57,6 +62,7 @@ class DetailsScreen extends StatefulWidget {
     this.onClose,
     this.isSidePanel = false,
     this.fromDeepLink = false,
+    this.autoPlay = false,
   });
 
   /// Starts loading [movie]'s page ahead of it opening — its details, then
@@ -774,6 +780,26 @@ class _DetailsScreenState extends State<DetailsScreen> {
     setState(() => _loading = false);
     await Future.delayed(const Duration(milliseconds: 120));
     if (mounted) setState(() => _skeletonDone = true);
+    if (mounted && widget.autoPlay) _startAutoPlay();
+  }
+
+  /// Plays what Resume would, at once (see DetailsScreen.autoPlay): the
+  /// qualities popup opens and starts the copy it would suggest.
+  Future<void> _startAutoPlay() async {
+    final m = _details;
+    if (m == null || FeatureFlagsService().hidePlayback.value) return;
+    if (m.type != 'tv') {
+      _openMovie(autoPlay: true);
+      return;
+    }
+    final w = _watching;
+    if (w == null || _selectedSeason?.seasonNumber != w.season) return;
+    if (_loadingEpisodes || _episodes.isEmpty) {
+      await _loadSeasonDetails(w.season);
+      if (!mounted) return;
+    }
+    final ep = _episodes.where((e) => e.episodeNumber == w.episode).firstOrNull;
+    if (ep != null && !ep.isUnreleased) _openEpisode(ep, autoPlay: true);
   }
 
   /// Completes once this page's route has finished coming in (at once if
@@ -955,7 +981,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   /// The movie's popup (the Play button): just its qualities, on the
   /// episode popup's blurred backdrop (see _openEpisode) — the details
   /// screen behind it already shows everything about the movie.
-  void _openMovie() {
+  void _openMovie({bool autoPlay = false}) {
     // The header's own image, preloaded tiny in _preloadHeader — not the
     // backdrop when the header shows the poster: that's never downloaded,
     // and the popup's background waited on it.
@@ -968,6 +994,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
       streams: AudioLanguageService().changes.value == _movieStreamsLanguages
           ? _movieStreams
           : null,
+      autoPlay: autoPlay,
     );
   }
 
@@ -2139,10 +2166,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                       // Unaired episodes' cards are greyed
                                       // out and ignore taps (EpisodeCard).
                                       onTap: () => _openEpisode(ep),
-                                      // Part-way watched: its play button
-                                      // starts it straight away.
-                                      onPlay: () =>
-                                          _openEpisode(ep, autoPlay: true),
                                     );
                                     if (index != watching) return card;
                                     // The one being watched: a light sweeps

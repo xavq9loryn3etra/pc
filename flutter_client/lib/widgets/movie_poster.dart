@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/material.dart';
@@ -15,6 +16,11 @@ class MoviePoster extends StatefulWidget {
   final Movie movie;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
+
+  /// Plays it at once, from where it was left (Continue Watching). Given,
+  /// a part-way watched title has a round play button at the start of its
+  /// progress bar for it; the rest of the poster still opens its page.
+  final VoidCallback? onPlay;
   final double width;
   final double height;
   final String? heroTag;
@@ -25,6 +31,7 @@ class MoviePoster extends StatefulWidget {
     required this.movie,
     this.onTap,
     this.onLongPress,
+    this.onPlay,
     this.width = 120,
     this.height = 180,
     this.showTitle = false,
@@ -36,6 +43,8 @@ class MoviePoster extends StatefulWidget {
 }
 
 class _MoviePosterState extends State<MoviePoster> {
+  static const double _playSize = 24;
+
   // Under the mouse: only the poster's zoom listens (see _zoomed), not the
   // whole card rebuilt on every hover.
   final ValueNotifier<bool> _hovered = ValueNotifier(false);
@@ -108,6 +117,14 @@ class _MoviePosterState extends State<MoviePoster> {
                 ? null
                 : historyMovie?.currentEpisode ?? widget.movie.currentEpisode;
             final hasProgress = progress != null && progress > 0;
+            // Part-way, not watched (95%, as an episode card): the play
+            // button (see onPlay).
+            final resumable =
+                widget.onPlay != null && hasProgress && progress < 0.95;
+            final lineHeight =
+                MediaQuery.textScalerOf(context).scale(11) * 1.2;
+            final rowHeight =
+                resumable ? math.max(lineHeight, _playSize) : lineHeight;
             final showBadge = widget.movie.type == 'tv' &&
                 currentSeason != null &&
                 currentEpisode != null;
@@ -196,13 +213,34 @@ class _MoviePosterState extends State<MoviePoster> {
                 Positioned(
                   left: 8,
                   right: 8,
-                  bottom: 8,
                   // One text line high whether or not there's an "S1 · E3"
                   // in it, so the bar sits at the same height on movie and
-                  // show cards side by side.
-                  height: MediaQuery.textScalerOf(context).scale(11) * 1.2,
+                  // show cards side by side — or the play button's height,
+                  // centred on that same line.
+                  bottom: 8 - (rowHeight - lineHeight) / 2,
+                  height: rowHeight,
                   child: Row(
                     children: [
+                      if (resumable) ...[
+                        SizedBox.square(
+                          dimension: _playSize,
+                          child: Tooltip(
+                            message: 'Resume',
+                            child: Material(
+                              color: Colors.white,
+                              shape: const CircleBorder(),
+                              child: InkWell(
+                                mouseCursor: WidgetStateMouseCursor.clickable,
+                                customBorder: const CircleBorder(),
+                                onTap: widget.onPlay,
+                                child: const Icon(Icons.play_arrow_rounded,
+                                    size: 17, color: Colors.black),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
                       if (hasProgress)
                         Expanded(
                           child: Container(

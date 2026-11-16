@@ -199,12 +199,50 @@ class _WideTabs extends StatelessWidget {
     required this.navBar,
   });
 
+  // For the session's first three frames — as the screen fades in from
+  // the mode picker — the column with all its tabs is drawn in its open
+  // place, with the home's cut-out corner and glass circle and a tab bar
+  // with a tab lit, all under a black cover: on Windows the graphics
+  // engine readies each effect (the frosted glass, the clipping) the first
+  // time it's drawn, and the first tap on a tab froze the panel's slide
+  // for a quarter second. Measured in a profile build: the first open's
+  // worst frame 260 ms → about 130, the first close's 170 → about 80, the
+  // column's first tab switches smooth. (Flutter's newer engine, Impeller,
+  // takes it to 19 ms — but Windows apps can't turn it on yet.)
+  static final _warming = ValueNotifier<bool>(true);
+  static bool _warmStarted = false;
+  // The frame warming up ends on: what it showed goes at once.
+  static bool _warmJustEnded = false;
+
+  static void _startWarmUp() {
+    if (_warmStarted) return;
+    _warmStarted = true;
+    var frames = 0;
+    void next(Duration _) {
+      if (++frames >= 3) {
+        _warmJustEnded = true;
+        _warming.value = false;
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _warmJustEnded = false);
+      } else {
+        WidgetsBinding.instance.addPostFrameCallback(next);
+        WidgetsBinding.instance.scheduleFrame();
+      }
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback(next);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<int>(
-      valueListenable: MovieTabService().columnPages,
-      builder: (context, pages, _) {
+    _startWarmUp();
+    return ListenableBuilder(
+      listenable:
+          Listenable.merge([MovieTabService().columnPages, _warming]),
+      builder: (context, _) {
+        final pages = MovieTabService().columnPages.value;
         final open = activeTab != BottomNavTab.home || pages > 0;
+        final warm = _warming.value && !open;
         return LayoutBuilder(
           builder: (context, box) {
             // Below the bar's row (see CustomAppBar.wideToolbarHeight).
@@ -319,11 +357,68 @@ class _WideTabs extends StatelessWidget {
                       excluding: !open,
                       child: TickerMode(
                         enabled: open,
-                        child: _SideColumn(mode: mode, size: columnSize),
+                        // Warming up (see _warming): in its open place.
+                        // Always wrapped, so the column isn't rebuilt when
+                        // it ends.
+                        child: Transform.translate(
+                          offset: warm
+                              ? const Offset(
+                                  -(_kColumnWidth + _kColumnGap * 2), 0)
+                              : Offset.zero,
+                          child: _SideColumn(mode: mode, size: columnSize),
+                        ),
                       ),
                     ),
                   ),
                 ),
+                // Warming up: the home's cut-out corner and glass circle at
+                // the home's size, a tab bar with a tab lit, then black
+                // over it all.
+                if (warm) ...[
+                  Positioned(
+                    left: _kColumnGap,
+                    top: _kColumnGap,
+                    bottom: _kColumnGap,
+                    right: _kColumnWidth + _kColumnGap * 2,
+                    child: const IgnorePointer(
+                      child: ClipPath(
+                        clipper: _HomePanelClipper(0.5),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            ColoredBox(color: Color(0xFF0A0A0A)),
+                            Positioned(
+                              top: 0,
+                              right: 0,
+                              width: 24,
+                              height: 24,
+                              child: ClipOval(
+                                child: GlassBlur(
+                                  child: ColoredBox(color: kGlassTint),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const Positioned.fill(
+                    child: IgnorePointer(
+                      child: ExcludeFocus(
+                        child: Stack(children: [
+                          FloatingBottomNavBar(
+                              activeTab: BottomNavTab.search),
+                        ]),
+                      ),
+                    ),
+                  ),
+                  const Positioned.fill(
+                    child: IgnorePointer(
+                      child: ColoredBox(color: Colors.black),
+                    ),
+                  ),
+                ],
                 navBar,
               ],
             );
@@ -494,18 +589,31 @@ class _ColumnTabs extends StatelessWidget {
     return Builder(
       builder: (context) {
         final screens = MovieTabShell._getScreensForMode(mode);
-        return ValueListenableBuilder<BottomNavTab>(
-          valueListenable: MovieTabService().currentTab,
-          builder: (context, tab, _) => Stack(
+        return ListenableBuilder(
+          listenable: Listenable.merge(
+              [MovieTabService().currentTab, _WideTabs._warming]),
+          builder: (context, _) {
+            final tab = MovieTabService().currentTab.value;
+            return Stack(
             children: [
               for (var i = 1; i < screens.length; i++)
                 IgnorePointer(
                   ignoring: BottomNavTab.values[i] != tab,
                   child: ExcludeFocus(
                     excluding: BottomNavTab.values[i] != tab,
+                    // Warming up (see _WideTabs._warming): every tab
+                    // drawn — shown and hidden again at once, with no fade,
+                    // which wouldn't run while the column's closed and its
+                    // animations are paused.
                     child: AnimatedOpacity(
-                      opacity: BottomNavTab.values[i] == tab ? 1.0 : 0.0,
-                      duration: _kTabFadeDuration,
+                      opacity: BottomNavTab.values[i] == tab ||
+                              _WideTabs._warming.value
+                          ? 1.0
+                          : 0.0,
+                      duration: _WideTabs._warming.value ||
+                              _WideTabs._warmJustEnded
+                          ? Duration.zero
+                          : _kTabFadeDuration,
                       curve: Curves.easeOut,
                       child: TickerMode(
                         enabled: BottomNavTab.values[i] == tab,
@@ -515,7 +623,8 @@ class _ColumnTabs extends StatelessWidget {
                   ),
                 ),
             ],
-          ),
+          );
+          },
         );
       },
     );

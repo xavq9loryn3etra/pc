@@ -5,14 +5,11 @@ import 'package:flutter_client/screens/details_screen.dart';
 class DesktopDetailsPanel extends StatelessWidget {
   final Movie movie;
   final VoidCallback onClose;
-  // See DetailsScreen.autoPlay.
-  final bool autoPlay;
 
   const DesktopDetailsPanel({
     Key? key,
     required this.movie,
     required this.onClose,
-    this.autoPlay = false,
   }) : super(key: key);
 
   @override
@@ -38,7 +35,6 @@ class DesktopDetailsPanel extends StatelessWidget {
           isSidePanel: true,
           onClose: onClose,
           heroTag: 'side_panel_${movie.id}', // Avoid hero conflicts
-          autoPlay: autoPlay,
         ),
       ),
     );

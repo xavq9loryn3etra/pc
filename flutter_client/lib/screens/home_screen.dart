@@ -7,6 +7,7 @@ import '../enums/app_mode.dart';
 import '../models/movie.dart';
 import '../services/app_mode_service.dart';
 import '../services/tmdb_service.dart';
+import 'quick_play.dart';
 import 'details_screen.dart';
 import '../widgets/hero_banner.dart';
 import '../widgets/movie_poster.dart';
@@ -382,8 +383,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
     return scaffold;
   }
 
-  Future<void> _navigateToDetails(Movie movie,
-      {String? heroTag, bool autoPlay = false}) async {
+  Future<void> _navigateToDetails(Movie movie, {String? heroTag}) async {
     // No manual refresh needed on return — _buildContent is wrapped in a
     // ListenableBuilder(SavedMoviesService()), so it already reacts on its
     // own if history actually changed (and skips a rebuild entirely for
@@ -391,8 +391,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
     await Navigator.push(
       context,
       CupertinoPageRoute(
-        builder: (_) =>
-            DetailsScreen(movie: movie, heroTag: heroTag, autoPlay: autoPlay),
+        builder: (_) => DetailsScreen(movie: movie, heroTag: heroTag),
       ),
     );
   }
@@ -467,8 +466,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
                     : null,
                 // Continue Watching: straight back into it.
                 onPlay: heroPrefix == 'history'
-                    ? () => _navigateToDetails(movieDisplay,
-                        heroTag: tag, autoPlay: true)
+                    ? () => quickPlay(context, movieDisplay)
                     : null,
               );
             },

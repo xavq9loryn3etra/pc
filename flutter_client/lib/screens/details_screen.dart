@@ -50,11 +50,6 @@ class DetailsScreen extends StatefulWidget {
   // background for a movie the user hasn't chosen to play.
   final bool fromDeepLink;
 
-  /// Opened from a Continue Watching poster's play button: once loaded,
-  /// it plays what Resume would — the film, or the series' episode being
-  /// watched — with no pick of quality (see _startAutoPlay).
-  final bool autoPlay;
-
   const DetailsScreen({
     super.key,
     required this.movie,
@@ -62,7 +57,6 @@ class DetailsScreen extends StatefulWidget {
     this.onClose,
     this.isSidePanel = false,
     this.fromDeepLink = false,
-    this.autoPlay = false,
   });
 
   /// Starts loading [movie]'s page ahead of it opening — its details, then
@@ -780,26 +774,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
     setState(() => _loading = false);
     await Future.delayed(const Duration(milliseconds: 120));
     if (mounted) setState(() => _skeletonDone = true);
-    if (mounted && widget.autoPlay) _startAutoPlay();
-  }
-
-  /// Plays what Resume would, at once (see DetailsScreen.autoPlay): the
-  /// qualities popup opens and starts the copy it would suggest.
-  Future<void> _startAutoPlay() async {
-    final m = _details;
-    if (m == null || FeatureFlagsService().hidePlayback.value) return;
-    if (m.type != 'tv') {
-      _openMovie(autoPlay: true);
-      return;
-    }
-    final w = _watching;
-    if (w == null || _selectedSeason?.seasonNumber != w.season) return;
-    if (_loadingEpisodes || _episodes.isEmpty) {
-      await _loadSeasonDetails(w.season);
-      if (!mounted) return;
-    }
-    final ep = _episodes.where((e) => e.episodeNumber == w.episode).firstOrNull;
-    if (ep != null && !ep.isUnreleased) _openEpisode(ep, autoPlay: true);
   }
 
   /// Completes once this page's route has finished coming in (at once if
@@ -933,7 +907,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   /// with playback hidden, a button to the streaming service carrying the
   /// show (none if there isn't one). Episodes that haven't aired yet show
   /// their info only.
-  void _openEpisode(Episode ep, {bool autoPlay = false}) {
+  void _openEpisode(Episode ep) {
     setState(() => _selectedEpisode = ep.episodeNumber);
     final m = _details ?? widget.movie;
     final image = ep.stillPath ?? m.backdrop;
@@ -952,8 +926,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     );
 
     if (!hidePlayback && !ep.isUnreleased) {
-      _playWithTorrent(
-          header: header, backgroundImage: image, autoPlay: autoPlay);
+      _playWithTorrent(header: header, backgroundImage: image);
       return;
     }
 
@@ -981,7 +954,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   /// The movie's popup (the Play button): just its qualities, on the
   /// episode popup's blurred backdrop (see _openEpisode) — the details
   /// screen behind it already shows everything about the movie.
-  void _openMovie({bool autoPlay = false}) {
+  void _openMovie() {
     // The header's own image, preloaded tiny in _preloadHeader — not the
     // backdrop when the header shows the poster: that's never downloaded,
     // and the popup's background waited on it.
@@ -994,7 +967,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
       streams: AudioLanguageService().changes.value == _movieStreamsLanguages
           ? _movieStreams
           : null,
-      autoPlay: autoPlay,
     );
   }
 
@@ -1002,7 +974,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
     Widget? header,
     String? backgroundImage,
     Future<List<TorrentStream>>? streams,
-    bool autoPlay = false,
   }) async {
     if (_details == null) return;
     if (_isSelectionUnreleased()) {
@@ -1034,7 +1005,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
           header: header,
           backgroundImage: backgroundImage,
           prefetchedStreams: streams,
-          autoPlay: autoPlay,
         );
       },
     );
@@ -2304,13 +2274,7 @@ class TorrentQualitySelectorSheet extends StatefulWidget {
     this.header,
     this.backgroundImage,
     this.prefetchedStreams,
-    this.autoPlay = false,
   });
-
-  /// Starts the option it would suggest (last watched, else recommended)
-  /// as soon as the qualities are in, without a pick: an episode card's
-  /// play button.
-  final bool autoPlay;
 
   /// "Alternative Web Servers (No Torrenting)" is hidden for now; flip this
   /// to bring the menu back. (EpisodeBrowser has the same switch.)
@@ -2464,15 +2428,6 @@ class _TorrentQualitySelectorSheetState
           _recommendedTier = recommendedTier;
           _loading = false;
         });
-        if (widget.autoPlay && !_autoPlayed) {
-          _autoPlayed = true;
-          final pick = _suggestedOption();
-          if (pick != null) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) _selectQuality(pick);
-            });
-          }
-        }
         // Not for a movie: its page already did, and owns it — closing
         // this popup mustn't end the page's head start. (Unless the audio
         // language changed: the page's head start is for the old one.)
@@ -2498,23 +2453,6 @@ class _TorrentQualitySelectorSheetState
         });
       }
     }
-  }
-
-  bool _autoPlayed = false;
-
-  /// The option the list suggests: the one last watched, else the
-  /// recommended quality, else the first.
-  QualityOption? _suggestedOption() {
-    final options = _options;
-    if (options == null || options.isEmpty) return null;
-    final last = _lastPlayedHash?.toLowerCase();
-    return options
-            .where((o) =>
-                last != null &&
-                o.streams.any((s) => s.infoHash.toLowerCase() == last))
-            .firstOrNull ??
-        options.where((o) => o.tier == _recommendedTier).firstOrNull ??
-        options.first;
   }
 
   void _selectQuality(QualityOption option) async {

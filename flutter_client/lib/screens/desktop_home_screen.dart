@@ -7,6 +7,7 @@ import '../theme/app_theme.dart';
 import '../models/movie.dart';
 import '../widgets/movie_poster.dart';
 import '../widgets/desktop_details_panel.dart';
+import 'quick_play.dart';
 import 'details_screen.dart';
 import '../widgets/image_precache.dart';
 import '../services/saved_movies_service.dart';
@@ -103,20 +104,13 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     super.dispose();
   }
 
-  // Whether the side panel's title plays at once (see DetailsScreen.autoPlay).
-  bool _selectedAutoPlay = false;
-
-  void _onMovieSelect(Movie movie, {bool autoPlay = false}) {
+  void _onMovieSelect(Movie movie) {
     // In the side column beside the home, as on a phone (see
     // MovieTabShell); this side panel only where there's no column.
-    if (MovieTabService().openInColumn(
-        DetailsScreen(movie: movie, autoPlay: autoPlay))) {
-      return;
-    }
+    if (MovieTabService().openInColumn(DetailsScreen(movie: movie))) return;
     if (_selectedMovie == null) MovieTabService().panelsOpen.value++;
     setState(() {
       _selectedMovie = movie;
-      _selectedAutoPlay = autoPlay;
     });
   }
 
@@ -208,8 +202,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                             posterWidth: 200,
                             onTap: _onMovieSelect,
                             // Straight back into it.
-                            onPlay: (movie) =>
-                                _onMovieSelect(movie, autoPlay: true),
+                            onPlay: (movie) => quickPlay(context, movie),
                           ),
                           const SizedBox(height: 40),
                         ],
@@ -287,7 +280,6 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                     child: DesktopDetailsPanel(
                       movie: _selectedMovie!,
                       onClose: _closeSidePanel,
-                      autoPlay: _selectedAutoPlay,
                     )
                         .animate()
                         .slideX(

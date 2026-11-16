@@ -29,6 +29,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:ui'; // For BackdropFilter
 import '../widgets/glass_blur.dart';
+import '../widgets/highlight_sweep.dart';
 import '../widgets/glass_dialog.dart' show showGlassSheet;
 import '../widgets/artwork_glow.dart';
 import '../widgets/glass_bubble_bar.dart';
@@ -239,7 +240,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
     _jumpDirection.value = direction;
   }
 
-  /// Scrolls to the episode being watched.
+  /// Counts up each time the arrow's brought the watched episode into
+  /// view: its card's light sweep (see HighlightSweep).
+  final ValueNotifier<int> _highlightWatching = ValueNotifier(0);
+
+  /// Scrolls to the episode being watched, then lights its card up.
   Future<void> _jumpToWatching() async {
     final index = _watchingIndex;
     if (index == null) return;
@@ -257,6 +262,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           duration: const Duration(milliseconds: 250),
           curve: Curves.easeOut);
     }
+    if (mounted) _highlightWatching.value++;
   }
 
   final Dio _shareDio = Dio();
@@ -567,6 +573,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     _scrollController.dispose();
     _scrollOffset.dispose();
     _jumpDirection.dispose();
+    _highlightWatching.dispose();
     _showTitle.dispose();
     FeatureFlagsService().hidePlayback.removeListener(_onFlagsChanged);
     super.dispose();
@@ -2119,10 +2126,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                               ep.episodeNumber,
                                             ) ??
                                             ep.progress;
-                                    return EpisodeCard(
-                                      key: index == watching
-                                          ? _watchingCardKey
-                                          : null,
+                                    final card = EpisodeCard(
                                       episode: ep,
                                       fallbackImage: m.backdrop,
                                       progress: currentProgress,
@@ -2132,6 +2136,21 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                       // Unaired episodes' cards are greyed
                                       // out and ignore taps (EpisodeCard).
                                       onTap: () => _openEpisode(ep),
+                                    );
+                                    if (index != watching) return card;
+                                    // The one being watched: a light sweeps
+                                    // over it once the arrow's brought it
+                                    // into view (see _jumpToWatching).
+                                    return ValueListenableBuilder<int>(
+                                      key: _watchingCardKey,
+                                      valueListenable: _highlightWatching,
+                                      builder: (context, tick, card) =>
+                                          HighlightSweep(
+                                        trigger: tick,
+                                        radius: 16,
+                                        child: card!,
+                                      ),
+                                      child: card,
                                     );
                                   },
                                 );

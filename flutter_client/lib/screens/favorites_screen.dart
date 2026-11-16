@@ -7,6 +7,7 @@ import '../widgets/movie_poster.dart';
 import 'details_screen.dart';
 import '../widgets/screen_scaffold.dart';
 import '../widgets/screen_shade.dart';
+import '../widgets/empty_state.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/smooth_scroll_controller.dart';
 
@@ -94,24 +95,19 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
       title: const Text('My List'),
       body: (context, isDesktop, padding) {
         if (_favorites.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.favorite_border_rounded,
-                  size: 64,
-                  color: Colors.white24,
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  "No favorites yet",
-                  style: TextStyle(
-                    color: Colors.white54,
-                    fontSize: 16,
-                  ),
-                ),
-              ],
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              24,
+              SideColumnScope.inColumn(context)
+                  ? 12
+                  : ScreenScaffold.contentTop(context),
+              24,
+              padding.bottom,
+            ),
+            child: const EmptyState(
+              title: 'Nothing saved yet',
+              message: 'Tap the heart on any movie or series to keep it '
+                  'here for later.',
             ),
           );
         }

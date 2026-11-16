@@ -11,6 +11,7 @@ import 'details_screen.dart';
 import '../widgets/movie_poster.dart';
 import '../widgets/screen_scaffold.dart';
 import '../widgets/screen_shade.dart';
+import '../widgets/empty_state.dart';
 import 'package:shimmer/shimmer.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/glass_blur.dart';
@@ -172,14 +173,14 @@ class _SearchScreenState extends State<SearchScreen> {
           _results = results;
           _elsewhere = elsewhere;
           _isLoading = false;
-          if (found.isEmpty) _error = "No results found.";
+          if (found.isEmpty) _error = _noResults;
         });
       }
     } catch (e) {
       if (mounted && requestId == _searchRequestId) {
         setState(() {
           _isLoading = false;
-          _error = "Search failed. Please check your connection.";
+          _error = _searchFailed;
         });
       }
     }
@@ -217,8 +218,8 @@ class _SearchScreenState extends State<SearchScreen> {
             ? 8.0
             : barAtFoot
                 ? padding.bottom - 34
-                // In the side column: on its foot.
-                : padding.bottom + (SideColumnScope.inColumn(context) ? 0 : 16);
+                // 16px up, in the side column too, as Ask's field.
+                : padding.bottom + 16;
         return ValueListenableBuilder<List<String>>(
           valueListenable: SearchHistoryService().entries,
           builder: (context, history, _) {
@@ -485,22 +486,37 @@ class _SearchScreenState extends State<SearchScreen> {
     }
 
     if (_error != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline_rounded,
-                size: 48, color: Colors.grey),
-            const SizedBox(height: 16),
-            Text(_error!, style: const TextStyle(color: Colors.grey)),
-          ],
-        ),
+      return _centred(
+        context,
+        padding,
+        _error == _noResults
+            ? const EmptyState(
+                title: 'Nothing found',
+                message: 'Try another name, or check the spelling.',
+              )
+            : const EmptyState(
+                title: "Couldn't search",
+                message: 'Check your internet connection and try again.',
+              ),
       );
     }
 
-    // Nothing until something's searched: no trending lists, no posters.
+    // Before a search: a line on what to do, nothing else — no trending
+    // lists, no posters.
     if (_results.isEmpty && _controller.text.isEmpty) {
-      return const SizedBox.shrink();
+      return _centred(
+        context,
+        padding,
+        _isRamen
+            ? const EmptyState(
+                title: 'Find your next anime',
+                message: 'Search for any anime series or film by its name.',
+              )
+            : const EmptyState(
+                title: 'Find something to watch',
+                message: 'Search for any movie or series by its name.',
+              ),
+      );
     }
 
     // A title carried over from the other mode's search: opened once its
@@ -590,6 +606,18 @@ class _SearchScreenState extends State<SearchScreen> {
       );
     }
   }
+
+  static const _noResults = 'No results';
+  static const _searchFailed = 'Search failed';
+
+  /// [child] in the middle of the space between the title and the search
+  /// bar (and its recent searches).
+  Widget _centred(BuildContext context, EdgeInsets padding, Widget child) =>
+      Padding(
+        padding: EdgeInsets.fromLTRB(
+            24, _topPadding(context), 24, padding.bottom),
+        child: child,
+      );
 
   static const double _recentsHeight = 36;
 

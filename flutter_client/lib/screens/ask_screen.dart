@@ -498,7 +498,10 @@ class _AskScreenState extends State<AskScreen>
             ? 8.0
             : barAtFoot
                 ? padding.bottom - 34
-                : padding.bottom + (inColumn ? 0 : 16);
+                // 16px up, in the side column too: on its foot, the
+                // column cut off the trace's glow below the field. Search's
+                // bar sits the same.
+                : padding.bottom + 16;
         // Room for the field, and a gap so a poster's title isn't right
         // against it.
         final contentBottom =

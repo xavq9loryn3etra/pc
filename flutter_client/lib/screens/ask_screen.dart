@@ -486,7 +486,6 @@ class _AskScreenState extends State<AskScreen>
         // its foot, but a phone's margin in from its sides: right against
         // them, the column cut off the trace's glow, which spills some
         // 14px past the glass.
-        final inColumn = SideColumnScope.inColumn(context);
         final fieldSide = side;
         // Just above the bottom nav bar's buttons: padding.bottom keeps clear
         // of its whole fade, taller than the buttons themselves. With no bar

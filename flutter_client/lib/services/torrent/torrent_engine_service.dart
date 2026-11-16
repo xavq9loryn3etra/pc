@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:flutter/foundation.dart' show ValueNotifier, visibleForTesting;
+import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:libtorrent_flutter/libtorrent_flutter.dart';
@@ -794,7 +794,6 @@ class TorrentEngineService {
   /// trailers and extras — the largest file of any kind could be a disc
   /// image or an archive. Throws when there's none, so the next copy is
   /// tried instead (see StreamResolver.resolveWithFallback).
-  @visibleForTesting
   static int chooseVideoFile(List<FileInfo> files) {
     FileInfo? best;
     for (final file in files) {

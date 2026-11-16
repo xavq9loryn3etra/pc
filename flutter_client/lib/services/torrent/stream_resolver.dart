@@ -343,7 +343,6 @@ class StreamResolver {
   /// Nolan's 173), or over 1.8 times (extended cuts run up to a third
   /// longer). Never when the film's length isn't known, or is under half
   /// an hour (a short's listed length can be well off).
-  @visibleForTesting
   static bool wrongLength(Duration length, int? expectedMinutes) {
     if (expectedMinutes == null || expectedMinutes < 30) return false;
     if (length <= Duration.zero) return false;
@@ -536,7 +535,6 @@ class StreamResolver {
   }
 
   /// A runtime as TMDB's given ("24m", "1h 48m") in minutes; null if none.
-  @visibleForTesting
   static int? minutesOf(String? runtime) {
     if (runtime == null) return null;
     final h = int.tryParse(RegExp(r'(\d+)\s*h').firstMatch(runtime)?[1] ?? '');

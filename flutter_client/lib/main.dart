@@ -164,6 +164,10 @@ void main() async {
     );
   }
 
+  // Stand-up specials to leave out of every list: the saved ones, read
+  // before any list loads (a week-old list is fetched again behind).
+  await _initStep('StandUpSpecials', TMDBService().loadStandUpSpecials);
+
   // Not awaited: warms up the mode selector's background slideshow while
   // the splash plays (needs the TMDB key from .env above).
   unawaited(TrendingService().fetch(AppModeService().currentMode.value));

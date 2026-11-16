@@ -1,5 +1,7 @@
 import 'dart:math' as math;
-import 'dart:async' show TimeoutException;
+import 'dart:async' show TimeoutException, unawaited;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io' show Platform;
 import 'dart:ui' show PlatformDispatcher;
 import 'package:flutter/services.dart' show MethodChannel;
@@ -908,9 +910,101 @@ class TMDBService {
     caseSensitive: false,
   );
 
+  /// TMDB's Music, Comedy and TV Movie genres.
+  static const _music = 10402, _comedy = 35, _tvMovie = 10770;
+
+  /// The genre ids of the TMDB title [m]: a list result names them by
+  /// number (genre_ids), a details one in full (genres).
+  static List<Object?> _genreIds(Map m) {
+    final genres = m['genre_ids'] ?? m['genres'];
+    return genres is List
+        ? [for (final g in genres) g is Map ? g['id'] : g]
+        : const [];
+  }
+
+  /// TMDB's keywords for stand-up comedy: "stand-up comedy", "stand-up",
+  /// "stand up", "stand-up specials", "comedy special", and the Mexican,
+  /// Danish (two) and British ones. Not "stand-up comedian": that's also
+  /// films about one (Joker).
+  static const _standUpKeywords =
+      '9716|388444|388445|356038|362573|369300|357799|359845|371153';
+
+  /// Stand-up specials ("movie_823754", "tv_819"), from TMDB's stand-up
+  /// keywords: TMDB files them as plain Comedy, the same as Superbad, so
+  /// only the keyword tells them apart. Saved, and fetched again weekly
+  /// (see [loadStandUpSpecials]).
+  @visibleForTesting
+  static Set<String> standUpSpecials = {};
+
+  static const _standUpPrefsKey = 'standup_specials';
+  static const _standUpAtPrefsKey = 'standup_specials_at';
+
+  /// Whether a title tagged stand-up is a special itself — Comedy (or a
+  /// TV movie) only. A sitcom about a comedian also has Drama (Louie),
+  /// and stays.
+  static bool _isOnlyComedy(Map m) =>
+      _genreIds(m).every((g) => g == _comedy || g == _tvMovie);
+
+  /// Loads the stand-up specials saved last time; when they're a week
+  /// old, or there are none yet, fetches them again in the background
+  /// (some 90 pages from TMDB).
+  Future<void> loadStandUpSpecials() async {
+    final prefs = await SharedPreferences.getInstance();
+    standUpSpecials =
+        (prefs.getStringList(_standUpPrefsKey) ?? const []).toSet();
+    final at = DateTime.fromMillisecondsSinceEpoch(
+        prefs.getInt(_standUpAtPrefsKey) ?? 0);
+    if (standUpSpecials.isNotEmpty &&
+        DateTime.now().difference(at) < const Duration(days: 7)) {
+      return;
+    }
+    unawaited(_refreshStandUpSpecials(prefs));
+  }
+
+  Future<void> _refreshStandUpSpecials(SharedPreferences prefs) async {
+    try {
+      final found = <String>{};
+      for (final type in ['movie', 'tv']) {
+        Future<Map> page(int n) async => (await _dio.get(
+              '$_baseUrl/discover/$type',
+              queryParameters: {
+                'api_key': _apiKey,
+                'with_keywords': _standUpKeywords,
+                'page': n,
+              },
+            ))
+                .data as Map;
+        final first = await page(1);
+        final total =
+            math.min((first['total_pages'] as num?)?.toInt() ?? 1, 500);
+        final pages = [first];
+        // Ten at a time, not all at once.
+        for (var from = 2; from <= total; from += 10) {
+          pages.addAll(await Future.wait([
+            for (var n = from; n < from + 10 && n <= total; n++) page(n),
+          ]));
+        }
+        for (final p in pages) {
+          for (final r in p['results'] as List? ?? const []) {
+            if (r is Map && _isOnlyComedy(r)) found.add('${type}_${r['id']}');
+          }
+        }
+      }
+      if (found.isEmpty) return;
+      standUpSpecials = found;
+      _cache.clear(); // Lists fetched before now may hold some.
+      await prefs.setStringList(_standUpPrefsKey, found.toList());
+      await prefs.setInt(
+          _standUpAtPrefsKey, DateTime.now().millisecondsSinceEpoch);
+    } catch (e) {
+      debugPrint('Stand-up specials not fetched: $e');
+    }
+  }
+
   /// A TMDB result never to show: one marked adult, one with an explicit
   /// word in its title, a talk, news or reality show, a documentary or
-  /// behind-the-scenes extra, or an upload with no genre, no
+  /// behind-the-scenes extra, a concert film or stand-up special, or an
+  /// upload with no genre, no
   /// release date and no ratings at all — "Super Boobs: Volume 1" and its
   /// sequels aren't marked adult, so `include_adult: false` let them into
   /// search. Real titles, however small (Neera), have at least one of
@@ -926,8 +1020,16 @@ class TMDBService {
     if (_explicitTitle.hasMatch(titles)) return true;
     if (_extrasTitle.hasMatch(titles)) return true;
     final genres = m['genre_ids'] ?? m['genres'];
-    if (genres is List &&
-        genres.any((g) => _notStories.contains(g is Map ? g['id'] : g))) {
+    final ids = _genreIds(m);
+    if (ids.any(_notStories.contains)) return true;
+    // Concert films (Taylor Swift: The Eras Tour, Coldplay: Live 2012)
+    // are Music alone; musicals (The Greatest Showman) have other genres.
+    if (ids.contains(_music) &&
+        ids.every((g) => g == _music || g == _tvMovie)) {
+      return true;
+    }
+    final type = m['media_type'] ?? (m.containsKey('title') ? 'movie' : 'tv');
+    if (standUpSpecials.contains('${type}_${m['id']}') && _isOnlyComedy(m)) {
       return true;
     }
     final date = (m['release_date'] ?? m['first_air_date'] ?? '').toString();

@@ -128,6 +128,91 @@ void main() {
         isFalse);
   });
 
+  test('concert films are hidden, musicals stay', () {
+    expect(
+        hidden({
+          'id': 1160164,
+          'title': 'TAYLOR SWIFT | THE ERAS TOUR',
+          'genre_ids': [10402],
+          'vote_count': 554,
+          'release_date': '2023-10-13',
+        }),
+        isTrue);
+    expect(
+        hidden({
+          'id': 1,
+          'title': 'Some Band: Live',
+          'genre_ids': [10402, 10770],
+          'vote_count': 5,
+          'release_date': '2012-01-01',
+        }),
+        isTrue);
+    expect(
+        hidden({
+          'id': 316029,
+          'title': 'The Greatest Showman',
+          'genre_ids': [18, 10402, 10751],
+          'vote_count': 9000,
+          'release_date': '2017-12-20',
+        }),
+        isFalse);
+  });
+
+  test('stand-up specials are hidden, comedy films and sitcoms stay', () {
+    TMDBService.standUpSpecials = {'movie_823754', 'tv_32962'};
+    addTearDown(() => TMDBService.standUpSpecials = {});
+    expect(
+        hidden({
+          'id': 823754,
+          'title': 'Bo Burnham: Inside',
+          'genre_ids': [35],
+          'vote_count': 664,
+          'release_date': '2021-05-30',
+        }),
+        isTrue);
+    // As a person's credits list it.
+    expect(
+        hidden({
+          'id': 823754,
+          'media_type': 'movie',
+          'title': 'Bo Burnham: Inside',
+          'genre_ids': [35],
+          'vote_count': 664,
+          'release_date': '2021-05-30',
+        }),
+        isTrue);
+    // Comedy alone, but not stand-up.
+    expect(
+        hidden({
+          'id': 8363,
+          'title': 'Superbad',
+          'genre_ids': [35],
+          'vote_count': 8515,
+          'release_date': '2007-08-17',
+        }),
+        isFalse);
+    // Tagged stand-up, but a sitcom (Drama too).
+    expect(
+        hidden({
+          'id': 32962,
+          'name': 'Louie',
+          'genre_ids': [35, 18],
+          'vote_count': 400,
+          'first_air_date': '2010-06-29',
+        }),
+        isFalse);
+    // A series with the same number as a stand-up film.
+    expect(
+        hidden({
+          'id': 823754,
+          'name': 'Some Show',
+          'genre_ids': [35],
+          'vote_count': 10,
+          'first_air_date': '2020-01-01',
+        }),
+        isFalse);
+  });
+
   test('real films stay, however small', () {
     // Neera: Sinhala, a handful of details.
     expect(

@@ -371,6 +371,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   // healthy one has several MB by then.
   static const Duration _openingDataWait = Duration(seconds: 20);
   static const int _openingMinBytes = 2 * 1024 * 1024;
+  // More than a head start's ~6 MB: a copy already downloaded (some way).
+  static const int _openingHasDataBytes = 32 * 1024 * 1024;
   // The torrent being opened, how much it had when that was first seen,
   // and when — the baseline for the rule above.
   ({int torrentId, int bytes, DateTime at})? _openingBaseline;
@@ -1144,6 +1146,13 @@ class _PlayerScreenState extends State<PlayerScreen>
         );
       } else if (DateTime.now().difference(baseline.at) >= _openingDataWait &&
           downloadedBytes - baseline.bytes < _openingMinBytes &&
+          // Not a copy with much on the device already (resumed, or
+          // downloaded whole): it has little or nothing left to fetch, so
+          // its count stays flat however well it's doing — and this left a
+          // whole downloaded episode for another copy from nothing ("Finding
+          // a faster copy…"), deleting it. The 45 s rule below still
+          // catches one that's really stuck.
+          baseline.bytes < _openingHasDataBytes &&
           StreamResolver.sameQuality(_currentStream, _availableStreams).any(
               (s) =>
                   !_triedStartHashes.contains(s.infoHash.toLowerCase()) &&
@@ -1377,6 +1386,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     final alreadyComplete = stuckTorrent != null &&
         stuckTorrent.totalWanted > 0 &&
         stuckTorrent.totalDone >= stuckTorrent.totalWanted;
+    // Much downloaded already: kept if another copy takes over (below).
+    final hadData =
+        (stuckTorrent?.totalDone ?? 0) >= _openingHasDataBytes;
 
     // Still starting: nothing's downloaded that could be damaged, so wiping
     // this copy and starting it over would only lose the peers it has
@@ -1448,7 +1460,11 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (_closedDuringSwitch(result)) return;
       player.play();
       if (otherCopies.isNotEmpty && stuckTorrentId != result.torrentId) {
-        _resolver.cleanup(stuckTorrentId);
+        // Kept (just stopped) when it had much on the device: deleted, a
+        // downloaded episode was lost for good.
+        hadData
+            ? _resolver.pause(stuckTorrentId)
+            : _resolver.cleanup(stuckTorrentId);
       }
 
       if (mounted) {

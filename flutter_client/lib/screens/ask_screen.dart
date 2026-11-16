@@ -482,10 +482,12 @@ class _AskScreenState extends State<AskScreen>
       ),
       body: (context, isDesktop, padding) {
         final side = isDesktop ? 60.0 : 16.0;
-        // The field where Search's is: in a wide window's side column, to
-        // its edges and on its foot (it was inset, so narrower and higher).
+        // The field where Search's is. In a wide window's side column, on
+        // its foot, but a phone's margin in from its sides: right against
+        // them, the column cut off the trace's glow, which spills some
+        // 14px past the glass.
         final inColumn = SideColumnScope.inColumn(context);
-        final fieldSide = inColumn && !isDesktop ? 0.0 : side;
+        final fieldSide = side;
         // Just above the bottom nav bar's buttons: padding.bottom keeps clear
         // of its whole fade, taller than the buttons themselves. With no bar
         // at the foot (a wide window's, at the top; the side column),

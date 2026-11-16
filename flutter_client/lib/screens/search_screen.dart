@@ -204,9 +204,9 @@ class _SearchScreenState extends State<SearchScreen> {
       glow: TabGlow.search,
       title: const Text('Search'),
       body: (context, isDesktop, padding) {
-        // None in a wide window's side column (its content to its edges).
-        final side =
-            isDesktop ? 60.0 : (SideColumnScope.inColumn(context) ? 0.0 : 16.0);
+        // A phone's margin in a wide window's side column too, as Ask's
+        // field has (its glow needs the room).
+        final side = isDesktop ? 60.0 : 16.0;
         // Where Ask's field is: just above the bottom nav bar's buttons
         // (padding.bottom keeps clear of its whole fade); with no bar at
         // the foot (a wide window's, at the top; the side column), just

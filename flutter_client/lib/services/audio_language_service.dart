@@ -20,6 +20,39 @@ class SpokenLanguage {
   /// not one the app knows.
   static SpokenLanguage? of(String? code) => code == null ? null : _all[code];
 
+  /// Whether TMDB codes [a] and [b] may be the same language as a file
+  /// tags it: Norwegian's two codes, or Cantonese and Mandarin, both
+  /// tagged "chi".
+  static bool mayBeSame(String a, String b) {
+    if (a == b) return true;
+    final x = _all[a]?.trackCodes, y = _all[b]?.trackCodes;
+    return x != null && y != null && x.any(y.contains);
+  }
+
+  /// The TMDB code of the language a video file's soundtrack is in, by its
+  /// name ("Japanese", "English Dub") or else its language tag ("jpn",
+  /// "eng") — null when it says neither ("und", "Stereo", nothing). The
+  /// name goes first: it's written by hand, where a tag is often left at
+  /// "eng" whatever the soundtrack.
+  static String? codeOfTrack(String? tag, String? title) {
+    final name = title?.toLowerCase() ?? '';
+    if (name.isNotEmpty) {
+      for (final e in _all.entries) {
+        if (RegExp('(?<![a-z])${e.value.name.toLowerCase()}(?![a-z])')
+            .hasMatch(name)) {
+          return e.key;
+        }
+      }
+    }
+    final t = tag?.toLowerCase().trim() ?? '';
+    if (t.isEmpty || t == 'und' || t == 'mul' || t == 'zxx') return null;
+    for (final e in _all.entries) {
+      if (e.value.trackCodes.contains(t) || e.key == t) return e.key;
+    }
+    // "jp", as some files are wrongly tagged.
+    return t == 'jp' ? 'ja' : null;
+  }
+
   static const _all = <String, SpokenLanguage>{
     'en': english,
     'de': SpokenLanguage('German', {'🇩🇪'}, ['ger', 'deu', 'de']),

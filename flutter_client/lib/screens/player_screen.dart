@@ -1242,24 +1242,112 @@ class _PlayerScreenState extends State<PlayerScreen>
     unawaited(_leaveWrongCopy());
   }
 
-  /// Leaves the copy playing, found to be another film: it's never offered
-  /// for this one again (StreamResolver.markWrongCopy), its download is
-  /// deleted, and the next copy — of the same quality first — plays from
-  /// the saved spot.
-  Future<void> _leaveWrongCopy() async {
+  // ── The copy's soundtracks (see _checkAudio) ──
+
+  Timer? _audioCheckTimer;
+  // The copy, and the language, whose soundtracks have been checked.
+  String? _audioCheckedFor;
+
+  /// Checks the soundtracks of the copy playing, once they're listed and
+  /// it's settled (see _checkAudio).
+  void _scheduleAudioCheck() {
+    _audioCheckTimer?.cancel();
+    _audioCheckTimer = Timer(const Duration(milliseconds: 800), _checkAudio);
+  }
+
+  /// A copy whose soundtracks all say they're in another language than the
+  /// one it's to play in is a dub — its name said nothing, and so it was
+  /// taken for the title's own language: Attack on Titan, set to Japanese,
+  /// played an English-only pack. As on Netflix, it never plays in another
+  /// language: it's noted as heard in those (StreamResolver.noteHeardIn,
+  /// so it's not offered in this language again — it still is in its
+  /// own), and a copy in the language goes instead (see _leaveWrongCopy).
+  /// Nothing's done when a soundtrack doesn't say ("und", "Stereo").
+  void _checkAudio() {
+    if (!mounted) return;
+    // Mid-switch, the soundtracks may be the last copy's: once it's settled.
+    if (_switchingQuality || _recoveringStream) {
+      _scheduleAudioCheck();
+      return;
+    }
+    final audio = [
+      for (final t in player.state.tracks.audio)
+        if (t.id != 'auto' && t.id != 'no') t,
+    ];
+    if (audio.isEmpty) return; // Not listed yet.
+    final hash = _currentStream.infoHash.toLowerCase();
+    final title = widget.details;
+    final wanted = AudioLanguageService.appliesTo(title) &&
+            AudioLanguageService().of(title) == AudioLanguage.original
+        ? title.originalLanguage!
+        : 'en';
+    final checking = '$hash:$wanted';
+    if (checking == _audioCheckedFor) return;
+    _audioCheckedFor = checking;
+    final heard = <String>{};
+    AudioTrack? inIt;
+    var unsaid = false;
+    for (final t in audio) {
+      final code = SpokenLanguage.codeOfTrack(t.language, t.title);
+      if (code == null) {
+        unsaid = true;
+      } else {
+        heard.add(code);
+        if (SpokenLanguage.mayBeSame(code, wanted)) inIt ??= t;
+      }
+    }
+    if (inIt != null) {
+      // The player goes by tags ('alang'); one known only by its name
+      // ("Japanese", tagged "und") is picked here.
+      final playing = player.state.track.audio.id;
+      final current = audio.where((t) => t.id == playing).firstOrNull;
+      final currentCode = current == null
+          ? null
+          : SpokenLanguage.codeOfTrack(current.language, current.title);
+      if (currentCode == null ||
+          !SpokenLanguage.mayBeSame(currentCode, wanted)) {
+        unawaited(player.setAudioTrack(inIt));
+      }
+      return;
+    }
+    if (unsaid) return; // One doesn't say: it may well be it.
+    final imdbId = title.imdbId ?? title.id;
+    print('This copy\'s soundtracks are in ${heard.join(', ')}, not '
+        '$wanted: a dub');
+    unawaited(StreamResolver.noteHeardIn(imdbId, hash, heard));
+    unawaited(_leaveWrongCopy(
+        language: AudioLanguageService().languageFor(title)));
+  }
+
+  /// Leaves the copy playing, found to be another film — or, given
+  /// [language], to have no soundtrack in it (see _checkAudio). Another
+  /// film's copy is never offered for this one again
+  /// (StreamResolver.markWrongCopy) and its download is deleted; a dub's
+  /// is kept, for its own language. The next copy — of the same quality
+  /// first — plays from the saved spot; with none, a dub stops rather than
+  /// play on in the wrong language.
+  Future<void> _leaveWrongCopy({SpokenLanguage? language}) async {
     if (_switchingQuality || _recoveringStream || !mounted) return;
     final wrong = _currentStream;
     final hash = wrong.infoHash.toLowerCase();
     final imdbId = widget.details.imdbId ?? widget.details.id;
-    _wrongLengthHashes.add(hash);
-    if (_wrongLengthHashes.length >= 3) {
-      _lengthCheckOff = true;
-      for (final h in _wrongLengthHashes) {
-        unawaited(StreamResolver.markWrongCopy(imdbId, h, wrong: false));
+    final dub = language != null;
+    final languageName = language?.name ?? '';
+    final kind = widget.details.type == 'tv' ? 'episode' : 'film';
+    if (dub) {
+      // Not a word of it heard: stopped while the next is found.
+      player.pause();
+    } else {
+      _wrongLengthHashes.add(hash);
+      if (_wrongLengthHashes.length >= 3) {
+        _lengthCheckOff = true;
+        for (final h in _wrongLengthHashes) {
+          unawaited(StreamResolver.markWrongCopy(imdbId, h, wrong: false));
+        }
+        return;
       }
-      return;
+      unawaited(StreamResolver.markWrongCopy(imdbId, hash));
     }
-    unawaited(StreamResolver.markWrongCopy(imdbId, hash));
     _triedStartHashes.add(hash);
     bool untried(TorrentStream s) =>
         !_triedStartHashes.contains(s.infoHash.toLowerCase());
@@ -1278,7 +1366,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (candidates.isEmpty) {
       showAppMessage(
         context,
-        'This copy seems to be a different film, and there are no others.',
+        dub
+            ? 'This copy turned out to be dubbed, and this $kind has no '
+                'other with $languageName audio.'
+            : 'This copy seems to be a different film, and there are no '
+                'others.',
         error: true,
       );
       return;
@@ -1287,7 +1379,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     _recoveringStream = true;
     setState(() {
       _switchingQuality = true;
-      _switchingMessage = 'Finding the right copy…';
+      _switchingMessage = dub
+          ? 'Finding a copy in $languageName…'
+          : 'Finding the right copy…';
       _initialPositionRestored = false;
       _forgetFileSubtitles();
     });
@@ -1317,8 +1411,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       });
       _subscribeToTorrent(_torrentId);
       _loadSubtitles();
-      // The other film's download.
-      unawaited(TorrentStorageService.deleteByInfoHash(hash));
+      // The other film's download (a dub's is kept, for its own language).
+      if (!dub) unawaited(TorrentStorageService.deleteByInfoHash(hash));
     } on ResolveCancelledException {
       return;
     } catch (e) {
@@ -1331,8 +1425,12 @@ class _PlayerScreenState extends State<PlayerScreen>
         });
         showAppMessage(
           context,
-          "This copy seems to be a different film, and another wouldn't "
-          'start. Try another quality.',
+          dub
+              ? "This copy turned out to be dubbed, and one with "
+                  "$languageName audio wouldn't start. Try another "
+                  'quality.'
+              : "This copy seems to be a different film, and another "
+                  "wouldn't start. Try another quality.",
           error: true,
         );
       }
@@ -2793,8 +2891,15 @@ class _PlayerScreenState extends State<PlayerScreen>
   AudioTrack? _audioTrackIn(SpokenLanguage language) {
     for (final t in player.state.tracks.audio) {
       if (t.id == 'auto' || t.id == 'no') continue;
-      final code = t.language?.toLowerCase().trim();
-      if (code != null && language.trackCodes.contains(code)) return t;
+      final tag = t.language?.toLowerCase().trim();
+      final code = SpokenLanguage.codeOfTrack(t.language, t.title);
+      final named = SpokenLanguage.of(code);
+      if (named != null
+          ? named == language ||
+              named.trackCodes.any(language.trackCodes.contains)
+          : tag != null && language.trackCodes.contains(tag)) {
+        return t;
+      }
     }
     return null;
   }
@@ -3752,6 +3857,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _volumeCollapseTimer?.cancel();
     _stallWatchdogTimer?.cancel();
     _lengthCheckTimer?.cancel();
+    _audioCheckTimer?.cancel();
     _resumeBadgeTimer?.cancel();
     _syncedBadgeTimer?.cancel();
     _mediaActionSub?.cancel();
@@ -4004,6 +4110,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _onMpvTracksChanged(Tracks tracks) async {
     if (!mounted) return;
+    _scheduleAudioCheck();
     // Downloaded subtitles given to the player aren't the video's own:
     // they'd be listed twice, the second time as "Embedded in video" —
     // and picked first, as if made for it.

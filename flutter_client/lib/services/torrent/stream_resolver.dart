@@ -145,6 +145,15 @@ class StreamResolver {
     // short of disk space, fell back to a dub and kept resuming in it.
     // No copy in the language: nothing to play.
     streams = streams.where((s) => languageRank(s) < 2).toList();
+    // Nor one heard, once played, to have no soundtrack in it.
+    await _loadHeardCopies();
+    streams = streams.where((s) {
+      final heard = heardIn(imdbId, s.infoHash);
+      final wanted = s.wantedAudio?.language;
+      return heard == null ||
+          wanted == null ||
+          heard.any((h) => SpokenLanguage.mayBeSame(h, wanted));
+    }).toList();
 
     // Ranked by how many share each copy now, not when the finders last
     // looked (see TrackerScrape).
@@ -373,6 +382,53 @@ class StreamResolver {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setStringList(_wrongCopiesKey, kept);
+    } catch (_) {}
+  }
+
+  // The languages copies' soundtracks were found to be in once played (the
+  // player read the file's own labels — see PlayerScreen's audio check),
+  // as "<imdb id>:<info hash>" → TMDB codes, comma-separated: a copy whose
+  // name says nothing is taken for the title's own language, and Attack on
+  // Titan's "Seasons 1 to 4 Complete 1080p WEB x264" pack was the English
+  // dub. Saved.
+  static Map<String, String> _heardCopies = {};
+  static Future<void>? _heardCopiesLoaded;
+  static const _heardCopiesKey = 'heard_copies_v1';
+
+  static Future<void> _loadHeardCopies() =>
+      _heardCopiesLoaded ??= SharedPreferences.getInstance().then((prefs) {
+        _heardCopies = {
+          for (final e in prefs.getStringList(_heardCopiesKey) ?? <String>[])
+            if (e.lastIndexOf('=') case final i when i > 0)
+              e.substring(0, i): e.substring(i + 1),
+        };
+      }).catchError((Object _) {});
+
+  /// The languages [infoHash]'s soundtracks were heard in, playing it for
+  /// [imdbId] — null when it hasn't been.
+  static Set<String>? heardIn(String imdbId, String infoHash) =>
+      _heardCopies['$imdbId:${infoHash.toLowerCase()}']
+          ?.split(',')
+          .where((c) => c.isNotEmpty)
+          .toSet();
+
+  /// Notes that [infoHash]'s soundtracks, playing it for [imdbId], are in
+  /// [languages] (TMDB codes) and no other.
+  static Future<void> noteHeardIn(
+      String imdbId, String infoHash, Set<String> languages) async {
+    await _loadHeardCopies();
+    final key = '$imdbId:${infoHash.toLowerCase()}';
+    _heardCopies.remove(key);
+    _heardCopies[key] = (languages.toList()..sort()).join(',');
+    // The latest 500.
+    final entries = _heardCopies.entries.toList();
+    final kept =
+        entries.length > 500 ? entries.sublist(entries.length - 500) : entries;
+    _heardCopies = Map.fromEntries(kept);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+          _heardCopiesKey, [for (final e in kept) '${e.key}=${e.value}']);
     } catch (_) {}
   }
 

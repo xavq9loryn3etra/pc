@@ -6,14 +6,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// AI Studio, and theirs alone, so what it does — Sinhala subtitles (see
 /// SubtitleTranslator), Popcorn Ask (AiService) — counts against their
 /// own free allowance, not the one the app's built-in key shares with
-/// everyone. Kept on the device only: left out of backups (see
-/// BackupService.exportData).
+/// everyone. Kept on the device only (not synced).
 class GeminiKeyService {
   static final GeminiKeyService _instance = GeminiKeyService._();
   factory GeminiKeyService() => _instance;
   GeminiKeyService._();
 
-  /// Where the key is kept (also what BackupService leaves out).
+  /// Where the key is kept.
   static const prefsKey = 'gemini_api_key';
 
   /// The key, or null when none's been entered.

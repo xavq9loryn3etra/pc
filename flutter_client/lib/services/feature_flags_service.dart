@@ -18,6 +18,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// S/E badges, tappable episode rows, and Settings > Storage. Purely
 /// cosmetic: services, history tracking and the torrent engine are left
 /// untouched, so flipping it back off restores everything as it was.
+///
+/// `sync_enabled` — false pauses syncing with Google Drive everywhere
+/// (Settings says it's paused for now); nothing is lost, it carries on when
+/// set back to true. `sync_blocked_versions` — a list of app versions
+/// (e.g. `["4.2.0"]`) that mustn't sync, for a release with a sync bug.
 class FeatureFlagsService {
   static final FeatureFlagsService _instance = FeatureFlagsService._internal();
   factory FeatureFlagsService() => _instance;
@@ -55,6 +60,18 @@ class FeatureFlagsService {
   String get minRequiredVersion => _string('min_required_version');
   String get updateRequiredMessage => _string('update_required_message');
   String get updateUrl => _string('update_url');
+
+  /// Whether syncing with Google Drive may run (see the class notes).
+  bool get syncEnabled {
+    final value = _values['sync_enabled'];
+    return value is bool ? value : true;
+  }
+
+  /// Whether app version [version] has been stopped from syncing.
+  bool syncBlocked(String version) {
+    final value = _values['sync_blocked_versions'];
+    return value is List && value.contains(version);
+  }
 
   /// Restores the last fetched flags so the UI is right from the very
   /// first frame (including offline launches, where the fetch fails).

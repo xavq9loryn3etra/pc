@@ -53,6 +53,7 @@ import '../widgets/gemini_key_form.dart';
 import '../services/subtitle_retime.dart';
 import '../services/subtitle_sync.dart';
 import '../services/window_full_screen.dart';
+import '../services/sync/sync_ledger.dart';
 
 /// No copy of an episode in the language it plays in: it isn't played in
 /// another (see StreamResolver.getAvailableStreams).
@@ -5124,8 +5125,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (retime) await _applySubtitleTimingToMpv();
     if (!mounted) return;
     if (remember) {
-      SharedPreferences.getInstance().then(
-          (prefs) => prefs.setString(_subtitleLangPrefKey, track?.lang ?? ''));
+      final lang = track?.lang ?? '';
+      SharedPreferences.getInstance().then((prefs) async {
+        // The same choice again isn't a change to sync.
+        if (prefs.getString(_subtitleLangPrefKey) == lang) return;
+        SyncLedger().touch('settings', _subtitleLangPrefKey);
+        await prefs.setString(_subtitleLangPrefKey, lang);
+      });
     }
     await _applySubtitleTrackToPlayer(track);
     if (track != null) _retimeFromReferences(track);

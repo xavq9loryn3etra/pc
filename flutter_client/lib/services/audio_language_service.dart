@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/movie.dart';
+import 'sync/sync_ledger.dart';
 
 /// A language as the app meets it: its name, the flags Torrentio marks a
 /// copy's audio with, and the codes video files tag their soundtracks with
@@ -162,8 +163,30 @@ class AudioLanguageService {
     if (of(m) == choice) return;
     _choices[_key(m)] = choice;
     changes.value++;
+    SyncLedger().touch('settings', _key(m));
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key(m), choice.name);
+  }
+
+  /// The prefix of each title's saved choice: synced (see SyncBridge).
+  static const String keyPrefix = 'audio_language_';
+
+  /// Puts in the choices a sync brought ({stored name: 'english' or
+  /// 'original'}), and stores them.
+  Future<void> applyFromSync(Map<String, String> choices) async {
+    await ensureLoaded();
+    final prefs = await SharedPreferences.getInstance();
+    var changed = false;
+    for (final e in choices.entries) {
+      final choice = e.value == 'english'
+          ? AudioLanguage.english
+          : AudioLanguage.original;
+      if (_choices[e.key] == choice) continue;
+      _choices[e.key] = choice;
+      changed = true;
+      await prefs.setString(e.key, choice.name);
+    }
+    if (changed) changes.value++;
   }
 
   /// The name of the language [m] plays in with [choice] (by default, the

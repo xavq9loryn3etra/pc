@@ -21,6 +21,7 @@ import 'screens/maintenance_overlay.dart';
 import 'screens/no_internet_overlay.dart';
 import 'screens/splash_screen.dart';
 import 'theme/app_theme.dart';
+import 'widgets/app_message.dart';
 import 'widgets/glass_blur.dart';
 import 'widgets/tv_focus.dart';
 import 'widgets/tv_screen_scale.dart';
@@ -29,6 +30,10 @@ import 'services/app_mode_service.dart';
 import 'enums/app_mode.dart';
 import 'services/background_download_service.dart';
 import 'services/saved_movies_service.dart';
+import 'services/sync/sync_ledger.dart';
+import 'services/sync/sync_service.dart';
+import 'services/movie_tab_service.dart';
+import 'widgets/floating_bottom_nav_bar.dart' show BottomNavTab;
 import 'services/tmdb_service.dart';
 import 'services/deep_link_service.dart';
 import 'services/feature_flags_service.dart';
@@ -133,9 +138,22 @@ void main() async {
   // stopping the app before its first frame and leaving an empty window.
   await _initStep('prefs', _recoverCorruptPrefs);
   await _initStep('WindowFullScreen', WindowFullScreen.init);
+  // When each synced item last changed: read before anything can change.
+  await _initStep('SyncLedger', SyncLedger().init);
   await _initStep('SavedMoviesService', SavedMoviesService().init);
   await _initStep('AppModeService', AppModeService().init);
   await _initStep('FeatureFlagsService', FeatureFlagsService().init);
+  // Syncing with Google Drive, if it's on: its first sync starts a few
+  // seconds in, in the background.
+  await _initStep('SyncService', SyncService().init);
+  // Opening a tab that shows synced lists (Continue Watching on Home, My
+  // List, Settings' sync status) is a moment to check what the other
+  // devices did. Not Search: nothing synced shows there.
+  MovieTabService().currentTab.addListener(() {
+    if (MovieTabService().currentTab.value != BottomNavTab.search) {
+      SyncService().onTabSwitch();
+    }
+  });
   await _initStep('VisualEffectsService', VisualEffectsService().init);
   await _initStep('DownloadAheadSettings', DownloadAheadSettings().init);
   await _initStep('GeminiKeyService', GeminiKeyService().init);
@@ -254,6 +272,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   // dependent — on each rebuild.
   final _backdropKey = BackdropKey();
   late StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
+  late final StreamSubscription<String> _syncNotices;
   bool _isOffline = false;
 
   @override
@@ -266,6 +285,14 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) => _warmUpSelector());
     _initConnectivity();
     DeepLinkService().init(_navigatorKey);
+    // What sync has to say as it happens (another device removed many
+    // titles; sync turned off from another device).
+    _syncNotices = SyncService().notices.listen((text) {
+      final context = _navigatorKey.currentContext;
+      if (context != null && context.mounted) {
+        showAppMessage(context, text, duration: const Duration(seconds: 8));
+      }
+    });
   }
 
   /// Tells the deep-link service whether a link can open now: not before
@@ -303,7 +330,16 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       unawaited(SavedMoviesService().flush());
+      unawaited(SyncLedger().flush());
     }
+    // What changed goes to the other devices before the app can be put
+    // to sleep; and coming back, theirs comes in.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      SyncService().onPause();
+    }
+    if (state == AppLifecycleState.resumed) SyncService().onResume();
     // Picks up flag edits (hide_playback, maintenance) without a cold
     // restart. (A forced update waits for the next start: _recheckConfig.)
     if (state == AppLifecycleState.resumed) {
@@ -315,6 +351,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _connectivitySubscription.cancel();
+    _syncNotices.cancel();
     DeepLinkService().dispose();
     super.dispose();
   }

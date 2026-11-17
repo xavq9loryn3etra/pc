@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_client/models/movie.dart';
-import 'package:flutter_client/services/backup_service.dart';
 import 'package:flutter_client/services/saved_movies_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -211,21 +210,6 @@ void main() {
     expect(prefs.getString('watch_history_v1'), '{oops');
     expect(prefs.getString('watch_history_v1_premigration_backup'), '{oops');
     expect(prefs.getBool('storage_key_migrated_v1'), isNull);
-  });
-
-  test('importing an old backup runs the migration afterwards', () async {
-    SharedPreferences.setMockInitialValues({'has_seen_welcome': false});
-    final backup = {'_popcorn_backup': 1, ..._oldPrefs()};
-    final ok = await BackupService().importJson(jsonEncode(backup));
-    expect(ok, isTrue);
-
-    final prefs = await _prefs();
-    expect(prefs.getBool('storage_key_migrated_v1'), isTrue);
-    expect(prefs.getString('watch_history_v1_premigration_backup'),
-        _oldPrefs()['watch_history_v1']);
-    expect(SavedMoviesService().getMovieFromHistory('1399', type: 'tv'),
-        isNotNull);
-    expect(SavedMoviesService().getEpisodeProgress('1399', 2, 3), 0.4);
   });
 
   test('old keys saved after the migration (an old version run again) fold in',

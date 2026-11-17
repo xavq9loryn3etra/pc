@@ -1,23 +1,21 @@
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
-import '../widgets/app_message.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import '../widgets/screen_scaffold.dart';
-import '../widgets/glass_blur.dart';
-import '../widgets/glass_dialog.dart';
-import '../widgets/floating_bottom_nav_bar.dart';
-import '../widgets/shimmer_loader.dart';
-import '../widgets/mode_switch_row.dart';
+
 import '../services/app_mode_service.dart';
-import '../services/tv_device.dart';
-import '../services/backup_service.dart';
 import '../services/feature_flags_service.dart';
 import '../services/gemini_key_service.dart';
+import '../services/sync/sync_service.dart';
 import '../services/torrent/download_ahead_settings.dart';
-import '../widgets/gemini_key_form.dart';
+import '../services/tv_device.dart';
+import '../widgets/floating_bottom_nav_bar.dart';
+import '../widgets/mode_switch_row.dart';
+import '../widgets/screen_scaffold.dart';
 import '../widgets/screen_shade.dart';
+import '../widgets/settings_parts.dart';
+import 'gemini_key_screen.dart';
+import 'sync_settings_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -44,10 +42,12 @@ class SettingsScreen extends StatelessWidget {
                     !FeatureFlagsService().hidePlayback.value &&
                     !isComputer &&
                     !TvDevice.isTv;
+            final showSync = SyncService().available;
 
             // Grouped like Apple's settings: each section's rows on one
             // card, a short note under it, ordered by how often they're
-            // likely to be used.
+            // likely to be used. Sync and the Gemini key open pages of
+            // their own (SettingsPage), as Apple's do.
             // On a wide window the rows keep to a readable width in the
             // middle, with the scroll bar still at the window's edge.
             final side =
@@ -68,60 +68,38 @@ class SettingsScreen extends StatelessWidget {
                   sliver: SliverList.list(children: [
                     // No modes in the desktop app (see AppModeService).
                     if (AppModeService.canSwitchMode) ...[
-                      const _SectionLabel('SWITCH MODE', topPadding: 8),
+                      const SettingsSectionLabel('SWITCH MODE', topPadding: 8),
                       // On a frosted panel, as on the start screen.
-                      const _FrostedCard(
+                      const SettingsCard(
                         radius: 24,
                         padding: EdgeInsets.symmetric(vertical: 16),
                         child: ModeSwitchRow(),
                       ),
                     ],
                     if (showStorage) ...[
-                      _SectionLabel(
+                      SettingsSectionLabel(
                         'PLAYBACK',
                         topPadding: AppModeService.canSwitchMode ? 24 : 8,
                       ),
-                      const _SettingsGroup(
+                      const SettingsGroup(
                         footnote: 'Gets a head start of about 6 MB on what '
                             "you'll likely play, so it starts sooner. On Wi-Fi "
                             'it always does.',
                         children: [_DownloadAheadRow()],
                       ),
                     ],
-                    _SectionLabel(
-                      'GEMINI',
+                    SettingsSectionLabel(
+                      'GOOGLE',
                       topPadding:
                           AppModeService.canSwitchMode || showStorage ? 24 : 8,
                     ),
-                    const _SettingsGroup(
-                      footnote: 'A free code from Google, needed for Popcorn '
-                          'Ask and for Sinhala subtitles on anything you '
-                          'watch.',
-                      children: [_GeminiKeySection()],
+                    SettingsGroup(
+                      children: [
+                        // Only where this build can sign in to Google.
+                        if (showSync) const _SyncRow(),
+                        const _GeminiKeyRow(),
+                      ],
                     ),
-                    // Not on a TV: a backup's saved and picked through
-                    // Android's file picker, which many TVs don't have.
-                    if (!TvDevice.isTv) ...[
-                      const _SectionLabel(
-                        'BACKUP',
-                      ),
-                      _SettingsGroup(
-                        footnote: 'Your favorites and watch history, saved to '
-                            'a file you can bring back later.',
-                        children: [
-                          _SettingsRow(
-                            icon: Icons.file_upload_outlined,
-                            title: 'Export favorites & history',
-                            onTap: () => _exportBackup(context),
-                          ),
-                          _SettingsRow(
-                            icon: Icons.file_download_outlined,
-                            title: 'Import from a backup',
-                            onTap: () => _importBackup(context),
-                          ),
-                        ],
-                      ),
-                    ],
                   ]),
                 ),
                 SliverPadding(
@@ -170,83 +148,42 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
-/// Runs [action] (backup export/import) behind a blocking loading dialog —
-/// without it there's no feedback at all between tapping the button and a
-/// SnackBar appearing seconds later. Returns [action]'s result, or null if
-/// `context` was unmounted by the time it finished.
-Future<bool?> _runWithLoadingDialog(
-  BuildContext context, {
-  required String message,
-  required Future<bool> Function() action,
-}) async {
-  showGlassDialog(
-    context,
-    dismissible: false,
-    builder: (_) => _BackupLoadingDialog(message: message),
-  );
-  final success = await action();
-  if (!context.mounted) return null;
-  Navigator.of(context, rootNavigator: true)
-      .pop(); // dismiss the loading dialog
-  return success;
-}
+/// "Sync": on or off (red when it needs attention); opens its page.
+class _SyncRow extends StatelessWidget {
+  const _SyncRow();
 
-Future<void> _exportBackup(BuildContext context) async {
-  final success = await _runWithLoadingDialog(
-    context,
-    message: 'Exporting backup...',
-    action: () => BackupService().exportData(),
-  );
-  if (success != null && context.mounted) {
-    showAppMessage(
-      context,
-      success ? 'Backup exported.' : "Couldn't export the backup.",
-      error: !success,
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<SyncStatus>(
+      valueListenable: SyncService().status,
+      builder: (context, s, _) => SettingsRow(
+        icon: Icons.sync_rounded,
+        title: 'Sync',
+        onTap: () => openSettingsPage(context, const SyncSettingsScreen()),
+        trailing: SettingsChevron(
+          value: s.on ? 'On' : 'Off',
+          valueColor: s.on && syncShowsProblem(s)
+              ? const Color(0xFFFF8A80)
+              : Colors.white54,
+        ),
+      ),
     );
   }
 }
 
-Future<void> _importBackup(BuildContext context) async {
-  final success = await _runWithLoadingDialog(
-    context,
-    message: 'Importing backup...',
-    action: () => BackupService().importData(),
-  );
-  if (success == null || !context.mounted) return;
-  if (success) {
-    showAppMessage(context, 'Backup imported.');
-  } else {
-    showAppMessage(context, "Couldn't import the backup.", error: true);
-  }
-}
-
-class _BackupLoadingDialog extends StatelessWidget {
-  final String message;
-
-  const _BackupLoadingDialog({required this.message});
+/// "Gemini key": added or not; opens its page.
+class _GeminiKeyRow extends StatelessWidget {
+  const _GeminiKeyRow();
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Row(
-          children: [
-            const ShimmerLoader(size: 40),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Text(
-                message,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
+    return ValueListenableBuilder<String?>(
+      valueListenable: GeminiKeyService().key,
+      builder: (context, key, _) => SettingsRow(
+        icon: Icons.key_rounded,
+        title: 'Gemini key',
+        onTap: () => openSettingsPage(context, const GeminiKeyScreen()),
+        trailing: SettingsChevron(value: key == null ? 'Add' : 'Added'),
       ),
     );
   }
@@ -283,214 +220,6 @@ class _AppVersionLabel extends StatelessWidget {
   }
 }
 
-class _SectionLabel extends StatelessWidget {
-  final String text;
-  final double topPadding;
-
-  const _SectionLabel(this.text, {this.topPadding = 24});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      // In line with the rows' content, inside their card.
-      padding: EdgeInsets.fromLTRB(32, topPadding, 16, 8),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: Colors.white38,
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1,
-        ),
-      ),
-    );
-  }
-}
-
-/// One section's rows on a rounded card, divided by hairlines, with an
-/// optional short note under it.
-class _SettingsGroup extends StatelessWidget {
-  final List<Widget> children;
-  final String? footnote;
-
-  const _SettingsGroup({required this.children, this.footnote});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _FrostedCard(
-            child: Column(
-              children: [
-                for (var i = 0; i < children.length; i++) ...[
-                  if (i > 0)
-                    // From the rows' text, not their icon, as on iOS.
-                    Divider(
-                      height: 0.5,
-                      thickness: 0.5,
-                      indent: _SettingsRow.textInset,
-                      color: Colors.white.withValues(alpha: 0.1),
-                    ),
-                  children[i],
-                ],
-              ],
-            ),
-          ),
-          if (footnote != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(32, 8, 16, 0),
-              child: Text(
-                footnote!,
-                style: const TextStyle(
-                  color: Colors.white54,
-                  fontSize: 12.5,
-                  height: 1.35,
-                ),
-              ),
-            ),
-        ],
-    );
-  }
-}
-
-/// A frosted glass card, as the start screen's mode panel and the tab
-/// bar: the glass tint and its light edge, over the tab's glow — no live
-/// blur of its own, which re-blurred every card on every frame of a
-/// scroll.
-class _FrostedCard extends StatelessWidget {
-  final Widget child;
-  final double radius;
-  final EdgeInsetsGeometry? padding;
-
-  const _FrostedCard({required this.child, this.radius = 20, this.padding});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      // A phone's margins in a wide window's side column too, as Ask's.
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Material(
-        color: kGlassTint,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(radius),
-          side: BorderSide(color: kGlassEdge),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: padding == null
-            ? child
-            : Padding(padding: padding!, child: child),
-      ),
-    );
-  }
-}
-
-
-/// A row on a [_SettingsGroup] card: an icon, a one-line title and,
-/// optionally, a control or value at its end.
-class _SettingsRow extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final Widget? trailing;
-  final VoidCallback? onTap;
-
-  const _SettingsRow({
-    required this.icon,
-    required this.title,
-    this.trailing,
-    this.onTap,
-  });
-
-  /// Where the title starts: the divider between rows lines up with it.
-  static const double textInset = 16 + 22 + 14;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      mouseCursor: WidgetStateMouseCursor.clickable,
-      onTap: onTap,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 52),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 12, 8),
-          child: Row(
-            children: [
-              Icon(icon, color: Colors.white70, size: 22),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Text(
-                  title,
-                  style: const TextStyle(color: Colors.white, fontSize: 15),
-                ),
-              ),
-              if (trailing != null) ...[
-                const SizedBox(width: 8),
-                trailing!,
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The viewer's Gemini key (see GeminiKeyService): added or not. Tapping
-/// opens the steps to get one and the field for it right under the row
-/// (GeminiKeyForm), and again closes them.
-class _GeminiKeySection extends StatefulWidget {
-  const _GeminiKeySection();
-
-  @override
-  State<_GeminiKeySection> createState() => _GeminiKeySectionState();
-}
-
-class _GeminiKeySectionState extends State<_GeminiKeySection> {
-  bool _open = false;
-
-  void _toggle() => setState(() => _open = !_open);
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        ValueListenableBuilder<String?>(
-          valueListenable: GeminiKeyService().key,
-          builder: (context, key, _) => _SettingsRow(
-            icon: Icons.key_rounded,
-            title: 'Gemini key',
-            onTap: _toggle,
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  key == null ? 'Add' : 'Added',
-                  style: const TextStyle(color: Colors.white54, fontSize: 15),
-                ),
-                AnimatedRotation(
-                  turns: _open ? 0.25 : 0,
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeOutCubic,
-                  child: const Icon(Icons.chevron_right_rounded,
-                      color: Colors.white38, size: 20),
-                ),
-              ],
-            ),
-          ),
-        ),
-        AnimatedSize(
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.topCenter,
-          child: _open
-              ? GeminiKeyForm(onDone: () => setState(() => _open = false))
-              : const SizedBox(width: double.infinity),
-        ),
-      ],
-    );
-  }
-}
-
 /// "Download ahead on mobile data": lets the head start download a few MB
 /// of what's likely to be played next on mobile data too (see
 /// DownloadAheadSettings) — on Wi-Fi it always does.
@@ -499,40 +228,11 @@ class _DownloadAheadRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _SwitchRow(
+    return SettingsSwitchRow(
       icon: Icons.downloading_rounded,
       title: 'Download ahead on mobile data',
       value: DownloadAheadSettings().onMobileData,
       onChanged: DownloadAheadSettings().setOnMobileData,
-    );
-  }
-}
-
-/// A setting's row with its on/off switch; tapping anywhere on the row
-/// flips it. What it does is said in its group's footnote.
-class _SwitchRow extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final ValueListenable<bool> value;
-  final ValueChanged<bool> onChanged;
-
-  const _SwitchRow({
-    required this.icon,
-    required this.title,
-    required this.value,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<bool>(
-      valueListenable: value,
-      builder: (context, on, _) => _SettingsRow(
-        icon: icon,
-        title: title,
-        onTap: () => onChanged(!on),
-        trailing: GlassSwitch(value: on, onChanged: onChanged),
-      ),
     );
   }
 }

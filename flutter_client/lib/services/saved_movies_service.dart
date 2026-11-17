@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/movie.dart';
+import 'sync/sync_ledger.dart';
 import 'torrent/last_played_torrents.dart';
 
 class SavedMoviesService with ChangeNotifier {
@@ -348,10 +349,12 @@ class SavedMoviesService with ChangeNotifier {
   Future<void> toggleFavorite(Movie movie) async {
     if (isFavorite(movie.id, type: movie.type)) {
       _favorites.removeWhere((m) => m.id == movie.id && m.type == movie.type);
+      SyncLedger().remove('list', movie.storageKey);
     } else {
       // Newest favorite first, matching how it reads as a "recently added"
       // list rather than a chronological log.
       _favorites.insert(0, movie);
+      SyncLedger().touch('list', movie.storageKey);
     }
     await _saveFavorites();
     notifyListeners();
@@ -452,17 +455,23 @@ class SavedMoviesService with ChangeNotifier {
 
     print(
         "DEBUG: Saving history for ID=${movie.id} progress=$progress (prev=$existingProgress)");
-    if (oldKey != null && oldKey != movie.storageKey) _history.remove(oldKey);
+    if (oldKey != null && oldKey != movie.storageKey) {
+      _history.remove(oldKey);
+      SyncLedger().remove('history', oldKey);
+    }
     _history[movie.storageKey] = {
       'movie': movieToSave.toStorageJson(),
       'last_watched': DateTime.now().millisecondsSinceEpoch,
     };
+    SyncLedger().touch('history', movie.storageKey);
     _historyCache = null;
     _historyById.clear();
 
     // Save specific episode progress
     if (season != null && episode != null && progress != null) {
-      _episodeHistory[_episodeKey(movie.id, season, episode)] = progress;
+      final key = _episodeKey(movie.id, season, episode);
+      _episodeHistory[key] = progress;
+      SyncLedger().touch('episodes', key);
     }
     _evictOldest();
 
@@ -478,10 +487,13 @@ class SavedMoviesService with ChangeNotifier {
           _lastWatchedOf(a.value) <= _lastWatchedOf(b.value) ? a : b);
       _history.remove(oldest.key);
       _historyById.remove(oldest.key);
+      // Not a removal: every device trims history the same way.
+      SyncLedger().forget('history', (key) => key == oldest.key);
       if (oldest.key.startsWith('tv_')) {
         final prefix = '${oldest.key}_';
         _episodeHistory.removeWhere((key, _) => key.startsWith(prefix));
         _episodeLengths.removeWhere((key, _) => key.startsWith(prefix));
+        SyncLedger().forget('episodes', (key) => key.startsWith(prefix));
       }
     }
     _historyCache = null;
@@ -519,6 +531,8 @@ class SavedMoviesService with ChangeNotifier {
       final removed = getMovieFromHistory(movieId, type: type);
       final imdbId = removed?.imdbId;
       _history.remove(historyKey);
+      // Its episodes go with it on other devices too (SyncData).
+      SyncLedger().remove('history', historyKey);
       _historyCache = null;
       _historyById.clear();
       await _saveHistory();
@@ -533,6 +547,7 @@ class SavedMoviesService with ChangeNotifier {
         final prefix = 'tv_${movieId}_';
         _episodeHistory.removeWhere((key, _) => key.startsWith(prefix));
         _episodeLengths.removeWhere((key, _) => key.startsWith(prefix));
+        SyncLedger().forget('episodes', (key) => key.startsWith(prefix));
       }
       await _saveEpisodeHistory();
       final prefs = await SharedPreferences.getInstance();
@@ -622,5 +637,57 @@ class SavedMoviesService with ChangeNotifier {
   Future<void> _saveEpisodeHistory() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_episodeHistoryKey, jsonEncode(_episodeHistory));
+  }
+
+  // --- Sync (see SyncBridge) ---
+
+  static T _copy<T>(T json) => jsonDecode(jsonEncode(json)) as T;
+
+  /// Copies of everything saved, as it's stored.
+  ({
+    List<Map<String, dynamic>> favorites,
+    Map<String, dynamic> history,
+    Map<String, dynamic> episodes,
+    Map<String, dynamic> lengths,
+  }) exportForSync() => (
+        favorites: [for (final m in _favorites) _copy(m.toStorageJson())],
+        history: _copy(_history),
+        episodes: _copy(_episodeHistory),
+        lengths: _copy(_episodeLengths),
+      );
+
+  /// Replaces everything saved with what a sync settled on, and stores it.
+  /// [favorites] newest first.
+  Future<void> replaceFromSync({
+    required List<Map<String, dynamic>> favorites,
+    required Map<String, dynamic> history,
+    required Map<String, dynamic> episodes,
+    required Map<String, dynamic> lengths,
+  }) async {
+    _favorites = [
+      for (final json in favorites)
+        if (_tryParse(json) case final movie?) movie,
+    ];
+    _history = history;
+    _episodeHistory = episodes;
+    _episodeLengths = lengths;
+    _evictOldest();
+    _historyCache = null;
+    _historyById.clear();
+    notifyListeners();
+    _saveTimer?.cancel();
+    _saveTimer = null;
+    _dirty = false;
+    try {
+      await _saveFavorites();
+      await _saveHistory();
+      await _saveEpisodeHistory();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_episodeLengthsKey, jsonEncode(_episodeLengths));
+    } catch (e) {
+      debugPrint('Error saving synced lists: $e');
+      _dirty = true;
+      _saveTimer ??= Timer(_saveInterval, flush);
+    }
   }
 }

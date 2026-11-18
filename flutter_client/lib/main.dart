@@ -143,8 +143,12 @@ void main() async {
   await _initStep('SavedMoviesService', SavedMoviesService().init);
   await _initStep('AppModeService', AppModeService().init);
   await _initStep('FeatureFlagsService', FeatureFlagsService().init);
-  // Syncing with Google Drive, if it's on: its first sync starts a few
-  // seconds in, in the background.
+  await _initStep('VisualEffectsService', VisualEffectsService().init);
+  await _initStep('DownloadAheadSettings', DownloadAheadSettings().init);
+  await _initStep('GeminiKeyService', GeminiKeyService().init);
+  // Syncing with Google Drive, if it's on — after everything it syncs has
+  // loaded. Its first sync starts at once, in the background, while the
+  // splash plays, so Home usually opens with the lists up to date.
   await _initStep('SyncService', SyncService().init);
   // Opening a tab that shows synced lists (Continue Watching on Home, My
   // List, Settings' sync status) is a moment to check what the other
@@ -154,9 +158,6 @@ void main() async {
       SyncService().onTabSwitch();
     }
   });
-  await _initStep('VisualEffectsService', VisualEffectsService().init);
-  await _initStep('DownloadAheadSettings', DownloadAheadSettings().init);
-  await _initStep('GeminiKeyService', GeminiKeyService().init);
   // A background-buffering service left running by a previous run (the
   // app swiped away mid-playback) has nothing to keep alive now. Not
   // awaited: nothing at startup depends on it.

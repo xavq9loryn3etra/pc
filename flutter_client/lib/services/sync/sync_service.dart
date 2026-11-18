@@ -191,9 +191,10 @@ class SyncService {
       asking: on ? _readAsking(prefs) : null,
     );
     SyncLedger().onChange = _onLocalChange;
-    if (on && status.value.asking == null) {
-      _schedule(const Duration(seconds: 4));
-    }
+    // The first sync at once, while the splash plays: Home usually opens
+    // with the lists up to date. It's mostly waiting on Google, so it
+    // doesn't slow the start.
+    if (on && status.value.asking == null) _schedule(Duration.zero);
   }
 
   static int _removalCount(SharedPreferences prefs) {

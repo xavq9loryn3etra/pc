@@ -86,7 +86,14 @@ class PlayerScreen extends StatefulWidget {
     this.season,
     this.episode,
     required this.episodes,
+    this.rememberedCopy = false,
   });
+
+  /// [selectedStream] is the copy this title (or episode) last played —
+  /// here or, synced, on another device — whose progress lands on the
+  /// same moment: it's given longer to start before another is tried
+  /// (see _openingDataWaitRemembered).
+  final bool rememberedCopy;
 
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
@@ -276,6 +283,12 @@ class _PlayerScreenState extends State<PlayerScreen>
   // carried on from without a jump, and the position last seen.
   bool _autoSyncing = false;
   final Map<String, List<SubtitleCue>> _subtitleCues = {};
+
+  /// Subtitles (ids) found not to fit this video — their length, or no
+  /// match with the speech (see _tryAnotherSubtitle) — and those whose
+  /// length has been checked (see _checkSubtitleFits).
+  final Set<String> _rejectedSubtitles = {};
+  final Set<String> _fitChecked = {};
   final Set<String> _autoSyncDone = {};
   // Subtitles synced at least once: checked again now and then (see
   // _autoSyncRecheck).
@@ -315,6 +328,17 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _isLoadingSubtitles = false;
   bool _initialPositionRestored = false;
   double? _pendingResumeSnackbarProgress;
+
+  /// Paused by the viewer — space, a click, the button, a media key —
+  /// while loading too: kept when the video's ready, and through a switch
+  /// of copy, so it waits for them (see _checkReadyWhilePaused).
+  bool _heldByViewer = false;
+
+  /// Where the video being opened is to start, as a share of it (from the
+  /// saved progress) or a spot: until it's there, being "ready" means
+  /// nothing (see _checkReadyWhilePaused).
+  double? _openingStartShare;
+  Duration? _openingStartAt;
   // "Resumed from …", shown for a moment at the top (see _showResumeBadge).
   String? _resumeBadge;
 
@@ -371,6 +395,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   // no one for 27s, then 20 KB/s: two minutes before it was left.) A
   // healthy one has several MB by then.
   static const Duration _openingDataWait = Duration(seconds: 20);
+  // The copy last played (on another device, it has nothing here yet and
+  // starts from cold): twice as long, as it's the one whose progress lands
+  // on the same moment — another copy may be cut a few seconds apart.
+  static const Duration _openingDataWaitRemembered = Duration(seconds: 40);
+  // The copy given that longer: the one last played, lowercased.
+  late String? _patientHash = widget.rememberedCopy
+      ? widget.selectedStream.infoHash.toLowerCase()
+      : null;
   static const int _openingMinBytes = 2 * 1024 * 1024;
   // More than a head start's ~6 MB: a copy already downloaded (some way).
   static const int _openingHasDataBytes = 32 * 1024 * 1024;
@@ -844,7 +876,10 @@ class _PlayerScreenState extends State<PlayerScreen>
             _positionNotifier.value = pos;
           }
         }
-        if (_isMediaOpening) _checkOpeningFinished(pos);
+        if (_isMediaOpening) {
+          _checkOpeningFinished(pos);
+          _checkReadyWhilePaused();
+        }
         if (_seekPending) _checkSeekFinished(pos);
         _updateActiveSkipSegment(pos);
         // A season's last episode: the next season's looked up from the
@@ -870,6 +905,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted && _controlsVisible) {
         _bufferNotifier.value = buf;
       }
+      if (mounted && _isMediaOpening) _checkReadyWhilePaused();
     });
 
     // Listen to internal video/audio/subtitle tracks reported by mpv so
@@ -996,6 +1032,36 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// single "playing"/"not buffering" event isn't enough (both fire before
   /// the stream connects), and the first position change is often the jump
   /// to the resume point rather than playback.
+  /// Opening, but paused: done loading once it's at the spot it starts
+  /// from with a few seconds downloaded ahead — the spinner goes, rather
+  /// than staying till it plays (_checkOpeningFinished waits for that).
+  /// Paused by the viewer, it then waits for them; otherwise (paused by
+  /// something along the way) it plays.
+  void _checkReadyWhilePaused() {
+    if (!_isMediaOpening || _isPlaying || _switchingQuality ||
+        _recoveringStream || _closing) {
+      return;
+    }
+    if (_duration <= Duration.zero) return;
+    final pos = player.state.position;
+    final share = _openingStartShare;
+    final at = _openingStartAt ??
+        (share == null
+            ? Duration.zero
+            : Duration(milliseconds: (_duration.inMilliseconds * share).round()));
+    // Not at its starting spot yet (the jump to the resume point).
+    if (pos < at - const Duration(seconds: 5)) return;
+    if (player.state.buffer - pos < const Duration(seconds: 3)) return;
+    if (_heldByViewer) {
+      _heldPosition = null;
+      setState(() => _isMediaOpening = false);
+      print('[timing] ready, held paused by the viewer, '
+          '${_openingStopwatch.elapsedMilliseconds} ms after opening');
+    } else {
+      player.play();
+    }
+  }
+
   void _checkOpeningFinished(Duration pos) {
     final last = _openingLastPosition;
     _openingLastPosition = pos;
@@ -1014,6 +1080,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (step > Duration.zero && step < const Duration(seconds: 2)) {
       _heldPosition = null;
       setState(() => _isMediaOpening = false);
+      TorrentEngineService.instance.streamStarted(_streamId);
       print('[timing] video playing ${_openingStopwatch.elapsedMilliseconds} '
           'ms after the player opened it');
       // Started on a small read-ahead so the first pieces came first (see
@@ -1107,6 +1174,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// not (see _checkForStall).
   static const int _stillReceivingBytesPerSecond = 8 * 1024;
 
+  /// How long the copy being opened has to deliver its first MB (see
+  /// _checkForStall): longer for the one last played.
+  Duration get _openingWait =>
+      _currentStream.infoHash.toLowerCase() == _patientHash
+          ? _openingDataWaitRemembered
+          : _openingDataWait;
+
   void _checkForStall() {
     // Deliberately runs while the media is still opening too: a stream that
     // never connects (no download progress for 20s) is exactly what this
@@ -1145,7 +1219,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           bytes: downloadedBytes,
           at: DateTime.now(),
         );
-      } else if (DateTime.now().difference(baseline.at) >= _openingDataWait &&
+      } else if (DateTime.now().difference(baseline.at) >= _openingWait &&
           downloadedBytes - baseline.bytes < _openingMinBytes &&
           // Not a copy with much on the device already (resumed, or
           // downloaded whole): it has little or nothing left to fetch, so
@@ -1162,7 +1236,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _openingBaseline = null;
         _stallTicks = 0;
         _attemptStreamRecovery(
-          reason: 'Under 2 MB after ${_openingDataWait.inSeconds}s of opening',
+          reason: 'Under 2 MB after ${_openingWait.inSeconds}s of opening',
         );
         return;
       }
@@ -1399,9 +1473,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (_closedDuringSwitch(started)) return;
       await _rememberPlayedTorrent(resolved.stream);
       if (_closedDuringSwitch(started)) return;
-      await _openMediaWithResume(result.streamUrl);
+      await _openMediaWithResume(result.streamUrl, streamId: result.streamId);
       if (_closedDuringSwitch(started)) return;
-      player.play();
+      _playUnlessHeld();
       setState(() {
         _currentStream = resolved.stream;
         _torrentId = result.torrentId;
@@ -1555,9 +1629,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       final resolvedStream = resolved.stream;
       final result = resolved.result;
 
-      await _openMediaWithResume(result.streamUrl, precisePosition: resumeAt);
+      await _openMediaWithResume(result.streamUrl,
+          precisePosition: resumeAt, streamId: result.streamId);
       if (_closedDuringSwitch(result)) return;
-      player.play();
+      _playUnlessHeld();
       if (otherCopies.isNotEmpty && stuckTorrentId != result.torrentId) {
         // Kept (just stopped) when it had much on the device: deleted, a
         // downloaded episode was lost for good.
@@ -1636,7 +1711,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     try {
       await _openMediaWithResume(_streamUrl, precisePosition: resumeAt);
       if (!mounted || _closing) return;
-      player.play();
+      _playUnlessHeld();
     } catch (e) {
       debugPrint('Reconnecting in place failed: $e');
       _heldPosition = null;
@@ -1778,9 +1853,11 @@ class _PlayerScreenState extends State<PlayerScreen>
       _mediaActionSub = _mediaSession.onMediaAction.listen((action) {
         switch (action) {
           case MediaAction.play:
+            _heldByViewer = false;
             player.play();
             break;
           case MediaAction.pause:
+            _heldByViewer = true;
             player.pause();
             break;
           case MediaAction.seekTo:
@@ -1852,6 +1929,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     Duration? precisePosition,
     int? overrideSeason,
     int? overrideEpisode,
+    int? streamId,
   }) async {
     final mpv = player.platform as NativePlayer;
     _openingStopwatch
@@ -1865,6 +1943,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     await mpv.setProperty('alang',
         AudioLanguageService().trackOrderFor(widget.details).join(','));
 
+    _openingStartAt = precisePosition;
+    _openingStartShare = null;
     if (precisePosition != null) {
       await mpv.setProperty('start', '${precisePosition.inSeconds}');
       if (mounted) {
@@ -1893,6 +1973,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
 
       if (progress != null && progress > 0.0 && progress < 0.95) {
+        _openingStartShare = progress;
         final startPercent = (progress * 100).toStringAsFixed(2);
         await mpv.setProperty('start', '$startPercent%');
         _pendingResumeSnackbarProgress = progress;
@@ -1910,7 +1991,18 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
     }
 
-    await player.open(Media(url));
+    // Where in the file it starts, for the engine: that part first, and
+    // not the 40 MB after the file's headers (see resumeStreamAt).
+    final double? startShare = precisePosition != null
+        ? (_duration > Duration.zero
+            ? precisePosition.inMilliseconds / _duration.inMilliseconds
+            : null)
+        : _openingStartShare;
+    TorrentEngineService.instance
+        .resumeStreamAt(streamId ?? _streamId, startShare);
+
+    // Paused by the viewer: opened paused, and it stays so when ready.
+    await player.open(Media(url), play: !_heldByViewer);
     await _applySubtitleTimingToMpv();
     if (_selectedSubtitle != null) {
       await _applySubtitleTrackToPlayer(_selectedSubtitle);
@@ -1958,6 +2050,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     // record the wrong episode. Forced saves are the deliberate ones made
     // just before a switch, while everything still matches.
     if (_switchingQuality && !force) return;
+    // Still opening (see _checkOpeningFinished): the position is 0, not
+    // yet the resume point it's on its way to — a copy that starts slowly
+    // (another device's, nothing downloaded here yet) reported 0 for
+    // seconds, and saving it wiped the progress: the copy tried next, and
+    // the next Resume, started from the beginning. Closing meanwhile
+    // keeps the progress as it was too.
+    if (_isMediaOpening) return;
     if (_duration.inSeconds > 0) {
       final now = DateTime.now();
       // Throttled, unless forced: each save writes out the whole watch
@@ -2075,8 +2174,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           return true;
         }
       }
+      // While loading too: paused then, it waits once it's ready.
       if (key == LogicalKeyboardKey.space || key == LogicalKeyboardKey.keyK) {
-        if (!_loadingVideo && !_episodeCoversVideo) {
+        if (!_episodeCoversVideo) {
           _playPause();
           return true;
         }
@@ -2447,11 +2547,17 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _playPause() {
     // Mid-switch the player is held paused: playing would start the old
-    // video again under the loading overlay.
-    if (_switchingQuality) return;
+    // video again under the loading overlay. The choice is kept for when
+    // the new one's in instead.
+    if (_switchingQuality) {
+      setState(() => _heldByViewer = !_heldByViewer);
+      return;
+    }
     if (_isPlaying) {
+      _heldByViewer = true;
       player.pause();
     } else {
+      _heldByViewer = false;
       player.play();
     }
     // Flash what just happened in the middle of the screen, since the
@@ -2600,6 +2706,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   }) async {
     // One switch at a time (a second tap would race the first).
     if (_switchingQuality) return;
+    // A quality picked plays, whether or not this one was paused.
+    _heldByViewer = false;
     if (newStream.infoHash.toLowerCase() ==
         _currentStream.infoHash.toLowerCase()) return;
 
@@ -2648,9 +2756,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (_closedDuringSwitch(result)) return;
 
       // 4. Open new media at exactly saved position natively
-      await _openMediaWithResume(result.streamUrl, precisePosition: savedPos);
+      await _openMediaWithResume(result.streamUrl,
+          precisePosition: savedPos, streamId: result.streamId);
       if (_closedDuringSwitch(result)) return;
-      player.play();
+      _playUnlessHeld();
 
       // 5. Now the new one plays, discard the old torrent and its data.
       if (oldTorrentId != result.torrentId) _resolver.cleanup(oldTorrentId);
@@ -2706,7 +2815,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     // Closed meanwhile: dispose() paused that torrent, and the player's gone.
     if (!mounted) return;
     _resolver.resume(_torrentId);
-    if (resumePlayback) player.play();
+    if (resumePlayback) _playUnlessHeld();
+  }
+
+  /// Plays, unless the viewer paused it (see _heldByViewer).
+  void _playUnlessHeld() {
+    if (!_heldByViewer) player.play();
   }
 
   /// Whether the player was closed while a switch awaited something. If so
@@ -2836,6 +2950,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         await player.setAudioTrack(track);
         // Now "Last watched" in this language (see LastPlayedTorrents).
         await _rememberPlayedTorrent(_currentStream);
+        // Subtitles that fit what's heard now (the dub's, or not).
+        unawaited(_rebuildAvailableSubtitles());
         if (mounted) showAppMessage(context, 'Playing in ${language.name}.');
         return;
       }
@@ -3169,6 +3285,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   Future<void> _playEpisode(Episode targetEp, int seasonNumber) async {
     // One switch at a time (a double tap on Next would start two).
     if (_switchingQuality) return;
+    // An episode picked plays, whether or not this one was paused.
+    _heldByViewer = false;
     if (targetEp.isUnreleased) {
       showAppMessage(context, "This episode hasn't aired yet.");
       return;
@@ -3237,6 +3355,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           'last_played_torrent_${imdbId}_${seasonNumber}_${targetEp.episodeNumber}',
           widget.details);
       if (!mounted) return;
+      // The copy this episode last played (maybe on another device): given
+      // longer to start, if it's the one picked.
+      _patientHash = lastPlayed?.toLowerCase();
       final pick = StreamResolver.likelyPick(
             streams,
             lastPlayedHash: lastPlayed,
@@ -3441,6 +3562,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _mkvSkipSegments = const [];
       _apiSkipSegments = const [];
       _skipSegments = const [];
+      _readiedSkipTargets.clear();
       _updateTimelineShapes();
       _timelinePartitionRevision.value++;
       _activeSkipSegmentNotifier.value = null;
@@ -3451,6 +3573,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         result.streamUrl,
         overrideSeason: seasonNumber,
         overrideEpisode: targetEp.episodeNumber,
+        streamId: result.streamId,
       );
     } catch (_) {
       if (mounted) {
@@ -4037,7 +4160,141 @@ class _PlayerScreenState extends State<PlayerScreen>
       case 'el':
         return 'Greek';
       case 'pob':
+      case 'pb':
         return 'Portuguese (Brazil)';
+      case 'hrv':
+      case 'scr':
+      case 'hr':
+        return 'Croatian';
+      case 'alb':
+      case 'sqi':
+      case 'sq':
+        return 'Albanian';
+      case 'srp':
+      case 'scc':
+      case 'sr':
+        return 'Serbian';
+      case 'bos':
+      case 'bs':
+        return 'Bosnian';
+      case 'slv':
+      case 'sl':
+        return 'Slovenian';
+      case 'mac':
+      case 'mkd':
+      case 'mk':
+        return 'Macedonian';
+      case 'bul':
+      case 'bg':
+        return 'Bulgarian';
+      case 'ron':
+      case 'rum':
+      case 'ro':
+        return 'Romanian';
+      case 'hun':
+      case 'hu':
+        return 'Hungarian';
+      case 'ces':
+      case 'cze':
+      case 'cs':
+        return 'Czech';
+      case 'slk':
+      case 'slo':
+      case 'sk':
+        return 'Slovak';
+      case 'ukr':
+      case 'uk':
+        return 'Ukrainian';
+      case 'est':
+      case 'et':
+        return 'Estonian';
+      case 'lav':
+      case 'lv':
+        return 'Latvian';
+      case 'lit':
+      case 'lt':
+        return 'Lithuanian';
+      case 'ice':
+      case 'isl':
+      case 'is':
+        return 'Icelandic';
+      case 'cat':
+      case 'ca':
+        return 'Catalan';
+      case 'baq':
+      case 'eus':
+      case 'eu':
+        return 'Basque';
+      case 'glg':
+      case 'gl':
+        return 'Galician';
+      case 'geo':
+      case 'kat':
+      case 'ka':
+        return 'Georgian';
+      case 'arm':
+      case 'hye':
+      case 'hy':
+        return 'Armenian';
+      case 'aze':
+      case 'az':
+        return 'Azerbaijani';
+      case 'kaz':
+      case 'kk':
+        return 'Kazakh';
+      case 'uzb':
+      case 'uz':
+        return 'Uzbek';
+      case 'tgl':
+      case 'fil':
+      case 'tl':
+        return 'Filipino';
+      case 'zht':
+      case 'zhe':
+        return 'Chinese (Traditional)';
+      case 'spn':
+      case 'ea':
+        return 'Spanish (Latin America)';
+      case 'nep':
+      case 'ne':
+        return 'Nepali';
+      case 'mar':
+      case 'mr':
+        return 'Marathi';
+      case 'pan':
+      case 'pa':
+        return 'Punjabi';
+      case 'guj':
+      case 'gu':
+        return 'Gujarati';
+      case 'swa':
+      case 'sw':
+        return 'Swahili';
+      case 'afr':
+      case 'af':
+        return 'Afrikaans';
+      case 'mon':
+      case 'mn':
+        return 'Mongolian';
+      case 'khm':
+      case 'km':
+        return 'Khmer';
+      case 'bur':
+      case 'mya':
+      case 'my':
+        return 'Burmese';
+      case 'lao':
+      case 'lo':
+        return 'Lao';
+      case 'kur':
+      case 'ku':
+        return 'Kurdish';
+      case 'pus':
+      case 'ps':
+        return 'Pashto';
+      case 'amh':
+      case 'am':
+        return 'Amharic';
       default:
         return code.toUpperCase();
     }
@@ -4072,6 +4329,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     _autoSyncFrom.clear();
     _retimeTried.clear();
     _referenceTimed.clear();
+    // Another video: subtitles that didn't fit the last may fit this one.
+    _rejectedSubtitles.clear();
+    _fitChecked.clear();
     _embeddedSubtitles = [];
     _userPickedSubtitleForThisVideo = false;
     if (_selectedSubtitle?.isEmbedded ?? false) _selectedSubtitle = null;
@@ -4189,6 +4449,23 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
 
       if (!mounted) return;
+      // Not those named for another episode (uploaded under this one).
+      if (imdbEpisode != null) {
+        final wanted = [
+          imdbEpisode,
+          if (_currentSeason != null && _currentEpisode != null)
+            (_currentSeason!, _currentEpisode!),
+        ];
+        final before = subs.length;
+        subs = [
+          for (final s in subs)
+            if (!SubtitleService.namesAnotherEpisode(s, wanted)) s,
+        ];
+        if (subs.length < before) {
+          print('[subtitles] ${before - subs.length} left out: named for '
+              'another episode');
+        }
+      }
       // Made for the same release first (see rank): the language's first
       // is the one picked.
       subs = SubtitleService.rank(subs, '${stream.title}\n${stream.name}');
@@ -4275,10 +4552,17 @@ class _PlayerScreenState extends State<PlayerScreen>
     // After this, whatever stays selected: retimed if it can be now.
     Future<void>.delayed(Duration.zero, _retimeSelected);
     final sinhala = _sinhalaTrack();
+    // Each language's best first (see _subtitleRank): the menu shows it,
+    // and the rest under "Other … subtitles".
+    final ordered = [..._embeddedSubtitles, ..._externalSubtitles];
+    final position = {for (var i = 0; i < ordered.length; i++) ordered[i].id: i};
+    ordered.sort((a, b) {
+      final byRank = _subtitleRank(a).compareTo(_subtitleRank(b));
+      return byRank != 0 ? byRank : position[a.id]!.compareTo(position[b.id]!);
+    });
     final combined = <SubtitleTrackData>[
       if (sinhala != null) sinhala,
-      ..._embeddedSubtitles,
-      ..._externalSubtitles,
+      ...ordered,
     ];
     if (mounted) {
       setState(() {
@@ -4308,17 +4592,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
 
     final targetLangName = _getLanguageName(preferred);
-    final embeddedMatch = _embeddedSubtitles
-        .where((s) => _getLanguageName(s.lang) == targetLangName)
-        .firstOrNull;
-    final externalMatch = _externalSubtitles
-        .where((s) =>
-            s.url.isNotEmpty && _getLanguageName(s.lang) == targetLangName)
-        .firstOrNull;
     // Sinhala chosen before and none made by people: made from English,
     // with the viewer's Gemini key.
-    final bestMatch = embeddedMatch ??
-        externalMatch ??
+    final bestMatch = _bestSubtitleIn(targetLangName) ??
         (targetLangName == 'Sinhala' && GeminiKeyService().hasKey
             ? sinhala
             : null);
@@ -4326,6 +4602,82 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (bestMatch?.id != _selectedSubtitle?.id) {
       await _selectSubtitle(bestMatch, remember: false);
     }
+  }
+
+  /// Hearing a dub: English sound on a title not made in English — then
+  /// subtitles written for the dub fit, and the usual ones (a translation
+  /// of the original voices, built into the file or not) don't.
+  bool get _hearingDub =>
+      AudioLanguageService.appliesTo(widget.details) &&
+      AudioLanguageService().of(widget.details) == AudioLanguage.english;
+
+  /// How well [s] suits what's heard, best (0) first: written for what's
+  /// heard (the dub's, when that's on; otherwise the original dialogue's)
+  /// — built into this file or made for it first — then the rest that
+  /// follow the dialogue, then signs-only tracks. Ones found not to fit
+  /// (see _tryAnotherSubtitle) last.
+  int _subtitleRank(SubtitleTrackData s) {
+    if (_rejectedSubtitles.contains(s.id)) return 5;
+    final kind = SubtitleService.kindOf(s);
+    if (kind == SubtitleKind.signsOnly) return 4;
+    final fitsWhatsHeard = _hearingDub ? _followsDub(s) : !_followsDub(s);
+    if (fitsWhatsHeard) return s.isEmbedded || s.matchesFile ? 0 : 1;
+    return s.isEmbedded || s.matchesFile ? 2 : 3;
+  }
+
+  /// Whether [s] follows the title's English dub: English captions, or
+  /// made for a dubbed version, of a title not made in English. (Captions
+  /// in another language follow something else: the Japanese "[cc]" of an
+  /// anime, its Japanese voices.)
+  bool _followsDub(SubtitleTrackData s) =>
+      AudioLanguageService.appliesTo(widget.details) &&
+      SubtitleService.kindOf(s) == SubtitleKind.forDub &&
+      _getLanguageName(s.lang) == 'English';
+
+  /// For the subtitle menu: what [s] follows, when its name says and it's
+  /// worth telling — the English dub, or the original voices.
+  String? _subtitleFollows(SubtitleTrackData s) {
+    if (SubtitleService.kindOf(s) != SubtitleKind.forDub) return null;
+    if (_followsDub(s)) return 'Follows the English dub';
+    if (AudioLanguageService.appliesTo(widget.details) &&
+        _getLanguageName(s.lang) ==
+            AudioLanguageService.originalOf(widget.details).name) {
+      return 'Captions of the ${AudioLanguageService.originalOf(widget.details).name} voices';
+    }
+    return null;
+  }
+
+  /// The subtitles to pick for the viewer in [languageName], or null.
+  SubtitleTrackData? _bestSubtitleIn(String languageName) {
+    final pool = [
+      ..._embeddedSubtitles.where((s) => _getLanguageName(s.lang) == languageName),
+      ..._externalSubtitles.where((s) =>
+          s.url.isNotEmpty &&
+          !_rejectedSubtitles.contains(s.id) &&
+          _getLanguageName(s.lang) == languageName),
+    ];
+    if (pool.isEmpty) return null;
+    final position = {for (var i = 0; i < pool.length; i++) pool[i].id: i};
+    pool.sort((a, b) {
+      final byRank = _subtitleRank(a).compareTo(_subtitleRank(b));
+      return byRank != 0 ? byRank : position[a.id]!.compareTo(position[b.id]!);
+    });
+    return pool.first;
+  }
+
+  /// For the subtitle menu: hearing a dub, with subtitles in its language
+  /// shown that weren't written for it (none were found that were).
+  String? get _subtitleFitNote {
+    final track = _selectedSubtitle;
+    if (track == null || !_hearingDub || track.translatedFrom != null) {
+      return null;
+    }
+    final heard = AudioLanguageService().languageFor(widget.details).name;
+    if (_getLanguageName(track.lang) != heard) return null;
+    if (_followsDub(track)) return null;
+    final original = AudioLanguageService.originalOf(widget.details).name;
+    return 'No subtitles made for the $heard dub were found. These follow '
+        'the $original voices, so the words may differ.';
   }
 
   /// The list changed (subtitles found, or found by the file's
@@ -4632,6 +4984,73 @@ class _PlayerScreenState extends State<PlayerScreen>
   // hour, then 3.6 s) — and by how much a new answer must differ to be
   // taken.
   static const _autoSyncRecheck = Duration(minutes: 8);
+
+  /// [_autoSyncRecheck], for the video playing: a sixth of it, between 4
+  /// and 8 minutes — a 22-minute episode was checked only twice after its
+  /// first sync.
+  Duration get _autoSyncRecheckEvery {
+    if (_duration <= Duration.zero) return _autoSyncRecheck;
+    final sixth = _duration ~/ 6;
+    if (sixth < const Duration(minutes: 4)) return const Duration(minutes: 4);
+    return sixth > _autoSyncRecheck ? _autoSyncRecheck : sixth;
+  }
+
+  /// Whether [track], showing, was picked for the viewer — not by them,
+  /// not the video's own, not made for this file, not made from another
+  /// (Sinhala) — so another may be tried if it doesn't fit.
+  bool _canTryAnother(SubtitleTrackData track) =>
+      !_userPickedSubtitleForThisVideo &&
+      !track.isEmbedded &&
+      !track.matchesFile &&
+      track.translatedFrom == null &&
+      _selectedSubtitle?.id == track.id;
+
+  /// Whether [track]'s length fits the video: its last line well past the
+  /// end, or its lines stopping before halfway, it's another film's or
+  /// episode's. (Some leeway: subtitles for a 25 fps copy run 4% long.)
+  Future<void> _checkSubtitleFits(SubtitleTrackData track) async {
+    try {
+      var cues = _subtitleCues[track.url];
+      if (cues == null) {
+        cues = SubtitleSync.parseCues(await _subtitleText(track));
+        _subtitleCues[track.url] = cues;
+      }
+      if (!mounted || _duration <= Duration.zero) return;
+      final length = _duration.inMilliseconds / 1000;
+      final last = cues.fold<double>(0, (m, c) => c.end > m ? c.end : m);
+      final fits = cues.isNotEmpty &&
+          last <= length * 1.08 + 60 &&
+          last >= length * 0.5;
+      if (!fits) {
+        await _tryAnotherSubtitle(
+            track,
+            'last line at ${last.round()} s, '
+            'video ${length.round()} s long');
+      }
+    } catch (e) {
+      print('[subtitles] length check failed: $e');
+    }
+  }
+
+  /// [wrong] doesn't fit this video: the next best subtitles in its
+  /// language instead, saying so — up to three tried.
+  Future<void> _tryAnotherSubtitle(SubtitleTrackData wrong, String why) async {
+    if (!mounted || !_canTryAnother(wrong)) return;
+    _rejectedSubtitles.add(wrong.id);
+    final language = _getLanguageName(wrong.lang);
+    final triedHere = _externalSubtitles
+        .where((s) =>
+            _rejectedSubtitles.contains(s.id) &&
+            _getLanguageName(s.lang) == language)
+        .length;
+    final best = triedHere >= 3 ? null : _bestSubtitleIn(language);
+    final next = best == null || best.id == wrong.id ? null : best;
+    print("[subtitles] ${wrong.id} doesn't fit ($why): "
+        "${next == null ? 'kept, none other to try' : 'trying ${next.id}'}");
+    if (next == null) return;
+    showAppMessage(context, "Those subtitles didn't match. Trying another…");
+    await _selectSubtitle(next, remember: false);
+  }
   static const _autoSyncMinChange = 0.4;
 
   // A shift bigger than this (seconds) is taken only when another stretch
@@ -4669,6 +5088,10 @@ class _PlayerScreenState extends State<PlayerScreen>
         _switchingQuality ||
         _duration <= Duration.zero) {
       return;
+    }
+    // The right film or episode's at all? By its length (once).
+    if (_canTryAnother(track) && _fitChecked.add(track.id)) {
+      unawaited(_checkSubtitleFits(track));
     }
     // The sound's been heard already: this subtitle against it, now.
     final heard = _heard;
@@ -4848,12 +5271,16 @@ class _PlayerScreenState extends State<PlayerScreen>
         // In time: checked again a while on.
         if (clear) _autoSynced.add(track.id);
         _autoSyncTries[track.id] =
-            (tries: 0, next: _currentPosition + _autoSyncRecheck);
+            (tries: 0, next: _currentPosition + _autoSyncRecheckEvery);
       } else {
         final tries = (_autoSyncTries[track.id]?.tries ?? 0) + 1;
         if (tries >= _autoSyncMaxTries) {
           print('[sync] not applied; giving up on these subtitles');
           _autoSyncDone.add(track.id);
+          // Never matched the speech: likely another film's or episode's.
+          if (_canTryAnother(track)) {
+            unawaited(_tryAnotherSubtitle(track, 'no match with the speech'));
+          }
         } else if (checkFrom != null) {
           // More to go by: at once, the stretch after.
           _autoSyncFrom[track.id] = checkFrom;
@@ -5336,7 +5763,38 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     if (_activeSkipSegmentNotifier.value != active) {
       _activeSkipSegmentNotifier.value = active;
+      if (active != null) unawaited(_readySkipTarget(active));
     }
+  }
+
+  // Skip targets readied for this video (seconds), once each.
+  final Set<int> _readiedSkipTargets = {};
+
+  /// While its Skip button shows, has the engine fetch the spot [segment]
+  /// skips to, a few MB there — so the skip lands on video that's already
+  /// downloaded. (Not by reading it from the stream: the engine took a
+  /// read that big for the player moving there, and dropped what playback
+  /// needed.) A Skip Intro (a minute and a half on, in
+  /// one go) waited on a slow copy, where the arrows' 10 s jumps, into
+  /// what was already loaded, didn't. Where in the file that spot is comes
+  /// from its share of the running time, read with some margin either
+  /// side; a copy whose size isn't known, or a skip to the end (on to the
+  /// next episode), is left alone.
+  Future<void> _readySkipTarget(SkipSegment segment) async {
+    if (_duration <= Duration.zero) return;
+    final target = segment.targetFor(_duration);
+    if (target >= _duration - const Duration(seconds: 30)) return;
+    if (!_readiedSkipTargets.add(target.inSeconds)) return;
+    final url = _streamUrl;
+    final size = LibtorrentFlutter.instance.getStreamInfo(_streamId)?.fileSize ?? 0;
+    if (size <= 0 || url.isEmpty) return;
+    const before = 3 * 1024 * 1024;
+    const length = 12 * 1024 * 1024;
+    final at = (size * (target.inMilliseconds / _duration.inMilliseconds)).round();
+    final from = at > before ? at - before : 0;
+    if (from >= size) return;
+    TorrentEngineService.instance.prefetch(_streamId, from, length);
+    print('[skip] readying ${length >> 20} MB at ${target.inSeconds} s');
   }
 
   void _skipActiveSegment(SkipSegment segment) {
@@ -6844,6 +7302,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                             subtitleSpeed: _subtitleSpeed,
                             onSubtitleSpeedChanged: _setSubtitleSpeed,
                             subtitleSyncNote: _subtitleSyncNote,
+                            subtitleFitNote: _subtitleFitNote,
+                            subtitleFollows: _subtitleFollows,
                             subtitleSyncing: _subtitlesSyncing,
                             anchorCenterX: _settingsPanelAnchorX,
                             initialView: _settingsPanelInitialView,

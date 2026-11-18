@@ -359,8 +359,6 @@ class TorrentEngineService {
     // The head start's stream, already downloading the file's start (see
     // warmUp) — when it's for this same file.
     final warm = _warmStreams.remove(id);
-    // The player reads for itself from here on.
-    _cancelReadAhead(id);
     final StreamInfo stream;
     if (warm != null && warm.fileIndex == videoIdx) {
       stream = warm;
@@ -463,9 +461,6 @@ class TorrentEngineService {
   // Streams a head start opened ahead of Play (see warmUp), by torrent id:
   // startStream takes one over instead of opening its own.
   final Map<int, StreamInfo> _warmStreams = {};
-  // A head start's reads at the resume position (see _readAhead), by
-  // torrent id — cancelled once Play takes over or the page is left.
-  final Map<int, HttpClient> _warmReads = {};
 
   /// How much a head start downloads on mobile data, when the user allows
   /// it at all (DownloadAheadSettings): enough to cut most of the wait,
@@ -613,7 +608,11 @@ class TorrentEngineService {
         final offset = (file.size * resumeAt - 2 * 1024 * 1024)
             .clamp(0, file.size)
             .toInt();
-        _readAhead(id, stream.url, offset,
+        // Playback starts there: that part's fetched first, and the
+        // player's reading of the file's headers isn't taken for playing
+        // from the start (see resumeStreamAt).
+        engine.setStreamStart(stream.id, offset);
+        engine.prefetchRange(stream.id, offset,
             small ? _mobileHeadStartBytes : _resumeReadBytes);
       }
       if (small) _capDownload(id, _mobileHeadStartBytes);
@@ -626,27 +625,48 @@ class TorrentEngineService {
     }
   }
 
-  /// Reads [length] bytes of stream [url] from [offset] and throws them
-  /// away — which has the engine download that part, first.
-  Future<void> _readAhead(int id, String url, int offset, int length) async {
-    final client = HttpClient();
-    _warmReads[id] = client;
+  /// The player will start stream [streamId] [share] (0–1) of the way into
+  /// its file — a resume — or from the start (null). Resuming, the engine
+  /// fetches that part first, and takes the player's reads of the file's
+  /// start for what they are: its headers (what the video is, its tracks,
+  /// its fonts), not playback from the start. It used to fetch some 40 MB
+  /// from the start before the spot, on a copy shared by one person a
+  /// minute's wait. Once the video's playing, [streamStarted].
+  void resumeStreamAt(int streamId, double? share) {
     try {
-      final request = await client.getUrl(Uri.parse(url));
-      request.headers
-          .set(HttpHeaders.rangeHeader, 'bytes=$offset-${offset + length - 1}');
-      final response = await request.close();
-      await response.drain<void>();
-    } catch (_) {
-      // Cancelled (Play took over, the page was left) or the stream went.
-    } finally {
-      if (_warmReads[id] == client) _warmReads.remove(id);
-      client.close(force: true);
+      final size = engine.getStreamInfo(streamId)?.fileSize ?? 0;
+      if (share == null || share <= 0.02 || share >= 0.98 || size <= 0) {
+        engine.setStreamStart(streamId, null);
+        return;
+      }
+      // A little before the spot, as the player lands on the keyframe
+      // before it; the byte offset is a rough guess from the time.
+      final offset =
+          (size * share - 2 * 1024 * 1024).clamp(0, size - 1).toInt();
+      engine.setStreamStart(streamId, offset);
+      engine.prefetchRange(streamId, offset, _resumeReadBytes);
+    } catch (e) {
+      print('Error marking where stream $streamId starts: $e');
     }
   }
 
-  void _cancelReadAhead(int id) =>
-      _warmReads.remove(id)?.close(force: true);
+  /// Stream [streamId]'s video is playing: see [resumeStreamAt].
+  void streamStarted(int streamId) {
+    try {
+      engine.setStreamStart(streamId, null);
+    } catch (_) {}
+  }
+
+  /// Has stream [streamId] fetch [length] bytes from [offset] of its file
+  /// soon — a spot playback's about to jump to — after the pieces playback
+  /// is waiting on (see LibtorrentFlutter.prefetchRange).
+  void prefetch(int streamId, int offset, int length) {
+    try {
+      engine.prefetchRange(streamId, offset, length, deadlineMs: 3000);
+    } catch (e) {
+      print('Error prefetching for stream $streamId: $e');
+    }
+  }
 
   /// Pauses torrent [id] once it has downloaded [bytes] more — a head start
   /// on mobile data — unless Play has taken it over by then.
@@ -672,7 +692,6 @@ class TorrentEngineService {
       } else if (t.totalDone - from >= bytes) {
         timer.cancel();
         _liftCap(id);
-        _cancelReadAhead(id);
         engine.pauseTorrent(id);
       } else if (!checkingNetwork) {
         checkingNetwork = true;
@@ -717,7 +736,6 @@ class TorrentEngineService {
       final stillConnecting = _warming.remove(key);
       final id = _idsByHash[key];
       if (id == null || _streaming.contains(id)) continue;
-      _cancelReadAhead(id);
       final warm = _warmStreams.remove(id);
       if (warm != null) _stopStream(warm.id);
       if (stillConnecting) {
@@ -825,7 +843,6 @@ class TorrentEngineService {
     if (_streaming.isEmpty) _stopWatchingDisk();
     _held.remove(torrentId);
     _warmStreams.remove(torrentId); // Its streams go with it.
-    _cancelReadAhead(torrentId);
     try {
       // disposeTorrent() skips a torrent the engine hasn't reported on yet
       // (just added) — remove that one directly.
@@ -885,7 +902,6 @@ class TorrentEngineService {
     if (_streaming.isEmpty) _stopWatchingDisk();
     _held.remove(torrentId);
     _warmStreams.remove(torrentId); // Stopped below.
-    _cancelReadAhead(torrentId);
     try {
       unawaited(engine.stopAllStreamsForTorrent(torrentId));
       engine.pauseTorrent(torrentId);
@@ -947,7 +963,6 @@ class TorrentEngineService {
     _streaming.remove(torrentId);
     if (_streaming.isEmpty) _stopWatchingDisk();
     _held.remove(torrentId);
-    _cancelReadAhead(torrentId);
     _idsByHash.remove(key);
 
     Future<void> run() async {
@@ -1124,10 +1139,6 @@ class TorrentEngineService {
     _idsByHash.clear();
     _streaming.clear();
     _warmStreams.clear();
-    for (final read in _warmReads.values) {
-      read.close(force: true);
-    }
-    _warmReads.clear();
     _connecting.clear();
     _warming.clear();
     _held.clear();

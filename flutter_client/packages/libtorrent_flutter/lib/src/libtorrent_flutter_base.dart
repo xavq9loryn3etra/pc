@@ -490,6 +490,26 @@ class LibtorrentFlutter {
     return _b.preloadStream(_session, streamId, preloadBytes) != 0;
   }
 
+  /// Has stream [streamId] download bytes [offset, offset + length) of its
+  /// file soon, without a reader — a spot playback is about to go to (a
+  /// resume's start, a Skip button's target). [deadlineMs] 0 puts them
+  /// before anything else; a few seconds, after the pieces playback is
+  /// waiting on. Does nothing with an engine built before this was added.
+  void prefetchRange(int streamId, int offset, int length,
+      {int deadlineMs = 0}) {
+    _b.prefetchRange?.call(_session, streamId, offset, length, deadlineMs);
+  }
+
+  /// Playback of stream [streamId] will start at byte [offset] of its file
+  /// (resuming partway in), or nowhere in particular (null). Until it gets
+  /// there, the player's reads well before it are of the file's headers:
+  /// they fetch little more than they read, and leave the start's pieces
+  /// (see [prefetchRange]) be. Does nothing with an engine built before
+  /// this was added.
+  void setStreamStart(int streamId, int? offset) {
+    _b.setStreamStart?.call(_session, streamId, offset ?? -1);
+  }
+
   /// Configure the TorrServer-style cache for an active stream.
   /// Port of TorrServer's settings/btsets.go BTSets fields.
   ///

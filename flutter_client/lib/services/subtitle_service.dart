@@ -59,6 +59,23 @@ class SubtitleTrackData {
       'SubtitleTrackData(id: $id, lang: $lang, embedded: $isEmbedded, url: $url)';
 }
 
+/// What a subtitle track was written for, as its name or title says.
+enum SubtitleKind {
+  /// The dialogue, as said in the original language (a translation of it).
+  dialogue,
+
+  /// Captions of what's said, or made for a dubbed version: "CC", "SDH",
+  /// "Dubbed", "Dubtitles". What they follow depends on their language:
+  /// English ones, for a title not made in English, its English dub (the
+  /// usual subtitles, a translation of the original voices, say other
+  /// words at other times); ones in the original language, its voices.
+  forDub,
+
+  /// Only signs, songs and on-screen text ("Signs & Songs", "Forced"):
+  /// never the subtitles picked to follow the dialogue.
+  signsOnly,
+}
+
 class SubtitleService {
   static final SubtitleService _instance = SubtitleService._internal();
   factory SubtitleService() => _instance;
@@ -199,6 +216,56 @@ class SubtitleService {
       if (video.contains(service) && release.contains(service)) score += 1;
     }
     return score;
+  }
+
+  /// What [s] was written for, by the words in its name and title.
+  static SubtitleKind kindOf(SubtitleTrackData s) {
+    final words = _tokens('${s.releaseName ?? ''} ${s.label ?? ''}');
+    final full = words.contains('full') || words.contains('dialogue');
+    if (!full &&
+        (words.contains('signs') ||
+            words.contains('songs') ||
+            words.contains('forced'))) {
+      return SubtitleKind.signsOnly;
+    }
+    if (words.contains('cc') ||
+        words.contains('sdh') ||
+        words.contains('dub') ||
+        words.contains('dubbed') ||
+        words.contains('dubtitle') ||
+        words.contains('dubtitles') ||
+        words.contains('closedcaptions') ||
+        (words.contains('closed') && words.contains('captions'))) {
+      return SubtitleKind.forDub;
+    }
+    return SubtitleKind.dialogue;
+  }
+
+  /// Whether [s]'s file name says it's for another episode of the same
+  /// season — "S01E05" when the one wanted is S01E07 (any of [wanted]: the
+  /// episode in IMDb's numbering and in TMDB's, which differ for long
+  /// anime). People upload subtitles under the wrong episode now and then.
+  /// A name that numbers another season, or episodes some other way
+  /// (absolute numbers), says nothing either way: kept.
+  static bool namesAnotherEpisode(
+      SubtitleTrackData s, List<(int, int)> wanted) {
+    final name = '${s.releaseName ?? ''} ${s.label ?? ''}'.toLowerCase();
+    final named = <(int, int)>{};
+    for (final m in RegExp(r'(?<![a-z0-9])s(\d{1,2})[ ._-]?((?:e\d{1,4}[ ._-]?)+)')
+        .allMatches(name)) {
+      final season = int.parse(m[1]!);
+      for (final e in RegExp(r'e(\d{1,4})').allMatches(m[2]!)) {
+        named.add((season, int.parse(e[1]!)));
+      }
+    }
+    for (final m in RegExp(r'(?<![a-z0-9])(\d{1,2})x(\d{2,3})(?![a-z0-9])')
+        .allMatches(name)) {
+      named.add((int.parse(m[1]!), int.parse(m[2]!)));
+    }
+    if (named.isEmpty) return false;
+    if (named.any(wanted.contains)) return false;
+    final seasons = {for (final w in wanted) w.$1};
+    return named.any((n) => seasons.contains(n.$1));
   }
 
   /// The kind of source [name] (a release's) says it's from: "bluray",

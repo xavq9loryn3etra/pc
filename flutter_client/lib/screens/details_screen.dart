@@ -2570,6 +2570,9 @@ class _TorrentQualitySelectorSheetState
             season: widget.season,
             episode: widget.episode,
             episodes: widget.episodes,
+            rememberedCopy: _lastPlayedHash != null &&
+                resolvedStream.infoHash.toLowerCase() ==
+                    _lastPlayedHash!.toLowerCase(),
           ),
         ),
       );

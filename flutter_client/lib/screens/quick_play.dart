@@ -152,6 +152,8 @@ Future<void> quickPlay(BuildContext context, Movie movie) async {
           season: season,
           episode: episode,
           episodes: episodes,
+          rememberedCopy: lastPlayed != null &&
+              resolved.stream.infoHash.toLowerCase() == lastPlayed.toLowerCase(),
         ),
       ),
     );

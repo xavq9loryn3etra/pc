@@ -167,6 +167,16 @@ typedef _PreloadStreamN = Int32 Function(
 typedef LtPreloadStream = int Function(
     Pointer<LtSessionOpaque>, int, int);
 
+// ─── Prefetch / start hint ───────────────────────────────────────────────────
+typedef _PrefetchRangeN = Void Function(
+    Pointer<LtSessionOpaque>, Int64, Int64, Int64, Int32);
+typedef LtPrefetchRange = void Function(
+    Pointer<LtSessionOpaque>, int, int, int, int);
+typedef _SetStreamStartN = Void Function(
+    Pointer<LtSessionOpaque>, Int64, Int64);
+typedef LtSetStreamStart = void Function(
+    Pointer<LtSessionOpaque>, int, int);
+
 // ─── Cache settings — port of settings/btsets.go ─────────────────────────────
 typedef _SetCacheSettingsN = Void Function(
     Pointer<LtSessionOpaque>, Int64, Int64, Int32, Int32);
@@ -297,6 +307,9 @@ class TorrentBridgeBindings {
   late final LtSetUploadLimit     setUploadLimit;
   late final LtPreloadStream      preloadStream;
   late final LtSetCacheSettings   setCacheSettings;
+  // Null in an engine built before they were added.
+  late final LtPrefetchRange?     prefetchRange;
+  late final LtSetStreamStart?    setStreamStart;
   late final LtConfigureSession   configureSession;
   late final LtGetDefaultConfig   getDefaultConfig;
   late final LtGetActiveStreams   getActiveStreams;
@@ -349,6 +362,12 @@ class TorrentBridgeBindings {
     setUploadLimit      = _lib.lookup<NativeFunction<_SetUploadLimitN>>('lt_set_upload_limit').asFunction<LtSetUploadLimit>();
     preloadStream       = _lib.lookup<NativeFunction<_PreloadStreamN>>('lt_preload_stream').asFunction<LtPreloadStream>();
     setCacheSettings    = _lib.lookup<NativeFunction<_SetCacheSettingsN>>('lt_set_cache_settings').asFunction<LtSetCacheSettings>();
+    prefetchRange = _lib.providesSymbol('lt_prefetch_range')
+        ? _lib.lookup<NativeFunction<_PrefetchRangeN>>('lt_prefetch_range').asFunction<LtPrefetchRange>()
+        : null;
+    setStreamStart = _lib.providesSymbol('lt_set_stream_start')
+        ? _lib.lookup<NativeFunction<_SetStreamStartN>>('lt_set_stream_start').asFunction<LtSetStreamStart>()
+        : null;
     configureSession    = _lib.lookup<NativeFunction<_ConfigureSessionN>>('lt_configure_session').asFunction<LtConfigureSession>();
     getDefaultConfig    = _lib.lookup<NativeFunction<_GetDefaultConfigN>>('lt_get_default_config').asFunction<LtGetDefaultConfig>();
     getActiveStreams     = _lib.lookup<NativeFunction<_GetActiveStreamsN>>('lt_get_active_streams').asFunction<LtGetActiveStreams>();

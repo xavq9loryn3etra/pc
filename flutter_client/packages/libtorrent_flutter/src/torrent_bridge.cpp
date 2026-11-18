@@ -1234,6 +1234,44 @@ struct StreamEngine {
     float estimated_bitrate_bps = 625000.0f;
     int   critical_startup_pieces = 2;  // computed at init
 
+    // A resume's start (lt_set_stream_start): the byte of the file playback
+    // will start from, or -1. Until playback gets there, the player's reads
+    // well before it are the container's headers (reading_headers), not
+    // playback from the start.
+    std::atomic<int64_t> start_hint{-1};
+    // What those header reads have sent since the hint was set: past
+    // HEADER_LIMIT_BYTES it's taken for playback after all.
+    std::atomic<int64_t> header_bytes{0};
+    static constexpr int64_t START_MARGIN_BYTES = 16 * 1024 * 1024;
+    static constexpr int64_t HEADER_AHEAD_BYTES = 4 * 1024 * 1024;
+    static constexpr int64_t HEADER_LIMIT_BYTES = 48 * 1024 * 1024;
+    // The pieces header reads have raised (win_mu): those not had when
+    // playback reaches the start are dropped (drop_header_pieces) — a
+    // header read is open-ended, and asks for the piece after the headers
+    // too, which the player then never reads.
+    std::vector<int> header_raised;
+
+    // Reads before this piece are header reads, while a hint is set (and
+    // the hint is far enough in to leave room for them); -1 when none.
+    // The margin allows for the start being a guess from the running time:
+    // the player lands on the keyframe before the spot, which can be some
+    // MB before the guess.
+    int header_end_piece() const {
+        const int64_t h = start_hint.load();
+        if (h < 0 || header_bytes.load() >= HEADER_LIMIT_BYTES) return -1;
+        const int64_t margin =
+            std::max<int64_t>(START_MARGIN_BYTES, 2LL * piece_length);
+        if (h <= margin) return -1;
+        return byte_to_piece(h - margin);
+    }
+
+    // Whether the player's read of piece [p] is of the headers, before a
+    // resume's start: fetched as read, not as playback (no read-ahead).
+    bool reading_headers(int p) const {
+        const int e = header_end_piece();
+        return e >= 0 && p < e;
+    }
+
     std::atomic<bool> active{true};
 
     int byte_to_piece(int64_t off) const {
@@ -2105,6 +2143,31 @@ static void extend_readahead(StreamEngine* s, int p) {
     } catch (...) {}
 }
 
+// Playback has reached a resume's start: the pieces header reads raised
+// (StreamEngine::header_raised) that aren't had go back to dont_download,
+// unless in the head or tail kept for the container.
+static void drop_header_pieces(StreamEngine* s) {
+    std::vector<int> raised;
+    {
+        std::lock_guard<std::mutex> lk(s->win_mu);
+        raised.swap(s->header_raised);
+    }
+    if (raised.empty()) return;
+    std::vector<int> drop;
+    {
+        std::lock_guard<std::mutex> lk(s->piece_mu);
+        for (int q : raised)
+            if (!s->is_protected(q) && !s->pieces_have.count(q)) drop.push_back(q);
+    }
+    try {
+        for (int q : drop) {
+            s->handle.reset_piece_deadline(lt::piece_index_t(q));
+            s->handle.piece_priority(lt::piece_index_t(q), lt::dont_download);
+        }
+    } catch (...) {}
+    TB_LOG("start hint: dropped %d piece(s) header reads raised", (int)drop.size());
+}
+
 // serve_range — based on lt2http's Reader::read() pattern
 //
 // lt2http reads directly from libtorrent storage — no intermediate cache.
@@ -2149,6 +2212,9 @@ static bool serve_range(StreamEngine* s, const ConnState& conn, bool primary,
             have_it = s->pieces_have.count(p) > 0;
         }
 
+        // Before a resume's start: the headers, read as needed.
+        const bool headers = primary && s->reading_headers(p);
+
         if (!have_it) {
             // Wider deadline pipeline: current + 16 pieces with stagger.
             // The deadline picker orders by deadline, so i=0 still gets
@@ -2158,14 +2224,24 @@ static bool serve_range(StreamEngine* s, const ConnState& conn, bool primary,
             //  request pipeline depth → peers sat idle after each piece.)
             // (No further than the read-ahead window: a cache shrunk to
             // save mobile data must shrink this too.)
-            const int PIPELINE_AHEAD = std::min(16, s->readahead_pieces());
+            // (Reading the headers before a resume's start: only a few MB
+            // ahead — the pieces after them aren't wanted, the start is.)
+            const int PIPELINE_AHEAD = headers
+                ? (int)std::clamp<int64_t>(
+                      StreamEngine::HEADER_AHEAD_BYTES / s->piece_length - 1, 0, 16)
+                : std::min(16, s->readahead_pieces());
             TB_LOG("serve_range: piece=%d not ready, prioritizing p..p+%d", p, PIPELINE_AHEAD);
             try {
                 s->handle.piece_priority(lt::piece_index_t(p), lt::top_priority);
                 s->handle.set_piece_deadline(lt::piece_index_t(p), 0);
             } catch (...) {}
-            if (primary)
+            if (primary && !headers)
                 s->note_window(p, std::min(p + PIPELINE_AHEAD, last_wanted));
+            if (headers) {
+                std::lock_guard<std::mutex> lk(s->win_mu);
+                for (int i = 0; i <= PIPELINE_AHEAD && p + i <= last_wanted; ++i)
+                    s->header_raised.push_back(p + i);
+            }
             for (int i = 1; i <= PIPELINE_AHEAD && p + i <= last_wanted; ++i) {
                 bool have_next = false;
                 { std::lock_guard<std::mutex> lk(s->piece_mu); have_next = s->pieces_have.count(p+i) > 0; }
@@ -2262,6 +2338,15 @@ static bool serve_range(StreamEngine* s, const ConnState& conn, bool primary,
 
         cursor = sbeg + nb;
         if (!primary) continue;
+
+        if (headers) {
+            // No read-ahead or trailing window: not playback.
+            s->header_bytes.fetch_add(nb);
+            reader->offset = cursor;
+            reader->last_access = TorrReader::now_unix();
+            s->read_head.store(cursor);
+            continue;
+        }
 
         extend_readahead(s, p);
 
@@ -2485,7 +2570,25 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
                 }
                 if (prev) s->cancel(*prev);
             }
-            if (primary && old_head > 0 && std::abs(rstart - old_head) > 65536) {
+            // A resume's start (lt_set_stream_start): a read well before it
+            // is of the headers — not a seek, which would cancel the
+            // start's pieces and raise those after the headers instead. A
+            // read near it or after: playback has got there, and the hint
+            // has done its job.
+            bool header_read = false;
+            if (primary && s->start_hint.load() >= 0) {
+                const int rp = std::clamp(s->byte_to_piece(rstart),
+                                          s->start_piece, s->end_piece);
+                if (s->reading_headers(rp)) {
+                    header_read = true;
+                } else {
+                    s->start_hint.store(-1);
+                    TB_LOG("start hint: playback reached it at %lld", (long long)rstart);
+                    drop_header_pieces(s);
+                }
+            }
+            if (primary && !header_read && old_head > 0
+                && std::abs(rstart - old_head) > 65536) {
                 int new_gen;
                 {
                     // (under piece_mu, so no waiter misses the change)
@@ -2766,6 +2869,68 @@ static void run_http_server(StreamEngine* stream) {
         }
         for (auto& kv : threads_to_join) {
             if (kv.second.joinable()) kv.second.join();
+        }
+    } catch (...) {}
+}
+
+// ── prefetch / start hint ───────────────────────────────────────────────────
+
+// Has [s] download bytes [offset, offset + length) of its file soon, with no
+// reader: their pieces at top priority, with deadlines from [deadline_ms].
+static void prefetch_range(StreamEngine* s, int64_t offset, int64_t length,
+                           int deadline_ms) {
+    if (length <= 0 || offset >= s->file_size) return;
+    if (offset < 0) offset = 0;
+    const int64_t last_byte = std::min(s->file_size, offset + length) - 1;
+    const int first = std::clamp(s->byte_to_piece(offset), s->start_piece, s->end_piece);
+    const int last  = std::clamp(s->byte_to_piece(last_byte), s->start_piece, s->end_piece);
+    std::vector<int> want;
+    {
+        std::lock_guard<std::mutex> lk(s->piece_mu);
+        for (int q = first; q <= last; ++q)
+            if (!s->pieces_have.count(q)) want.push_back(q);
+    }
+    const int base = std::max(0, deadline_ms);
+    try {
+        for (size_t i = 0; i < want.size(); ++i) {
+            s->handle.piece_priority(lt::piece_index_t(want[i]), lt::top_priority);
+            s->handle.set_piece_deadline(lt::piece_index_t(want[i]),
+                                         base + (int)i * 100);
+        }
+    } catch (...) {}
+    TB_LOG("prefetch: pieces %d..%d (%d wanted), from %d ms",
+           first, last, (int)want.size(), base);
+}
+
+// Playback of [s] will start at byte [offset] (a resume), or -1: see
+// StreamEngine::start_hint. What was raised for playback from the start —
+// a head preload, the startup pieces past the head kept for headers — is
+// dropped; the player's reads fetch what it really needs of it.
+static void set_stream_start(StreamEngine* s, int64_t offset) {
+    if (offset < 0 || offset >= s->file_size) {
+        s->start_hint.store(-1);
+        return;
+    }
+    s->header_bytes.store(0);
+    {
+        std::lock_guard<std::mutex> lk(s->win_mu);
+        s->header_raised.clear();
+    }
+    s->start_hint.store(offset);
+    s->preloading.store(false);
+    const int end = s->header_end_piece();
+    TB_LOG("start hint: %lld (headers before piece %d)", (long long)offset, end);
+    if (end < 0) return;
+    std::vector<int> drop;
+    {
+        std::lock_guard<std::mutex> lk(s->piece_mu);
+        for (int q = s->head_end_piece + 1; q < end && q < s->tail_start_piece; ++q)
+            if (!s->pieces_have.count(q)) drop.push_back(q);
+    }
+    try {
+        for (int q : drop) {
+            s->handle.reset_piece_deadline(lt::piece_index_t(q));
+            s->handle.piece_priority(lt::piece_index_t(q), lt::dont_download);
         }
     } catch (...) {}
 }
@@ -4090,6 +4255,37 @@ TORRENT_API int lt_preload_stream(lt_session_t session, lt_stream_id sid,
     try {
         return preload_stream_impl(to_sw(session), sid, preload_bytes);
     } LT_CATCH(0)
+}
+
+// ── prefetch / start hint (see prefetch_range, set_stream_start) ─────────────
+
+// (Not returned: this is inside extern "C".)
+static void find_stream(SessionWrapper* sw, lt_stream_id sid,
+                        std::shared_ptr<StreamEngine>& out) {
+    std::lock_guard<std::mutex> lk(sw->streams_mu);
+    auto it = sw->streams.find(sid);
+    if (it != sw->streams.end()) out = it->second;
+}
+
+TORRENT_API void lt_prefetch_range(lt_session_t session, lt_stream_id sid,
+                                   int64_t offset, int64_t length,
+                                   int deadline_ms) {
+    if (!session) return;
+    try {
+        std::shared_ptr<StreamEngine> s;
+        find_stream(to_sw(session), sid, s);
+        if (s && s->active.load()) prefetch_range(s.get(), offset, length, deadline_ms);
+    } LT_CATCH_VOID
+}
+
+TORRENT_API void lt_set_stream_start(lt_session_t session, lt_stream_id sid,
+                                     int64_t offset) {
+    if (!session) return;
+    try {
+        std::shared_ptr<StreamEngine> s;
+        find_stream(to_sw(session), sid, s);
+        if (s && s->active.load()) set_stream_start(s.get(), offset);
+    } LT_CATCH_VOID
 }
 
 // ── cache settings — port of settings/btsets.go ─────────────────────────────────

@@ -189,6 +189,19 @@ class AudioLanguageService {
     if (changed) changes.value++;
   }
 
+  /// Takes away the choices [keys] (stored names), without counting it as
+  /// a change made here.
+  Future<void> removeFromSync(Iterable<String> keys) async {
+    await ensureLoaded();
+    final prefs = await SharedPreferences.getInstance();
+    var changed = false;
+    for (final key in keys) {
+      if (_choices.remove(key) != null) changed = true;
+      await prefs.remove(key);
+    }
+    if (changed) changes.value++;
+  }
+
   /// The name of the language [m] plays in with [choice] (by default, the
   /// one saved for it) — "English" for a title made in English.
   String nameFor(Movie m, [AudioLanguage? choice]) =>

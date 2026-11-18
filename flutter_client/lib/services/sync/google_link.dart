@@ -47,9 +47,13 @@ class DeviceCode {
 abstract class GoogleLink {
   static GoogleLink? _forThisDevice;
 
+  /// For tests: the sign-in to use instead of this device's.
+  static GoogleLink? debugOverride;
+
   /// The one for this device, or null where sync isn't set up (no
   /// sign-in IDs in this build).
   static GoogleLink? forThisDevice() {
+    if (debugOverride != null) return debugOverride;
     if (_forThisDevice != null) return _forThisDevice;
     GoogleLink? link;
     if (Platform.isAndroid && TvDevice.isTv) {

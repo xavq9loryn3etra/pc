@@ -128,9 +128,12 @@ class _UpdateOverlayState extends State<UpdateOverlay>
       message: Platform.isIOS
           ? 'A new update is available. Please update the app from TestFlight.'
           : widget.message,
+      // Room for the longest of the steps' words, so the title and the
+      // button stay put as they change.
+      roomFor: Platform.isIOS ? const [] : _allNotes,
       messageBuilder: step?.note == null
           ? null
-          : (style) => Text.rich(
+          : (style, align) => Text.rich(
                 TextSpan(children: [
                   TextSpan(text: step!.note),
                   // The website, when the download failed.
@@ -158,7 +161,7 @@ class _UpdateOverlayState extends State<UpdateOverlay>
                     const TextSpan(text: '.'),
                   ],
                 ]),
-                textAlign: TextAlign.center,
+                textAlign: align,
                 style: style,
               ),
       footer: step == null
@@ -171,6 +174,25 @@ class _UpdateOverlayState extends State<UpdateOverlay>
             ),
     );
   }
+
+  static const _permissionNote =
+      'Android asks this once: turn on "Allow from this source" for Popcorn, '
+      'then come back here.';
+  static const _installNote =
+      'Tap Update when Android asks. Your favourites and history stay.';
+  static const _installingNote = 'Popcorn will close and open again by itself.';
+  static const _failedNote =
+      "Couldn't download the update. Check your connection.";
+
+  /// Everything the message can say along the way (the failure's with its
+  /// link to the website), for the room kept for it.
+  List<String> get _allNotes => [
+        widget.message,
+        _permissionNote,
+        _installNote,
+        _installingNote,
+        "$_failedNote Or download it from the website.",
+      ];
 
   /// The button's label and action for where the update's at, and what to
   /// do next, if anything; null where there's no button (an iPhone).
@@ -194,24 +216,22 @@ class _UpdateOverlayState extends State<UpdateOverlay>
       _Step.needsPermission => (
           label: 'Allow Updates',
           onPressed: UpdateInstaller.openInstallPermission,
-          note: 'Android asks this once: turn on "Allow from this source" '
-              'for Popcorn, then come back here.',
+          note: _permissionNote,
         ),
       _Step.install => (
           label: 'Install Update',
           onPressed: _install,
-          note: 'Tap Update when Android asks. Your favourites and history '
-              'stay.',
+          note: _installNote,
         ),
       _Step.installing => (
           label: 'Installing…',
           onPressed: null,
-          note: 'Popcorn will close and open again by itself.',
+          note: _installingNote,
         ),
       _Step.failed => (
           label: 'Try Again',
           onPressed: _update,
-          note: "Couldn't download the update. Check your connection.",
+          note: _failedNote,
         ),
     };
   }

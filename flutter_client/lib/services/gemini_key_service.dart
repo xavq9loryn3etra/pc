@@ -2,11 +2,15 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'sync/sync_ledger.dart';
+
 /// The viewer's own Gemini API key, entered in Settings: free from Google
 /// AI Studio, and theirs alone, so what it does — Sinhala subtitles (see
 /// SubtitleTranslator), Popcorn Ask (AiService) — counts against their
 /// own free allowance, not the one the app's built-in key shares with
-/// everyone. Kept on the device only (not synced).
+/// everyone. Kept on the device — and, while sync is on, in the viewer's
+/// own Google Drive with their lists (see SyncBridge), so their other
+/// devices have it too.
 class GeminiKeyService {
   static final GeminiKeyService _instance = GeminiKeyService._();
   factory GeminiKeyService() => _instance;
@@ -28,6 +32,19 @@ class GeminiKeyService {
 
   Future<void> save(String value) async {
     final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      if (key.value != null) SyncLedger().remove('settings', prefsKey);
+    } else if (trimmed != key.value) {
+      SyncLedger().touch('settings', prefsKey);
+    }
+    await applyFromSync(trimmed);
+  }
+
+  /// Puts in the key another device has (or, empty or null, removes it),
+  /// without counting it as a change made here.
+  Future<void> applyFromSync(String? value) async {
+    final trimmed = value?.trim() ?? '';
+    if ((key.value ?? '') == trimmed) return;
     final prefs = await SharedPreferences.getInstance();
     if (trimmed.isEmpty) {
       await prefs.remove(prefsKey);

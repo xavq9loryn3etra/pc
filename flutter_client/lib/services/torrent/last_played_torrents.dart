@@ -2,6 +2,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/movie.dart';
 import '../audio_language_service.dart';
+import '../sync/sync_ledger.dart';
 
 /// The torrent each title — or each episode — last played from, remembered
 /// under `last_played_torrent_ID` or `last_played_torrent_ID_SEASON_EPISODE`
@@ -13,21 +14,34 @@ import '../audio_language_service.dart';
 /// also the language it played in, under `last_played_language_…`: the
 /// same copy often has both soundtracks, and is listed in both languages —
 /// it's only "Last watched" in the one it was watched in.
+///
+/// Synced (see SyncBridge), so resuming on another device picks the same
+/// copy — and the progress, a fraction of it, lands on the same moment.
+/// That device only uses it if it offers the copy itself (StreamResolver
+/// picks from its own list).
 class LastPlayedTorrents {
   static const _prefix = 'last_played_torrent_';
   static const _languagePrefix = 'last_played_language_';
+
+  /// The settings' prefixes, for SyncBridge.
+  static const prefixes = [_prefix, _languagePrefix];
 
   static String _languageKey(String key) =>
       _languagePrefix + key.substring(_prefix.length);
 
   /// Remembers that [key]'s torrent (just saved) played in [title]'s audio
   /// language as it's saved now.
+  ///
+  /// Called after every one of those saves: it's what tells sync the copy
+  /// changed.
   static Future<void> rememberLanguage(
       SharedPreferences prefs, String key, Movie title) async {
+    SyncLedger().touch('settings', key);
     if (!AudioLanguageService.appliesTo(title)) return;
     final languages = AudioLanguageService();
     await languages.ensureLoaded();
     await prefs.setString(_languageKey(key), languages.of(title).name);
+    SyncLedger().touch('settings', _languageKey(key));
   }
 
   /// The torrent [key] last played from — for a title with a choice of
@@ -68,6 +82,8 @@ class LastPlayedTorrents {
       // tt1234's keys.
       if (ids.any((id) => rest == id || rest.startsWith('${id}_'))) {
         await prefs.remove(key);
+        // Gone from Continue Watching on every device, so this goes too.
+        SyncLedger().remove('settings', key);
       }
     }
   }

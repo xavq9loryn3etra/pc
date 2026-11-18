@@ -144,6 +144,88 @@ class _GeminiKeyFormState extends State<GeminiKeyForm> {
       return GeminiKeyFromPhone(onDone: widget.onDone);
     }
 
+    // The key's box, its problem if any, and where it's kept: on both
+    // layouts.
+    final entry = <Widget>[
+      // A key that's added is shown, locked: changing it means Remove,
+      // then pasting the new one.
+      TextField(
+        controller: _field,
+        enabled: !hasKey,
+        // Saved: hidden behind stars.
+        obscureText: hasKey,
+        obscuringCharacter: '*',
+        autocorrect: false,
+        enableSuggestions: false,
+        style: TextStyle(
+            color: hasKey ? Colors.white54 : Colors.white, fontSize: 14),
+        onChanged: (_) => setState(() => _problem = null),
+        onSubmitted: (_) => _save(),
+        decoration: InputDecoration(
+          hintText: 'Paste your key',
+          hintStyle: const TextStyle(color: Colors.white38),
+          filled: true,
+          fillColor: Colors.white.withValues(alpha: 0.08),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide.none,
+          ),
+          // Nothing to paste over a key that's added.
+          suffixIcon: hasKey
+              ? null
+              : IconButton(
+                  tooltip: 'Paste',
+                  icon: const Icon(Icons.content_paste_rounded,
+                      color: Colors.white60, size: 20),
+                  onPressed: _paste,
+                ),
+        ),
+      ),
+      if (_problem != null) ...[
+        const SizedBox(height: 8),
+        Text(
+          _problem!,
+          style: const TextStyle(color: Color(0xFFFF8A80), fontSize: 13),
+        ),
+      ],
+      const SizedBox(height: 10),
+      const Text(
+        'Used for Sinhala subtitles and Popcorn Ask. Kept on this device '
+        'and, if you\'ve signed in to sync, in your Google Drive, so your '
+        'other devices have it too. On the free plan, Google may use '
+        'what\'s sent (subtitle lines and your questions) to improve its '
+        'services.',
+        style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.35),
+      ),
+    ];
+
+    // Added: nothing to do but see it's there, or remove it — no steps.
+    if (hasKey) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 2, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Your key is added. Popcorn Ask and Sinhala subtitles are ready '
+              'to use.',
+              style: body,
+            ),
+            const SizedBox(height: 14),
+            ...entry,
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              child: GlassDialogButton(label: 'Remove key', onTap: _remove),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 2, 16, 16),
       child: Column(
@@ -215,71 +297,20 @@ class _GeminiKeyFormState extends State<GeminiKeyForm> {
             ]),
           ),
           const SizedBox(height: 14),
-          // A key that's added is shown, locked: changing it means Remove,
-          // then pasting the new one.
-          TextField(
-            controller: _field,
-            enabled: !hasKey,
-            // Saved: hidden behind stars.
-            obscureText: hasKey,
-            obscuringCharacter: '*',
-            autocorrect: false,
-            enableSuggestions: false,
-            style: TextStyle(
-                color: hasKey ? Colors.white54 : Colors.white, fontSize: 14),
-            onChanged: (_) => setState(() => _problem = null),
-            onSubmitted: (_) => _save(),
-            decoration: InputDecoration(
-              hintText: 'Paste your key',
-              hintStyle: const TextStyle(color: Colors.white38),
-              filled: true,
-              fillColor: Colors.white.withValues(alpha: 0.08),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-              suffixIcon: IconButton(
-                tooltip: 'Paste',
-                icon: Icon(Icons.content_paste_rounded,
-                    color: hasKey ? Colors.white24 : Colors.white60, size: 20),
-                onPressed: hasKey ? null : _paste,
-              ),
-            ),
-          ),
-          if (_problem != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              _problem!,
-              style: const TextStyle(color: Color(0xFFFF8A80), fontSize: 13),
-            ),
-          ],
-          const SizedBox(height: 10),
-          const Text(
-            'Used for Sinhala subtitles and Popcorn Ask, and kept only on '
-            'this device. On the free plan, Google may use what\'s sent '
-            '(subtitle lines and your questions) to improve its services.',
-            style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.35),
-          ),
+          ...entry,
           const SizedBox(height: 18),
           Row(
             children: [
               Expanded(
-                child: GlassDialogButton(
-                  label: hasKey ? 'Remove' : 'Cancel',
-                  destructive: hasKey,
-                  onTap: hasKey ? _remove : widget.onDone,
-                ),
+                child: GlassDialogButton(label: 'Cancel', onTap: widget.onDone),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: GlassDialogButton(
                   label: _checking ? 'Checking…' : 'Save',
                   primary: true,
-                  // Nothing to save: the key's already added, or none's
-                  // pasted yet.
-                  onTap: hasKey || _field.text.trim().isEmpty ? null : _save,
+                  // Nothing to save: none's pasted yet.
+                  onTap: _field.text.trim().isEmpty ? null : _save,
                 ),
               ),
             ],

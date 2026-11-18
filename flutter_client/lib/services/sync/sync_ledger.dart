@@ -166,6 +166,16 @@ class SyncLedger {
         _key, jsonEncode({'changed': _changed, 'removed': _removed}));
   }
 
+  /// Forgets every change and removal recorded (signing out: the lists
+  /// this device had are gone from it, and nothing of them is owed to the
+  /// next account signed in here).
+  void clear() {
+    _changed.clear();
+    _removed.clear();
+    generation++;
+    _scheduleSave();
+  }
+
   /// For tests: forget everything.
   void reset() {
     _saveTimer?.cancel();

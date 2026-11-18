@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io' show HttpDate, gzip;
+import 'dart:io' show GZipCodec, HttpDate, gzip;
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -69,8 +69,9 @@ class DriveStore {
   static const String pagePrefix = 'popcorn-device-';
   static const String pageSuffix = '.json.gz';
 
-  /// Written when synced data is deleted from one device: the others stop
-  /// syncing rather than put their copies back.
+  /// Written by Popcorn 4.2.0 when synced data was deleted (it turned
+  /// sync off on the other devices). No longer used: deleting synced data
+  /// now leaves removals instead, and this goes with the rest.
   static const String controlName = 'popcorn-control.json';
 
   static const _api = 'https://www.googleapis.com/drive/v3';
@@ -137,8 +138,10 @@ class DriveStore {
     }
   }
 
+  /// Compressed as small as it goes: a page is written now and then, and
+  /// read on every device.
   static Uint8List encodePage(SyncData data) => Uint8List.fromList(
-      gzip.encode(utf8.encode(jsonEncode(data.toJson()))));
+      GZipCodec(level: 9).encode(utf8.encode(jsonEncode(data.toJson()))));
 
   /// Saves [bytes] as [name]: over [id] if given, else as a new file.
   Future<DriveFile> save({

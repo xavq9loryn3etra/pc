@@ -15,9 +15,14 @@ import 'sync_data.dart';
 import 'sync_ledger.dart';
 import 'sync_snapshots.dart';
 
+/// What a device signing in has that the account doesn't (see
+/// [SyncService.turnOn]): how many titles in My List and Continue Watching.
+typedef OnlyHere = ({int list, int history});
+
 /// What Settings shows about sync.
 @immutable
 class SyncStatus {
+  /// Signed in to Google for sync.
   final bool on;
 
   /// A sync is running.
@@ -34,6 +39,11 @@ class SyncStatus {
   /// Titles the last big removal took (0: none to undo).
   final int removedCount;
 
+  /// Just signed in, and this device has titles the account doesn't:
+  /// waiting to be told whether they join the account or go (nothing syncs
+  /// till then).
+  final OnlyHere? asking;
+
   const SyncStatus({
     this.on = false,
     this.busy = false,
@@ -41,6 +51,7 @@ class SyncStatus {
     this.lastSynced,
     this.problem,
     this.removedCount = 0,
+    this.asking,
   });
 
   SyncStatus copyWith({
@@ -50,6 +61,7 @@ class SyncStatus {
     DateTime? lastSynced,
     SyncProblem? Function()? problem,
     int? removedCount,
+    OnlyHere? Function()? asking,
   }) =>
       SyncStatus(
         on: on ?? this.on,
@@ -58,11 +70,15 @@ class SyncStatus {
         lastSynced: lastSynced ?? this.lastSynced,
         problem: problem != null ? problem() : this.problem,
         removedCount: removedCount ?? this.removedCount,
+        asking: asking != null ? asking() : this.asking,
       );
 }
 
-/// Keeps My List, Continue Watching, episode progress and language choices
-/// the same on every device signed in to the same Google account.
+/// Keeps My List, Continue Watching, episode progress, language choices,
+/// the Gemini key and the copy each title last played the same on every
+/// device signed in to the same Google account. They belong to the
+/// account: signing out takes them off the device, and they come back on
+/// signing in again.
 ///
 /// Each device writes its own page (SyncData) to the account's hidden
 /// Popcorn folder in Drive (DriveStore), and never anyone else's; a sync
@@ -71,8 +87,9 @@ class SyncStatus {
 /// device's page. No server: the app talks to Google directly.
 ///
 /// When — only when there's a reason, never on a timer:
-/// - what changed here goes out: My List and language choices at once, watch progress at most every two minutes while
-///   playing, and anything left as the app goes to the background;
+/// - what changed here goes out: My List and language choices at once,
+///   watch progress at most every two minutes while playing, and anything
+///   left as the app goes to the background;
 /// - what the other devices changed comes in when it's about to be seen:
 ///   as the app opens or comes back, and on opening Home, My List or
 ///   Settings.
@@ -80,15 +97,17 @@ class SyncStatus {
 /// the way of the app.
 ///
 /// Safeguards:
+/// - signing in on a device with titles the account doesn't have asks
+///   whether they join it, or go (Settings › Sync);
+/// - signing out saves what's left to save first, or says it couldn't;
 /// - a sync that would remove many titles at once still does — the other
 ///   device asked for it — but keeps a copy from right before and says so,
-///   with "Undo" in Settings;
+///   with "Bring back" in Settings (not when the data was deleted on
+///   purpose: [SyncData.clearedAt]);
 /// - a page from a newer app version is read but this device stops
 ///   writing until it's updated;
 /// - the website's flags can pause sync everywhere, or for one version
-///   (FeatureFlagsService);
-/// - "Delete synced data" leaves a note in the folder that turns sync off
-///   on the other devices, rather than them putting their copies back.
+///   (FeatureFlagsService).
 class SyncService {
   static final SyncService _instance = SyncService._();
   factory SyncService() => _instance;
@@ -104,8 +123,11 @@ class SyncService {
   static const _hashKey = 'sync_uploaded_hash';
   static const _removalKey = 'sync_removal';
   static const _lastErrorKey = 'sync_last_error';
+  static const _askingKey = 'sync_asking';
+  static const _clearedKey = 'sync_cleared_at';
 
   static const _afterChange = Duration(seconds: 30);
+
   /// My List and language changes go out at once; a tap made while one's
   /// going out goes in the sync right after it.
   static const _afterListChange = Duration.zero;
@@ -131,18 +153,31 @@ class SyncService {
   /// Whether signing in here shows a code to enter on a phone (TV).
   bool get signsInWithCode => GoogleLink.forThisDevice()?.showsCode ?? false;
 
+  /// For tests: the Drive to use instead of Google's.
+  @visibleForTesting
+  DriveStore? debugStore;
+
   DriveStore? _store;
   Timer? _timer;
   DateTime? _timerAt;
   Future<void>? _running;
   bool _again = false;
+  bool _holding = false; // Deleting or signing out: no syncs meanwhile.
   int _failures = 0;
   DateTime? _retryAfter;
   DateTime? _lastAttempt;
   int _syncedGeneration = -1;
 
   DriveStore _storeFor(GoogleLink link) =>
-      _store ??= DriveStore(({bool refresh = false}) => link.accessToken(refresh: refresh));
+      debugStore ??
+      (_store ??= DriveStore(
+          ({bool refresh = false}) => link.accessToken(refresh: refresh)));
+
+  GoogleLink _link() {
+    final link = GoogleLink.forThisDevice();
+    if (link == null) throw const SyncException(SyncProblem.other, 'not set up');
+    return link;
+  }
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
@@ -153,9 +188,10 @@ class SyncService {
       email: prefs.getString(_emailKey),
       lastSynced: last == null ? null : DateTime.fromMillisecondsSinceEpoch(last),
       removedCount: _removalCount(prefs),
+      asking: on ? _readAsking(prefs) : null,
     );
     SyncLedger().onChange = _onLocalChange;
-    if (on) {
+    if (on && status.value.asking == null) {
       _schedule(const Duration(seconds: 4));
     }
   }
@@ -166,7 +202,7 @@ class SyncService {
       if (raw == null) return 0;
       final json = jsonDecode(raw) as Map<String, dynamic>;
       final at = DateTime.fromMillisecondsSinceEpoch(json['at'] as int);
-      // Undo is offered for a week, as long as the copies are kept.
+      // Undo is offered for a week, as long as the copy is kept.
       if (DateTime.now().difference(at) > const Duration(days: SyncSnapshots.undoDays)) {
         return 0;
       }
@@ -176,18 +212,29 @@ class SyncService {
     }
   }
 
-  // --- Turning it on and off ---
+  static OnlyHere? _readAsking(SharedPreferences prefs) {
+    try {
+      final raw = prefs.getString(_askingKey);
+      if (raw == null) return null;
+      final json = jsonDecode(raw) as Map<String, dynamic>;
+      return (list: json['list'] as int, history: json['history'] as int);
+    } catch (_) {
+      return null;
+    }
+  }
 
-  /// Signs in and starts syncing: what's here and what's in the account
-  /// are combined, so nothing is lost on either side. On a TV, [onCode]
-  /// gets the code to show. Throws a SyncException if signing in didn't
-  /// happen.
+  // --- Signing in and out ---
+
+  /// Signs in. If the account already has lists and this device has titles
+  /// they don't, it then waits ([SyncStatus.asking]) for [addDeviceLists]
+  /// or [keepAccountListsOnly]; otherwise it syncs straight away. On a TV,
+  /// [onCode] gets the code to show. Throws a SyncException if signing in
+  /// didn't happen.
   Future<void> turnOn({
     void Function(DeviceCode code)? onCode,
     Future<void>? cancel,
   }) async {
-    final link = GoogleLink.forThisDevice();
-    if (link == null) throw const SyncException(SyncProblem.other, 'not set up');
+    final link = _link();
     await link.signIn(onCode: onCode, cancel: cancel);
     _store = null;
     final store = _storeFor(link);
@@ -195,23 +242,94 @@ class SyncService {
     final offset = store.clockOffsetMs;
     if (offset != null) await SyncLedger().setOffset(offset);
 
+    // What the account has, and whether this device has anything it
+    // doesn't — read before anything's recorded as signed in, so a
+    // connection lost here leaves this device as it was.
+    final account = await _readAccount(store);
+    final here = await SyncBridge.gather();
+    final extra = SyncBridge.onlyHere(here, account.data);
+    final ask = account.pages > 0 && extra.list + extra.history > 0;
+
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_onKey, true);
+    // Possibly another account: everything there is read afresh.
+    for (final key in [_seenKey, _hashKey, _pageIdKey, _askingKey, _clearedKey]) {
+      await prefs.remove(key);
+    }
+    // A deletion before this sign-in isn't news here.
+    if (account.data.clearedAt != null) {
+      await prefs.setInt(_clearedKey, account.data.clearedAt!);
+    }
+    if (ask) {
+      await prefs.setString(
+          _askingKey, jsonEncode({'list': extra.list, 'history': extra.history}));
+    }
     if (email != null) await prefs.setString(_emailKey, email);
     await prefs.setInt(_signedInKey, SyncLedger().now());
-    // Possibly another account: everything there is read afresh.
-    await prefs.remove(_seenKey);
-    await prefs.remove(_hashKey);
-    await prefs.remove(_pageIdKey);
+    await prefs.setBool(_onKey, true);
     _failures = 0;
     _retryAfter = null;
-    status.value = status.value.copyWith(on: true, email: email, problem: () => null);
+    status.value = status.value.copyWith(
+      on: true,
+      email: email,
+      problem: () => null,
+      asking: () => ask ? extra : null,
+    );
+    if (!ask) await syncNow(userAsked: true);
+  }
+
+  /// The answer to [SyncStatus.asking]: this device's titles join the
+  /// account (and so every device signed in to it).
+  Future<void> addDeviceLists() async {
+    await _stopAsking();
     await syncNow(userAsked: true);
   }
 
-  /// Stops syncing on this device and signs out. The lists here stay as
-  /// they are, and so does what's in the account.
-  Future<void> turnOff() async {
+  /// The other answer: this device's own titles go, and it shows only what
+  /// the account has.
+  Future<void> keepAccountListsOnly() async {
+    final store = _storeFor(_link());
+    final account = await _readAccount(store);
+    await SyncBridge.apply(account.data, replace: true);
+    await _stopAsking();
+    await syncNow(userAsked: true);
+  }
+
+  Future<void> _stopAsking() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_askingKey);
+    status.value = status.value.copyWith(asking: () => null);
+  }
+
+  /// Signs out on this device and takes its lists off it — they stay in
+  /// the account, and come back on signing in again. What hasn't reached
+  /// Drive yet is sent first; if that can't be done, nothing happens and
+  /// this returns false, unless [evenIfUnsaved].
+  Future<bool> signOut({bool evenIfUnsaved = false}) async {
+    final s = status.value;
+    if (s.on && s.asking == null && SyncLedger().generation != _syncedGeneration) {
+      await syncNow(userAsked: true);
+      final problem = status.value.problem;
+      final unsaved = SyncLedger().generation != _syncedGeneration ||
+          (problem != null && problem != SyncProblem.needsUpdate);
+      if (unsaved && !evenIfUnsaved) return false;
+    }
+    _holding = true;
+    try {
+      await _running;
+      await SyncBridge.clearLocal();
+      await SyncSnapshots.dropBeforeRemoval();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_removalKey);
+      await _signOutHere();
+    } finally {
+      _holding = false;
+    }
+    return true;
+  }
+
+  /// Forgets the sign-in on this device only: Google's permission for
+  /// Popcorn stays, or every other device would be signed out too.
+  Future<void> _signOutHere() async {
     _timer?.cancel();
     _timer = null;
     try {
@@ -219,34 +337,56 @@ class SyncService {
     } catch (_) {}
     _store = null;
     final prefs = await SharedPreferences.getInstance();
-    for (final key in [_onKey, _emailKey, _pageIdKey, _lastKey, _signedInKey, _seenKey, _hashKey]) {
+    for (final key in [
+      _onKey, _emailKey, _pageIdKey, _lastKey, _signedInKey, _seenKey,
+      _hashKey, _askingKey, _clearedKey,
+    ]) {
       await prefs.remove(key);
     }
-    status.value = SyncStatus(removedCount: status.value.removedCount);
+    status.value = const SyncStatus();
   }
 
-  /// Deletes everything synced from the account, turns sync off here, and
-  /// leaves a note that turns it off on the other devices too (their own
-  /// lists stay). The lists on this device stay.
+  /// Deletes the account's synced data — My List, Continue Watching,
+  /// episode progress, language choices, the Gemini key, the copies last
+  /// played — from it and from every device signed in to it, this one
+  /// included. Nobody is signed out: the lists just start again, empty.
+  ///
+  /// Every page but this device's is deleted, and this one's holds a
+  /// removal of everything, newer than any copy anywhere, so a device
+  /// that syncs later drops its copies too.
   Future<void> deleteSyncedData() async {
-    final link = GoogleLink.forThisDevice();
-    if (link == null) return;
-    final store = _storeFor(link);
-    final files = await store.listFiles();
-    DriveFile? control;
-    for (final f in files) {
-      if (f.name == DriveStore.controlName) control = f;
+    final store = _storeFor(_link());
+    _holding = true;
+    try {
+      await _running;
+      final prefs = await SharedPreferences.getInstance();
+      final ledger = SyncLedger();
+      final files = await store.listFiles();
+      final account = await _readAccount(store, files: files);
+      final local = await SyncBridge.gather();
+      final t = ledger.now();
+      final everything = SyncData.merge([local, account.data], now: t);
+      await SyncBridge.apply(SyncData.removalOfAll(everything, t));
+      await prefs.setInt(_clearedKey, t);
+
+      final myName = DriveStore.pageName(await _deviceId(prefs));
+      DriveFile? mine;
+      for (final f in files) {
+        if (f.name == myName) mine = f;
+      }
+      final page = await _pageToSave(prefs);
+      final saved = await _savePage(store, page, myName, mine);
+      for (final f in files) {
+        if (f.name != myName) await store.delete(f.id);
+      }
+      await prefs.setString(_seenKey, jsonEncode({saved.id: saved.version}));
+      await prefs.remove(_removalKey);
+      await SyncSnapshots.dropBeforeRemoval();
+      _syncedGeneration = ledger.generation;
+      status.value = status.value.copyWith(removedCount: 0, problem: () => null);
+    } finally {
+      _holding = false;
     }
-    await store.save(
-      id: control?.id,
-      name: DriveStore.controlName,
-      bytes: Uint8List.fromList(utf8.encode(jsonEncode({'stopped_at': SyncLedger().now()}))),
-      contentType: 'application/json',
-    );
-    for (final f in files) {
-      if (f.name != DriveStore.controlName) await store.delete(f.id);
-    }
-    await turnOff();
   }
 
   // --- When to sync ---
@@ -267,8 +407,8 @@ class SyncService {
   void _onLocalChange(String section) {
     if (!status.value.on) return;
     // My List and language choices change now and then, and are wanted on
-    // the other devices soon: out in a few seconds. Watch progress changes
-    // every few seconds while playing: gathered up.
+    // the other devices soon: out at once. Watch progress changes every
+    // few seconds while playing: gathered up.
     if (section == 'list' || section == 'settings') {
       final at = _timerAt;
       if (_timer == null || at == null ||
@@ -315,9 +455,11 @@ class SyncService {
   // --- Syncing ---
 
   /// Syncs now, unless one's running (then once more after it) or it's
-  /// waiting after failures — [userAsked] doesn't wait.
+  /// waiting after failures — [userAsked] doesn't wait. Not while asking
+  /// whether this device's titles join the account, nor while deleting or
+  /// signing out.
   Future<void> syncNow({bool userAsked = false}) async {
-    if (!status.value.on) return;
+    if (!status.value.on || status.value.asking != null || _holding) return;
     final running = _running;
     if (running != null) {
       _again = true;
@@ -391,11 +533,30 @@ class SyncService {
     _schedule(Duration(minutes: minutes));
   }
 
+  /// Every device's page in the account (this one's too), combined; and
+  /// how many there were.
+  Future<({SyncData data, int pages})> _readAccount(DriveStore store,
+      {List<DriveFile>? files}) async {
+    final pages = <SyncData>[];
+    for (final f in files ?? await store.listFiles()) {
+      if (!_isPage(f)) continue;
+      final page = await store.readPage(f.id);
+      if (page != null) pages.add(page);
+    }
+    return (
+      data: SyncData.merge(pages, now: SyncLedger().now()),
+      pages: pages.length,
+    );
+  }
+
+  static bool _isPage(DriveFile f) =>
+      f.name.startsWith(DriveStore.pagePrefix) &&
+      f.name.endsWith(DriveStore.pageSuffix);
+
   /// One sync. Returns a problem that didn't stop it (needsUpdate), or
   /// null.
   Future<SyncProblem?> _syncOnce() async {
-    final link = GoogleLink.forThisDevice();
-    if (link == null) throw const SyncException(SyncProblem.other, 'not set up');
+    final link = _link();
     final flags = FeatureFlagsService();
     final version = (await PackageInfo.fromPlatform()).version;
     if (!flags.syncEnabled || flags.syncBlocked(version)) {
@@ -411,39 +572,20 @@ class SyncService {
       await ledger.setOffset(offset);
     }
 
-    // Synced data deleted from another device since this one signed in.
-    for (final f in files) {
-      if (f.name != DriveStore.controlName) continue;
-      try {
-        final json = jsonDecode(utf8.decode(await store.download(f.id)));
-        final stoppedAt = json is Map ? json['stopped_at'] : null;
-        final signedInAt = prefs.getInt(_signedInKey) ?? 0;
-        if (stoppedAt is num && stoppedAt > signedInAt) {
-          await turnOff();
-          _notices.add('Sync was turned off from another device. Your lists '
-              'here are kept.');
-          return null;
-        }
-      } catch (_) {}
-    }
-
     final myName = DriveStore.pageName(await _deviceId(prefs));
     DriveFile? mine;
-    final others = <DriveFile>[];
+    final pages = <DriveFile>[];
     for (final f in files) {
-      if (f.name == myName) {
-        mine = f;
-      } else if (f.name.startsWith(DriveStore.pagePrefix) &&
-          f.name.endsWith(DriveStore.pageSuffix)) {
-        others.add(f);
-      }
+      if (f.name == myName) mine = f;
+      if (_isPage(f)) pages.add(f);
     }
 
-    // Only pages that changed since they were last combined in.
+    // Only pages that changed since they were last combined in — this
+    // device's own too, which after signing in again holds its lists.
     final seen = _readSeen(prefs);
     final fresh = <DriveFile, SyncData>{};
     var newerApp = false;
-    for (final f in others) {
+    for (final f in pages) {
       if (seen[f.id] == f.version) continue;
       final page = await store.readPage(f.id);
       if (page == null) continue;
@@ -458,21 +600,34 @@ class SyncService {
       final now = ledger.now();
       final before = SyncData.merge([local], now: now);
       final merged = SyncData.merge([local, ...fresh.values], now: now);
+
+      // Deleted on purpose on another device since this one last looked.
+      final clearedAt = merged.clearedAt;
+      final known = prefs.getInt(_clearedKey) ?? 0;
+      final deleted = clearedAt != null && clearedAt > known;
+
       if (_sameItems(before, merged)) {
+        if (deleted) await prefs.setInt(_clearedKey, clearedAt);
         _syncedGeneration = generation;
         break;
       }
 
       final removed = _removedCount(before, merged);
       final total = before.live('list').length + before.live('history').length;
-      final big = removed >= _bigRemoval && removed * 4 >= total;
+      final big = !deleted && removed >= _bigRemoval && removed * 4 >= total;
       if (big) await SyncSnapshots.keepBeforeRemoval(local);
 
       // Something changed here meanwhile: read it again, so it's kept.
       if (ledger.generation != generation && attempt < 5) continue;
       await SyncBridge.apply(merged);
       _syncedGeneration = ledger.generation;
-      if (big) {
+      if (deleted) {
+        await prefs.setInt(_clearedKey, clearedAt);
+        await prefs.remove(_removalKey);
+        await SyncSnapshots.dropBeforeRemoval();
+        status.value = status.value.copyWith(removedCount: 0);
+        _notices.add('Your synced lists were deleted from another device.');
+      } else if (big) {
         await prefs.setString(_removalKey,
             jsonEncode({'count': removed, 'at': DateTime.now().millisecondsSinceEpoch}));
         status.value = status.value.copyWith(removedCount: removed);
@@ -489,31 +644,31 @@ class SyncService {
     }
 
     // This device's page: saved only when it changed.
-    final page = SyncData.merge([await SyncBridge.gather()], now: ledger.now());
+    final page = await _pageToSave(prefs);
     final hash = sha1.convert(utf8.encode(SyncData.canonicalJson(page.toJson()))).toString();
     if (mine == null || prefs.getString(_hashKey) != hash) {
-      final bytes = DriveStore.encodePage(page);
-      DriveFile saved;
-      try {
-        saved = await store.save(id: mine?.id, name: myName, bytes: bytes);
-      } on SyncException catch (e) {
-        if (mine == null || e.detail != '404') rethrow;
-        saved = await store.save(name: myName, bytes: bytes);
-      }
-      await prefs.setString(_pageIdKey, saved.id);
+      final saved = await _savePage(store, page, myName, mine);
       await prefs.setString(_hashKey, hash);
+      // Already combined in: not read back next time.
+      fresh.removeWhere((f, _) => f.id == saved.id);
+      seen[saved.id] = saved.version;
     }
 
     // Pages of devices not seen for months: everything on them is here
     // (and on this device's page) by now.
     final cutoff = DateTime.now().subtract(_pageLife);
-    for (final f in others) {
+    for (final f in pages) {
+      if (f.name == myName) continue;
       final combined = seen[f.id] == f.version || fresh.containsKey(f);
       if (combined && f.modified.isBefore(cutoff)) {
         await store.delete(f.id);
         seen.remove(f.id);
         fresh.remove(f);
       }
+    }
+    // Popcorn 4.2.0's note from deleting synced data: done with.
+    for (final f in files) {
+      if (f.name == DriveStore.controlName) await store.delete(f.id);
     }
     _saveSeen(prefs, seen, fresh, files);
 
@@ -525,6 +680,29 @@ class SyncService {
       }
     }
     return null;
+  }
+
+  /// This device's lists as its page, with when the account's data was
+  /// last deleted, so that goes on to every device.
+  Future<SyncData> _pageToSave(SharedPreferences prefs) async {
+    final page = SyncData.merge([await SyncBridge.gather()], now: SyncLedger().now());
+    page.clearedAt = prefs.getInt(_clearedKey);
+    return page;
+  }
+
+  Future<DriveFile> _savePage(
+      DriveStore store, SyncData page, String name, DriveFile? mine) async {
+    final bytes = DriveStore.encodePage(page);
+    DriveFile saved;
+    try {
+      saved = await store.save(id: mine?.id, name: name, bytes: bytes);
+    } on SyncException catch (e) {
+      if (mine == null || e.detail != '404') rethrow;
+      saved = await store.save(name: name, bytes: bytes);
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_pageIdKey, saved.id);
+    return saved;
   }
 
   static bool _sameItems(SyncData a, SyncData b) =>
@@ -559,7 +737,8 @@ class SyncService {
       if (e.value.format <= SyncData.currentFormat) seen[e.key.id] = e.key.version;
     }
     final ids = files.map((f) => f.id).toSet();
-    seen.removeWhere((id, _) => !ids.contains(id));
+    final saved = prefs.getString(_pageIdKey);
+    seen.removeWhere((id, _) => !ids.contains(id) && id != saved);
     unawaited(prefs.setString(_seenKey, jsonEncode(seen)));
   }
 
@@ -607,5 +786,21 @@ class SyncService {
     // So it goes out, as any change here does.
     ledger.touchAll('list', const <String>[]);
     if (status.value.on) unawaited(syncNow(userAsked: true));
+  }
+
+  /// For tests: back to signed out, with nothing pending.
+  @visibleForTesting
+  void debugReset() {
+    _timer?.cancel();
+    _timer = null;
+    _running = null;
+    _again = false;
+    _holding = false;
+    _failures = 0;
+    _retryAfter = null;
+    _lastAttempt = null;
+    _syncedGeneration = -1;
+    _store = null;
+    status.value = const SyncStatus();
   }
 }

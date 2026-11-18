@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'glass_blur.dart';
 
 import '../theme/iridescent.dart';
 import 'frosted_logo_layout.dart';
@@ -23,13 +22,25 @@ class StatusScreen extends StatefulWidget {
 
   final String message;
 
-  /// Draws the message instead, in the style given (a link in it, say).
-  final Widget Function(TextStyle style)? messageBuilder;
+  /// Draws the message instead, in the style and alignment given (a link
+  /// in it, say).
+  final Widget Function(TextStyle style, TextAlign align)? messageBuilder;
+
+  /// Other messages that can take this one's place as the screen goes on
+  /// (the update's steps): room is kept for the longest, so nothing on the
+  /// screen moves when they change. Beside the logo on a wide window the
+  /// words are centred top to bottom, and a message a line longer or
+  /// shorter moved the title and the button with it.
+  final List<String> roomFor;
 
   /// The button under the message, where the welcome screen's Get Started
   /// is. Without one, its place is kept (empty), so every one of these
   /// screens has the welcome screen's layout exactly.
   final Widget? footer;
+
+  /// Instead of a button, a line saying what the screen is waiting for
+  /// ("Waiting for connection…"), fading gently in and out.
+  final String? waitingFor;
 
   const StatusScreen({
     super.key,
@@ -37,7 +48,9 @@ class StatusScreen extends StatefulWidget {
     required this.highlight,
     required this.message,
     this.messageBuilder,
+    this.roomFor = const [],
     this.footer,
+    this.waitingFor,
   });
 
   @override
@@ -94,18 +107,55 @@ class _StatusScreenState extends State<StatusScreen>
               color: Colors.white.withValues(alpha: 0.7),
               height: 1.5,
             );
-            return widget.messageBuilder?.call(style) ??
-                Text(
-                  widget.message,
-                  textAlign: sideBySide ? TextAlign.start : TextAlign.center,
-                  style: style,
-                );
+            final align = sideBySide ? TextAlign.start : TextAlign.center;
+            final message = widget.messageBuilder?.call(style, align) ??
+                Text(widget.message, textAlign: align, style: style);
+            if (widget.roomFor.isEmpty) return message;
+            // The longest of them sets the height, unseen; the message is
+            // drawn over it, from the top.
+            return Stack(
+              alignment: sideBySide
+                  ? AlignmentDirectional.topStart
+                  : AlignmentDirectional.topCenter,
+              children: [
+                for (final other in widget.roomFor)
+                  Visibility(
+                    visible: false,
+                    maintainSize: true,
+                    maintainAnimation: true,
+                    maintainState: true,
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: Text(other, textAlign: align, style: style),
+                    ),
+                  ),
+                SizedBox(width: double.infinity, child: message),
+              ],
+            );
           }),
           // As the welcome screen: the button's gap and place, kept even
           // without one.
           SizedBox(height: large ? 40 : 32),
-          widget.footer ??
-              const SizedBox(height: StatusPrimaryButton.height),
+          if (widget.waitingFor != null)
+            SizedBox(
+              height: StatusPrimaryButton.height,
+              child: Align(
+                alignment: sideBySide
+                    ? AlignmentDirectional.centerStart
+                    : Alignment.center,
+                child: _FadingText(
+                  widget.waitingFor!,
+                  style: TextStyle(
+                    fontSize: large ? 17 : 15,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white.withValues(alpha: 0.85),
+                  ),
+                ),
+              ),
+            )
+          else
+            widget.footer ??
+                const SizedBox(height: StatusPrimaryButton.height),
         ],
       ),
     );
@@ -241,23 +291,27 @@ class StatusPrimaryButton extends StatelessWidget {
   }
 }
 
-/// Frosted pill with a softly pulsing dot, for passive states such as
-/// "Waiting for connection".
-class StatusPill extends StatefulWidget {
-  final String label;
+/// Words that fade gently in and out, as something waited for: the offline
+/// screen's "Waiting for connection…".
+class _FadingText extends StatefulWidget {
+  final String text;
+  final TextStyle style;
 
-  const StatusPill({super.key, required this.label});
+  const _FadingText(this.text, {required this.style});
 
   @override
-  State<StatusPill> createState() => _StatusPillState();
+  State<_FadingText> createState() => _FadingTextState();
 }
 
-class _StatusPillState extends State<StatusPill>
+class _FadingTextState extends State<_FadingText>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pulse = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 900),
+    duration: const Duration(milliseconds: 1400),
   )..repeat(reverse: true);
+
+  late final Animation<double> _opacity = Tween(begin: 1.0, end: 0.35)
+      .animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
 
   @override
   void dispose() {
@@ -267,43 +321,9 @@ class _StatusPillState extends State<StatusPill>
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(30),
-      child: GlassBlur(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(30),
-            color: kGlassTint,
-            border: Border.all(color: kGlassEdge),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              FadeTransition(
-                opacity: Tween(begin: 1.0, end: 0.25).animate(_pulse),
-                child: Container(
-                  width: 8,
-                  height: 8,
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                widget.label,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white.withValues(alpha: 0.85),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    return FadeTransition(
+      opacity: _opacity,
+      child: Text(widget.text, style: widget.style),
     );
   }
 }

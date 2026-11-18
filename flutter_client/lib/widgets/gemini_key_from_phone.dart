@@ -170,9 +170,11 @@ class _GeminiKeyFromPhoneState extends State<GeminiKeyFromPhone> {
           ],
           const SizedBox(height: 14),
           const Text(
-            'Used for Sinhala subtitles and Popcorn Ask, and kept only on '
-            'this device. On the free plan, Google may use what\'s sent '
-            '(subtitle lines and your questions) to improve its services.',
+            'Used for Sinhala subtitles and Popcorn Ask. Kept on this TV '
+            'and, if you\'ve signed in to sync, in your Google Drive, so your '
+            'other devices have it too. On the free plan, Google may use '
+            'what\'s sent (subtitle lines and your questions) to improve its '
+            'services.',
             style: small,
           ),
           const SizedBox(height: 18),

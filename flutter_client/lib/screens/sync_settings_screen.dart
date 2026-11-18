@@ -7,12 +7,12 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../services/sync/drive_store.dart';
 import '../services/sync/google_link.dart';
 import '../services/sync/sync_service.dart';
-import '../widgets/glass_blur.dart';
 import '../widgets/glass_dialog.dart' show GlassDialogButton;
 import '../widgets/settings_parts.dart';
 
 /// What Settings says about the last sync.
 String syncStatusText(SyncStatus s) {
+  if (s.asking != null) return 'Waiting for your choice above';
   if (s.busy) return 'Syncing…';
   switch (s.problem) {
     case SyncProblem.signInAgain:
@@ -43,23 +43,33 @@ String syncStatusText(SyncStatus s) {
   return 'Synced on ${last.day} ${months[last.month - 1]}';
 }
 
-/// Whether [s] shows a problem in red (pausing from the website isn't one
-/// the viewer can do anything about, or needs to).
+/// Whether [s] needs the viewer's attention: a problem they can do
+/// something about (pausing from the website isn't one), or a question.
 bool syncShowsProblem(SyncStatus s) =>
-    !s.busy && s.problem != null && s.problem != SyncProblem.pausedRemotely;
+    s.asking != null ||
+    (!s.busy && s.problem != null && s.problem != SyncProblem.pausedRemotely);
 
-/// Settings › Sync: everything on the page, nothing in popups. The switch
-/// and what syncing does; signing in, shown here as it happens (Google's
-/// own window on a phone, the browser on a computer, the code to enter
-/// on a phone on a TV); once on, the account and how the last sync went
-/// (tap to sync now), bringing back what a big removal took, and deleting
-/// what's synced — confirmed right here.
+const _red = Color(0xFFFF8A80);
+
+/// Settings › Sync: everything on the page, nothing in popups.
+///
+/// Signed out: "Sign in with Google", and signing in shown here as it
+/// happens (Google's own window on a phone, the browser on a computer,
+/// the code to enter on a phone on a TV). Then, if this device has titles
+/// the account doesn't, the question whether they join it.
+///
+/// Signed in: the account and how the last sync went (tap to sync now),
+/// bringing back what a big removal took, signing out and deleting what's
+/// synced — each asked about right here before it happens.
 class SyncSettingsScreen extends StatefulWidget {
   const SyncSettingsScreen({super.key});
 
   @override
   State<SyncSettingsScreen> createState() => _SyncSettingsScreenState();
 }
+
+/// Which "are you sure" is open on the page.
+enum _Confirm { none, signOut, signOutUnsaved, delete }
 
 class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
   // "Synced 3 min ago" moves on by itself.
@@ -70,8 +80,10 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
   DeviceCode? _code;
   String? _signInProblem;
 
-  bool _confirmingDelete = false;
-  bool _deleting = false;
+  _Confirm _confirm = _Confirm.none;
+
+  /// Signing out, deleting, or answering the question: its row shows it.
+  String? _working;
 
   /// A line under the card saying what just happened.
   String? _note;
@@ -109,7 +121,7 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
       _code = null;
       _signInProblem = null;
       _note = null;
-      _confirmingDelete = false;
+      _confirm = _Confirm.none;
     });
     try {
       await SyncService().turnOn(
@@ -120,8 +132,9 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
       );
       if (!mounted) return;
       setState(() => _signingIn = false);
-      if (SyncService().status.value.problem == null) {
-        _say('Sync is on. Your lists are up to date.');
+      final s = SyncService().status.value;
+      if (s.asking == null && s.problem == null) {
+        _say('Signed in. Your lists are up to date.');
       }
     } catch (e) {
       if (!mounted) return;
@@ -131,9 +144,9 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
         final detail = e is SyncException ? e.detail.toLowerCase() : '';
         if (detail.contains('cancel')) return; // Closed Google's window.
         _signInProblem = detail.contains('expired')
-            ? 'The code ran out. Turn sync on again for a new one.'
+            ? 'The code ran out. Sign in again for a new one.'
             : detail.contains('access_denied')
-                ? 'Sign-in was turned down. Turn sync on again to retry.'
+                ? 'Sign-in was turned down. Try again if you meant to sign in.'
                 : "Couldn't sign in to Google. Check the internet and try again.";
       });
     }
@@ -145,24 +158,45 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
     setState(() => _signingIn = false);
   }
 
-  Future<void> _toggle(bool on) async {
-    if (_signingIn) {
-      _cancelSignIn();
-      return;
-    }
-    if (!on) {
-      await _signIn();
-      return;
-    }
-    await SyncService().turnOff();
-    _say('Sync is off on this device. Your lists stay here.');
-  }
-
   Future<void> _syncNow() async {
     final service = SyncService();
     if (service.status.value.busy) return;
     _say(null);
     await service.syncNow(userAsked: true);
+  }
+
+  Future<void> _answer({required bool add}) async {
+    setState(() => _working = add ? 'Adding…' : 'Removing…');
+    var ok = true;
+    try {
+      if (add) {
+        await SyncService().addDeviceLists();
+      } else {
+        await SyncService().keepAccountListsOnly();
+      }
+    } catch (_) {
+      ok = false;
+    }
+    if (!mounted) return;
+    setState(() => _working = null);
+    if (!ok) {
+      _say("Couldn't reach Google. Check the internet and try again.", problem: true);
+    } else {
+      _say(add
+          ? "Added to your account. They'll be on all your devices."
+          : 'This device now shows only what your account has.');
+    }
+  }
+
+  Future<void> _signOut({bool evenIfUnsaved = false}) async {
+    setState(() => _working = 'Signing out…');
+    final done = await SyncService().signOut(evenIfUnsaved: evenIfUnsaved);
+    if (!mounted) return;
+    setState(() {
+      _working = null;
+      _confirm = done ? _Confirm.none : _Confirm.signOutUnsaved;
+    });
+    if (done) _say('Signed out. Your lists are kept in your Google account.');
   }
 
   Future<void> _bringBack() async {
@@ -172,7 +206,7 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
   }
 
   Future<void> _delete() async {
-    setState(() => _deleting = true);
+    setState(() => _working = 'Deleting…');
     var ok = true;
     try {
       await SyncService().deleteSyncedData();
@@ -181,13 +215,12 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
     }
     if (!mounted) return;
     setState(() {
-      _deleting = false;
-      _confirmingDelete = false;
+      _working = null;
+      _confirm = _Confirm.none;
     });
     _say(
       ok
-          ? 'Synced data deleted, and sync is off on all your devices. Your '
-              'lists stay on each of them.'
+          ? 'Synced data deleted from your account and all your devices.'
           : "Couldn't reach Google to delete it. Try again later.",
       problem: !ok,
     );
@@ -203,67 +236,22 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
           builder: (context, s, _) => Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SettingsGroup(
-                footnote: 'Keeps My List, Continue Watching and your language '
-                    'choices the same on every device you sign in on. Popcorn '
-                    'keeps them in a hidden file in your Google Drive that '
-                    'only Popcorn can open. Nothing else in your Drive is '
-                    'touched.',
-                children: [
-                  SettingsRow(
-                    icon: Icons.sync_rounded,
-                    title: 'Sync with Google Drive',
-                    onTap: () => _toggle(s.on),
-                    trailing: GlassSwitch(
-                      value: s.on || _signingIn,
-                      onChanged: (_) => _toggle(s.on),
-                    ),
-                  ),
-                  if (s.on)
-                    SettingsRow(
-                      icon: Icons.account_circle_outlined,
-                      title: s.email ?? 'Google account',
-                      subtitle: syncStatusText(s),
-                      subtitleColor:
-                          syncShowsProblem(s) ? const Color(0xFFFF8A80) : null,
-                      onTap: _syncNow,
-                      trailing: s.busy
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                  color: Colors.white54, strokeWidth: 2),
-                            )
-                          : const Icon(Icons.refresh_rounded,
-                              color: Colors.white38, size: 20),
-                    ),
-                  if (s.on && s.problem == SyncProblem.signInAgain && !_signingIn)
-                    SettingsRow(
-                      icon: Icons.login_rounded,
-                      title: 'Sign in again',
-                      onTap: _signIn,
-                    ),
-                  if (s.removedCount > 0)
-                    SettingsRow(
-                      icon: Icons.undo_rounded,
-                      title: 'Bring back ${s.removedCount} removed titles',
-                      subtitle: 'Removed from another device',
-                      onTap: _bringBack,
-                    ),
-                  if (s.on) _deleteRow(),
-                ],
-              ),
-              if (_signingIn) ...[
+              if (s.on && s.asking != null) ...[
+                _AskPanel(
+                  onlyHere: s.asking!,
+                  working: _working,
+                  onAnswer: (add) => _answer(add: add),
+                ),
+                const SizedBox(height: 20),
+              ],
+              if (s.on) _signedIn(s) else _signedOut(),
+              if (_signingIn && !s.on) ...[
                 const SizedBox(height: 20),
                 _SignInPanel(code: _code, onCancel: _cancelSignIn),
               ],
-              if (_signInProblem != null)
-                SettingsNote(_signInProblem!, color: const Color(0xFFFF8A80)),
+              if (_signInProblem != null) SettingsNote(_signInProblem!, color: _red),
               if (_note != null)
-                SettingsNote(
-                  _note!,
-                  color: _noteIsProblem ? const Color(0xFFFF8A80) : Colors.white70,
-                ),
+                SettingsNote(_note!, color: _noteIsProblem ? _red : Colors.white70),
             ],
           ),
         ),
@@ -271,66 +259,275 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
     );
   }
 
+  Widget _signedOut() {
+    return SettingsGroup(
+      footnote: 'Keeps My List, Continue Watching, your language choices and '
+          'your Gemini key the same on every device you sign in on. Popcorn '
+          'keeps them in a hidden file in your Google Drive that only Popcorn '
+          'can open. Nothing else in your Drive is touched.',
+      children: [
+        SettingsRow(
+          icon: Icons.login_rounded,
+          title: 'Sign in with Google',
+          onTap: _signingIn ? null : _signIn,
+          trailing: const SettingsChevron(),
+        ),
+      ],
+    );
+  }
+
+  Widget _signedIn(SyncStatus s) {
+    return SettingsGroup(
+      footnote: 'Your lists belong to your Google account: signing out takes '
+          'them off this device, and signing in again brings them back.',
+      children: [
+        SettingsRow(
+          icon: Icons.account_circle_outlined,
+          title: s.email ?? 'Google account',
+          subtitle: syncStatusText(s),
+          subtitleColor: syncShowsProblem(s) ? _red : null,
+          onTap: s.asking == null ? _syncNow : null,
+          trailing: s.busy
+              ? const _Spinner()
+              : s.asking == null
+                  ? const Icon(Icons.refresh_rounded, color: Colors.white38, size: 20)
+                  : null,
+        ),
+        if (s.problem == SyncProblem.signInAgain && !_signingIn)
+          SettingsRow(
+            icon: Icons.login_rounded,
+            title: 'Sign in again',
+            onTap: _signIn,
+          ),
+        if (s.removedCount > 0)
+          SettingsRow(
+            icon: Icons.undo_rounded,
+            title: 'Bring back ${s.removedCount} removed titles',
+            subtitle: 'Removed from another device',
+            onTap: _bringBack,
+          ),
+        _signOutRow(),
+        _deleteRow(),
+      ],
+    );
+  }
+
+  Widget _signOutRow() {
+    if (_working == 'Signing out…') {
+      return const SettingsRow(
+        icon: Icons.logout_rounded,
+        title: 'Signing out…',
+        trailing: _Spinner(),
+      );
+    }
+    if (_confirm == _Confirm.signOut) {
+      return _ConfirmPanel(
+        title: 'Sign out on this device?',
+        message: 'My List, Continue Watching, your language choices and your '
+            'Gemini key will be removed from this device. They stay in your '
+            'Google account and come back when you sign in again.',
+        cancelLabel: 'Cancel',
+        confirmLabel: 'Sign out',
+        onCancel: () => setState(() => _confirm = _Confirm.none),
+        onConfirm: () => _signOut(),
+      );
+    }
+    if (_confirm == _Confirm.signOutUnsaved) {
+      return _ConfirmPanel(
+        title: "Your latest changes aren't saved yet",
+        message: "They couldn't reach Google Drive (check the internet). If you "
+            "sign out now, they'll be lost. Everything else stays in your "
+            'Google account.',
+        cancelLabel: 'Cancel',
+        confirmLabel: 'Sign out anyway',
+        onCancel: () => setState(() => _confirm = _Confirm.none),
+        onConfirm: () => _signOut(evenIfUnsaved: true),
+      );
+    }
+    return SettingsRow(
+      icon: Icons.logout_rounded,
+      title: 'Sign out',
+      onTap: _working != null
+          ? null
+          : () => setState(() {
+                _confirm = _Confirm.signOut;
+                _note = null;
+              }),
+    );
+  }
+
   /// "Delete synced data", asking right here before it does.
   Widget _deleteRow() {
-    if (_deleting) {
+    if (_working == 'Deleting…') {
       return const SettingsRow(
         icon: Icons.delete_outline_rounded,
         title: 'Deleting…',
-        trailing: SizedBox(
-          width: 18,
-          height: 18,
-          child: CircularProgressIndicator(color: Colors.white54, strokeWidth: 2),
-        ),
+        trailing: _Spinner(),
       );
     }
-    if (!_confirmingDelete) {
-      return SettingsRow(
-        icon: Icons.delete_outline_rounded,
-        title: 'Delete synced data',
-        onTap: () => setState(() {
-          _confirmingDelete = true;
-          _note = null;
-        }),
+    if (_confirm == _Confirm.delete) {
+      return _ConfirmPanel(
+        title: 'Delete synced data?',
+        message: 'This removes My List, Continue Watching, your language '
+            'choices and your Gemini key from your Google account and from '
+            'every device signed in to it. Nobody is signed out.',
+        cancelLabel: 'Keep it',
+        confirmLabel: 'Delete',
+        onCancel: () => setState(() => _confirm = _Confirm.none),
+        onConfirm: _delete,
       );
     }
+    return SettingsRow(
+      icon: Icons.delete_outline_rounded,
+      title: 'Delete synced data',
+      onTap: _working != null
+          ? null
+          : () => setState(() {
+                _confirm = _Confirm.delete;
+                _note = null;
+              }),
+    );
+  }
+}
+
+class _Spinner extends StatelessWidget {
+  const _Spinner();
+
+  @override
+  Widget build(BuildContext context) => const SizedBox(
+        width: 18,
+        height: 18,
+        child: CircularProgressIndicator(color: Colors.white54, strokeWidth: 2),
+      );
+}
+
+/// An "are you sure", in place of the row it's for.
+class _ConfirmPanel extends StatelessWidget {
+  final String title;
+  final String message;
+  final String cancelLabel;
+  final String confirmLabel;
+  final VoidCallback onCancel;
+  final VoidCallback onConfirm;
+
+  const _ConfirmPanel({
+    required this.title,
+    required this.message,
+    required this.cancelLabel,
+    required this.confirmLabel,
+    required this.onCancel,
+    required this.onConfirm,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Delete synced data?',
-            style: TextStyle(
+          Text(
+            title,
+            style: const TextStyle(
                 color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 6),
-          const Text(
-            "Removes Popcorn's hidden file from your Google Drive and turns "
-            'sync off on all your devices. The lists on each device stay as '
-            'they are.',
-            style: TextStyle(color: Colors.white70, fontSize: 13.5, height: 1.4),
+          Text(
+            message,
+            style: const TextStyle(color: Colors.white70, fontSize: 13.5, height: 1.4),
           ),
           const SizedBox(height: 14),
           Row(
             children: [
-              Expanded(
-                child: GlassDialogButton(
-                  label: 'Keep it',
-                  onTap: () => setState(() => _confirmingDelete = false),
-                ),
-              ),
+              Expanded(child: GlassDialogButton(label: cancelLabel, onTap: onCancel)),
               const SizedBox(width: 10),
               Expanded(
                 child: GlassDialogButton(
-                  label: 'Delete',
+                  label: confirmLabel,
                   primary: true,
                   destructive: true,
-                  onTap: _delete,
+                  onTap: onConfirm,
                 ),
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Just signed in, and this device has titles the account doesn't: do
+/// they join the account, or go?
+class _AskPanel extends StatelessWidget {
+  final OnlyHere onlyHere;
+  final String? working;
+  final ValueChanged<bool> onAnswer;
+
+  const _AskPanel({
+    required this.onlyHere,
+    required this.working,
+    required this.onAnswer,
+  });
+
+  static String _titles(int n) => n == 1 ? '1 title' : '$n titles';
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = [
+      if (onlyHere.list > 0) '${_titles(onlyHere.list)} in My List',
+      if (onlyHere.history > 0) '${_titles(onlyHere.history)} in Continue Watching',
+    ];
+    final one = onlyHere.list + onlyHere.history == 1;
+    final it = one ? 'it' : 'them';
+    return SettingsCard(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            one
+                ? "This device has a title your account doesn't"
+                : "This device has titles your account doesn't",
+            style: const TextStyle(
+                color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${parts.join(' and ')}. Add $it to your account to have $it on '
+            'all your devices, or remove $it from this device to see only '
+            'what your account has.',
+            style: const TextStyle(color: Colors.white70, fontSize: 13.5, height: 1.4),
+          ),
+          const SizedBox(height: 14),
+          if (working != null)
+            Row(
+              children: [
+                const _Spinner(),
+                const SizedBox(width: 10),
+                Text(working!, style: const TextStyle(color: Colors.white70, fontSize: 14)),
+              ],
+            )
+          else ...[
+            // One above the other: side by side, the labels don't fit a
+            // phone's width.
+            SizedBox(
+              width: double.infinity,
+              child: GlassDialogButton(
+                label: 'Add to my account',
+                primary: true,
+                onTap: () => onAnswer(true),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: GlassDialogButton(
+                label: 'Remove from this device',
+                onTap: () => onAnswer(false),
+              ),
+            ),
+          ],
         ],
       ),
     );

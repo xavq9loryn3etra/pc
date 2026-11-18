@@ -161,7 +161,7 @@ class _SyncRow extends StatelessWidget {
         title: 'Sync',
         onTap: () => openSettingsPage(context, const SyncSettingsScreen()),
         trailing: SettingsChevron(
-          value: s.on ? 'On' : 'Off',
+          value: s.on ? (s.asking != null ? 'Waiting' : 'On') : 'Off',
           valueColor: s.on && syncShowsProblem(s)
               ? const Color(0xFFFF8A80)
               : Colors.white54,

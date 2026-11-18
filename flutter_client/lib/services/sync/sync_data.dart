@@ -53,11 +53,18 @@ class SyncData {
   /// Anything else in the file (from a newer app version), carried along.
   final Map<String, dynamic> extra;
 
+  /// When the account's synced data was last deleted ("Delete synced
+  /// data"), if ever: the removals that came with it were asked for, so a
+  /// device taking them in doesn't treat them as an accident (see
+  /// SyncService's big-removal safeguard).
+  int? clearedAt;
+
   SyncData({
     this.format = currentFormat,
     Map<String, Map<String, Map<String, dynamic>>>? items,
     Map<String, num>? lengths,
     Map<String, dynamic>? extra,
+    this.clearedAt,
   })  : items = {
           for (final s in sections) s: {...?items?[s]},
         },
@@ -67,7 +74,7 @@ class SyncData {
   Map<String, Map<String, dynamic>> operator [](String section) =>
       items[section]!;
 
-  static const _known = {'format', 'lengths', ...sections};
+  static const _known = {'format', 'lengths', 'cleared_at', ...sections};
 
   /// Reads a page. Anything unreadable in it is skipped, item by item:
   /// one bad entry never costs the rest.
@@ -96,10 +103,12 @@ class SyncData {
         }
       }
     }
+    final clearedAt = json['cleared_at'];
     return SyncData(
       format: format is int ? format : currentFormat,
       items: items,
       lengths: lengths,
+      clearedAt: clearedAt is num ? clearedAt.toInt() : null,
       extra: {
         for (final e in json.entries)
           if (!_known.contains(e.key)) e.key: e.value,
@@ -112,6 +121,7 @@ class SyncData {
         'format': format,
         for (final s in sections) s: items[s],
         'lengths': lengths,
+        if (clearedAt != null) 'cleared_at': clearedAt,
       };
 
   static int timeOf(Map<String, dynamic> item) => (item['t'] as num).toInt();
@@ -144,6 +154,10 @@ class SyncData {
     // Rarely matters: extras only come from a newer app version.
     for (final p in pages) {
       out.extra.addAll(p.extra);
+      final cleared = p.clearedAt;
+      if (cleared != null && (out.clearedAt ?? 0) < cleared) {
+        out.clearedAt = cleared;
+      }
     }
     final ceiling = now + const Duration(minutes: 5).inMilliseconds;
     for (final section in sections) {
@@ -192,6 +206,16 @@ class SyncData {
           (_, item) => isRemoved(item) && timeOf(item) < oldest);
     }
   }
+
+  /// Everything in [data] — live or already removed — as removed at [t]:
+  /// what "Delete synced data" leaves, so every device drops it all.
+  static SyncData removalOfAll(SyncData data, int t) => SyncData(
+        clearedAt: t,
+        items: {
+          for (final s in sections)
+            s: {for (final key in data[s].keys) key: {'t': t, 'removed': true}},
+        },
+      );
 
   /// Whether [other] holds exactly the same items.
   bool sameAs(SyncData other) =>

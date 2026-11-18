@@ -1,7 +1,9 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../audio_language_service.dart';
+import '../gemini_key_service.dart';
 import '../saved_movies_service.dart';
+import '../torrent/last_played_torrents.dart';
 import 'sync_data.dart';
 import 'sync_ledger.dart';
 
@@ -15,8 +17,19 @@ class SyncBridge {
   /// The one global setting synced: the subtitle language.
   static const String subtitleLangKey = 'player_subtitle_lang';
 
+  /// What My List's titles leave out of the page: the longest parts of
+  /// it, and loaded afresh anyway when a title's page opens. A device keeps
+  /// its own copies of them (see [apply]).
+  static const _leftOutOfList = {'description', 'trailer_url'};
+
+  /// The settings synced (all text): the subtitle language, each title's
+  /// audio language, the Gemini key, and the copy each title and episode
+  /// last played (and in which language).
   static bool isSyncedSetting(String key) =>
-      key == subtitleLangKey || key.startsWith(AudioLanguageService.keyPrefix);
+      key == subtitleLangKey ||
+      key == GeminiKeyService.prefsKey ||
+      key.startsWith(AudioLanguageService.keyPrefix) ||
+      LastPlayedTorrents.prefixes.any(key.startsWith);
 
   /// This device's saved lists and choices, as a page.
   static Future<SyncData> gather() async {
@@ -25,7 +38,8 @@ class SyncBridge {
     final settings = <String, String>{
       for (final key in prefs.getKeys())
         if (isSyncedSetting(key))
-          if (prefs.get(key) case final String value) key: value,
+          if (prefs.get(key) case final String value)
+            if (value.isNotEmpty || key == subtitleLangKey) key: value,
     };
     final saved = SavedMoviesService().exportForSync();
     return fromLocal(
@@ -55,7 +69,10 @@ class SyncBridge {
       data['list'][key] = {
         // Older than any real change, newest first as the list is.
         't': ledger.changedAt('list', key) ?? favorites.length - i,
-        'v': movie,
+        'v': {
+          for (final e in movie.entries)
+            if (!_leftOutOfList.contains(e.key)) e.key: e.value,
+        },
       };
     }
 
@@ -102,14 +119,35 @@ class SyncBridge {
     return data;
   }
 
+  /// Titles in My List and Continue Watching on this device ([local]) that
+  /// [account] — every device's pages combined — doesn't have: what a
+  /// device signing in is asked about (keep them in the account, or not).
+  static ({int list, int history}) onlyHere(SyncData local, SyncData account) {
+    int count(String section) {
+      final there = account.live(section).map((e) => e.key).toSet();
+      return local.live(section).where((e) => !there.contains(e.key)).length;
+    }
+
+    return (list: count('list'), history: count('history'));
+  }
+
   /// Puts [merged] in place of what's saved here, and records its times.
+  /// With [replace], anything synced that [merged] doesn't have is taken
+  /// away here too — the account's lists only, nothing of this device's.
   ///
   /// Everything in memory is replaced before the first pause, so a change
   /// made meanwhile (SyncLedger.generation) is never overwritten: check for
   /// one right before calling this.
-  static Future<void> apply(SyncData merged) async {
+  static Future<void> apply(SyncData merged, {bool replace = false}) async {
     final live = <String, List<MapEntry<String, Map<String, dynamic>>>>{
       for (final s in SyncData.sections) s: merged.live(s).toList(),
+    };
+
+    // What My List's titles left out of the page, kept from this device's
+    // own copies where it has them.
+    final saved = SavedMoviesService().exportForSync();
+    final here = {
+      for (final m in saved.favorites) '${m['type'] ?? 'movie'}_${m['id']}': m,
     };
 
     SyncLedger().replace(
@@ -139,7 +177,10 @@ class SyncBridge {
       favorites: [
         for (final e in list)
           if (e.value['v'] is Map)
-            Map<String, dynamic>.from(e.value['v'] as Map),
+            {
+              ...?here[e.key],
+              ...Map<String, dynamic>.from(e.value['v'] as Map),
+            },
       ],
       history: {
         for (final e in live['history']!)
@@ -153,19 +194,63 @@ class SyncBridge {
     );
     await saving;
 
-    final settings = <String, String>{
-      for (final e in live['settings']!)
+    await _applySettings(merged, replace: replace);
+  }
+
+  static Future<void> _applySettings(SyncData merged, {required bool replace}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final keep = <String, String>{
+      for (final e in merged.live('settings'))
         if (isSyncedSetting(e.key) && e.value['v'] is String)
           e.key: e.value['v'] as String,
     };
-    await AudioLanguageService().applyFromSync({
-      for (final e in settings.entries)
+    // Taken away: what was removed on another device, and, replacing,
+    // whatever this device has that the account doesn't.
+    final drop = <String>{
+      for (final e in merged['settings'].entries)
+        if (SyncData.isRemoved(e.value)) e.key,
+      if (replace)
+        for (final key in prefs.getKeys())
+          if (isSyncedSetting(key) && !keep.containsKey(key)) key,
+    }..removeWhere(keep.containsKey);
+
+    final languages = AudioLanguageService();
+    await languages.applyFromSync({
+      for (final e in keep.entries)
         if (e.key.startsWith(AudioLanguageService.keyPrefix)) e.key: e.value,
     });
-    final subtitles = settings[subtitleLangKey];
-    if (subtitles != null) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(subtitleLangKey, subtitles);
+    await languages.removeFromSync(
+        drop.where((k) => k.startsWith(AudioLanguageService.keyPrefix)));
+
+    final gemini = GeminiKeyService();
+    if (keep.containsKey(GeminiKeyService.prefsKey)) {
+      await gemini.applyFromSync(keep[GeminiKeyService.prefsKey]);
+    } else if (drop.contains(GeminiKeyService.prefsKey)) {
+      await gemini.applyFromSync(null);
     }
+
+    // The rest are read straight from storage where they're used.
+    for (final e in keep.entries) {
+      if (e.key.startsWith(AudioLanguageService.keyPrefix) ||
+          e.key == GeminiKeyService.prefsKey) {
+        continue;
+      }
+      if (prefs.getString(e.key) != e.value) await prefs.setString(e.key, e.value);
+    }
+    for (final key in drop) {
+      if (key.startsWith(AudioLanguageService.keyPrefix) ||
+          key == GeminiKeyService.prefsKey) {
+        continue;
+      }
+      await prefs.remove(key);
+    }
+  }
+
+  /// Takes away everything synced from this device — My List, Continue
+  /// Watching, episode progress, language choices, the Gemini key, the
+  /// copies last played — and what it recorded of them (signing out).
+  static Future<void> clearLocal() async {
+    await apply(SyncData(), replace: true);
+    SyncLedger().clear();
   }
 }

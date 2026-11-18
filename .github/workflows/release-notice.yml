@@ -2,8 +2,9 @@ name: Release notice
 
 # Tells the owner when a new version is on the download page, by email and
 # in the GitHub app: one short comment by github-actions on this repo's "New
-# versions" issue, which they're subscribed to. Kept short and without a
-# mention, as it's what the notification shows (and a mention made it two).
+# versions" issue, mentioning them — GitHub pushes and emails only mentions
+# (a comment on an issue they're subscribed to only reached the app's
+# inbox, silently). Kept short: it's what the notification shows.
 # (Watching the download page's releases sends nothing: they're published
 # with the owner's own token, and GitHub doesn't notify anyone of their own
 # actions.) Runs after "Publish release"; a version already noted isn't
@@ -30,14 +31,14 @@ jobs:
       - name: Note the latest version
         run: |
           tag="$(gh release view -R "$RELEASE_REPO" --json tagName --jq .tagName)"
-          note="Popcorn ${tag#v} is out"
+          note="@$OWNER Popcorn ${tag#v} is out"
           n="$(gh issue list -R "$GITHUB_REPOSITORY" --state all \
                 --search "in:title \"$TITLE\" author:app/github-actions" \
                 --json number --jq '.[0].number // empty')"
           if [ -z "$n" ]; then
-            # (Mentioning the owner here subscribes them to it.)
+            # (No mention here: the comment below notifies them, once.)
             link="$(gh issue create -R "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "New versions of Popcorn on the download page, noted for @$OWNER.")"
+                --body "New versions of Popcorn on the download page.")"
             n="${link##*/}"
             echo "Created issue #$n"
           fi

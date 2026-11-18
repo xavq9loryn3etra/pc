@@ -190,6 +190,23 @@ TORRENT_API int          lt_get_all_stream_statuses(lt_session_t session,
 TORRENT_API int  lt_preload_stream(lt_session_t session, lt_stream_id id,
                                    int64_t preload_bytes);
 
+/* Has stream id download bytes [offset, offset + length) of its file soon,
+   without a reader: their pieces go to top priority, with deadlines from
+   deadline_ms on (0: before anything else; a few seconds: after the pieces
+   playback is waiting on). For a spot playback is about to go to — a
+   resume's start, a Skip button's target. */
+TORRENT_API void lt_prefetch_range(lt_session_t session, lt_stream_id id,
+                                   int64_t offset, int64_t length,
+                                   int deadline_ms);
+
+/* Playback of stream id will start at byte offset of its file (resuming
+   partway in); -1 for none. Until a read reaches it, the player's reads well
+   before it are taken for the container's headers: they fetch what they
+   read and little more, and don't cancel the start's pieces (see
+   lt_prefetch_range) the way a seek would. */
+TORRENT_API void lt_set_stream_start(lt_session_t session, lt_stream_id id,
+                                     int64_t offset);
+
 /* cache settings. capacity (bytes, > 0 to change): how far ahead of
    playback stream id downloads — capacity / piece length pieces, 4 to 64.
    read_ahead_pct is ignored; connections_limit > 0 caps the torrent's

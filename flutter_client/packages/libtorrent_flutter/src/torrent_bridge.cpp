@@ -1245,6 +1245,11 @@ struct StreamEngine {
     static constexpr int64_t START_MARGIN_BYTES = 16 * 1024 * 1024;
     static constexpr int64_t HEADER_AHEAD_BYTES = 4 * 1024 * 1024;
     static constexpr int64_t HEADER_LIMIT_BYTES = 48 * 1024 * 1024;
+    // The pieces header reads have raised (win_mu): those not had when
+    // playback reaches the start are dropped (drop_header_pieces) — a
+    // header read is open-ended, and asks for the piece after the headers
+    // too, which the player then never reads.
+    std::vector<int> header_raised;
 
     // Reads before this piece are header reads, while a hint is set (and
     // the hint is far enough in to leave room for them); -1 when none.
@@ -2138,6 +2143,31 @@ static void extend_readahead(StreamEngine* s, int p) {
     } catch (...) {}
 }
 
+// Playback has reached a resume's start: the pieces header reads raised
+// (StreamEngine::header_raised) that aren't had go back to dont_download,
+// unless in the head or tail kept for the container.
+static void drop_header_pieces(StreamEngine* s) {
+    std::vector<int> raised;
+    {
+        std::lock_guard<std::mutex> lk(s->win_mu);
+        raised.swap(s->header_raised);
+    }
+    if (raised.empty()) return;
+    std::vector<int> drop;
+    {
+        std::lock_guard<std::mutex> lk(s->piece_mu);
+        for (int q : raised)
+            if (!s->is_protected(q) && !s->pieces_have.count(q)) drop.push_back(q);
+    }
+    try {
+        for (int q : drop) {
+            s->handle.reset_piece_deadline(lt::piece_index_t(q));
+            s->handle.piece_priority(lt::piece_index_t(q), lt::dont_download);
+        }
+    } catch (...) {}
+    TB_LOG("start hint: dropped %d piece(s) header reads raised", (int)drop.size());
+}
+
 // serve_range — based on lt2http's Reader::read() pattern
 //
 // lt2http reads directly from libtorrent storage — no intermediate cache.
@@ -2207,6 +2237,11 @@ static bool serve_range(StreamEngine* s, const ConnState& conn, bool primary,
             } catch (...) {}
             if (primary && !headers)
                 s->note_window(p, std::min(p + PIPELINE_AHEAD, last_wanted));
+            if (headers) {
+                std::lock_guard<std::mutex> lk(s->win_mu);
+                for (int i = 0; i <= PIPELINE_AHEAD && p + i <= last_wanted; ++i)
+                    s->header_raised.push_back(p + i);
+            }
             for (int i = 1; i <= PIPELINE_AHEAD && p + i <= last_wanted; ++i) {
                 bool have_next = false;
                 { std::lock_guard<std::mutex> lk(s->piece_mu); have_next = s->pieces_have.count(p+i) > 0; }
@@ -2549,6 +2584,7 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
                 } else {
                     s->start_hint.store(-1);
                     TB_LOG("start hint: playback reached it at %lld", (long long)rstart);
+                    drop_header_pieces(s);
                 }
             }
             if (primary && !header_read && old_head > 0
@@ -2876,6 +2912,10 @@ static void set_stream_start(StreamEngine* s, int64_t offset) {
         return;
     }
     s->header_bytes.store(0);
+    {
+        std::lock_guard<std::mutex> lk(s->win_mu);
+        s->header_raised.clear();
+    }
     s->start_hint.store(offset);
     s->preloading.store(false);
     const int end = s->header_end_piece();

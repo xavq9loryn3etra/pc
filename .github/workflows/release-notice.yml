@@ -1,0 +1,49 @@
+name: Release notice
+
+# Emails the owner when a new version is on the download page: a comment by
+# github-actions on this repo's "New version notices" issue, mentioning them
+# — GitHub emails mentions. (Watching the download page's releases sends
+# nothing: they're published with the owner's own token, and GitHub doesn't
+# notify anyone of their own actions.) Runs after "Publish release"; a
+# version already noted isn't noted again. Run it by hand to note the
+# latest version now.
+on:
+  workflow_run:
+    workflows: [Publish release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  notice:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OWNER: MeghaJayalath
+      RELEASE_REPO: popcorn-organization/popcorn
+      TITLE: New version notices
+    steps:
+      - name: Note the latest version
+        run: |
+          tag="$(gh release view -R "$RELEASE_REPO" --json tagName --jq .tagName)"
+          url="https://github.com/$RELEASE_REPO/releases/tag/$tag"
+          n="$(gh issue list -R "$GITHUB_REPOSITORY" --state all \
+                --search "in:title \"$TITLE\" author:app/github-actions" \
+                --json number --jq '.[0].number // empty')"
+          if [ -z "$n" ]; then
+            link="$(gh issue create -R "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "Each new version of Popcorn on the download page is noted here, so @$OWNER gets an email.")"
+            n="${link##*/}"
+            echo "Created issue #$n"
+          fi
+          if gh issue view "$n" -R "$GITHUB_REPOSITORY" --json comments \
+               --jq '.comments[].body' | grep -qF "$url"; then
+            echo "$tag was noted already."
+            exit 0
+          fi
+          gh issue comment "$n" -R "$GITHUB_REPOSITORY" \
+            --body "@$OWNER Popcorn ${tag#v} is on the download page: $url"
+          echo "Noted $tag on issue #$n."

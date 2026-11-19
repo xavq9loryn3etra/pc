@@ -383,7 +383,8 @@ abstract final class SubtitleSync {
   /// The sound of [url] from [start] to [end] (seconds), as [speechScores]
   /// takes it — decoded by a second, silent player as fast as it can
   /// (mpv: no picture, sound written to a file rather than played, not in
-  /// real time) — [audioTrack]'s (mpv's id), the one being heard, when
+  /// real time), though never faster than playback's download brings the
+  /// video (a background read: see the engine's serve_range) — [audioTrack]'s (mpv's id), the one being heard, when
   /// there's a choice. Null if it couldn't be, or when [isCancelled] turns
   /// true (checked twice a second): the player closed or moved to another
   /// video, so there's no reason to go on reading the stream.
@@ -422,6 +423,13 @@ abstract final class SubtitleSync {
         'audio-channels': 'mono',
         'audio-format': 's16',
         'untimed': 'yes',
+        // To the torrent engine, a background read: it never takes over
+        // from the video being watched — cutting it off, moving its
+        // download elsewhere — and gets the sound only as that download
+        // brings it. (Set on this player, not as Media.httpHeaders:
+        // media_kit keeps those per address, and the watched video's next
+        // reopen at it would have been sent as background too.)
+        'http-header-fields': 'X-Popcorn-Background: 1',
       }.entries) {
         await mpv.setProperty(p.key, p.value);
       }

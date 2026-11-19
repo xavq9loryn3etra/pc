@@ -2053,6 +2053,27 @@ static RangeReq parse_range(const std::string& req) {
     return r;
 }
 
+// Whether request [req] has header [lname] (lower case), whatever its value.
+static bool has_header(const std::string& req, const char* lname) {
+    size_t pos = req.find("\r\n");                 // end of the request line
+    while (pos != std::string::npos) {
+        const size_t ls = pos + 2;
+        size_t le = req.find("\r\n", ls);
+        if (le == std::string::npos) le = req.size();
+        if (le == ls) break;                       // blank line: end of headers
+        const std::string line = req.substr(ls, le - ls);
+        const auto colon = line.find(':');
+        if (colon != std::string::npos) {
+            std::string name = trim_ws(line.substr(0, colon));
+            for (auto& ch : name) ch = (char)tolower((unsigned char)ch);
+            if (name == lname) return true;
+        }
+        if (le >= req.size()) break;
+        pos = le;
+    }
+    return false;
+}
+
 // Whether the HTTP client has gone — closed its end, or the socket failed.
 // Never blocks.
 static bool client_gone(socket_t cli) {
@@ -2175,10 +2196,13 @@ static void drop_header_pieces(StreamEngine* s) {
 // send to socket. Only prioritize current piece + 2 ahead.
 // This eliminates the complex async cache pipeline that caused seek delays.
 // [primary]: this is the stream's playback request (see handle_connection):
-// it alone moves read_head and the trailing window. Ends early (false)
-// when the stream stops or [conn] is cancelled.
+// it alone moves read_head and the trailing window. [background]: a read
+// that must never compete with playback (the app listening to the sound to
+// time subtitles) — it gets pieces as they're downloaded anyway, and asks
+// for none. Ends early (false) when the stream stops or [conn] is
+// cancelled.
 static bool serve_range(StreamEngine* s, const ConnState& conn, bool primary,
-                        TorrReader* reader, socket_t cli,
+                        bool background, TorrReader* reader, socket_t cli,
                         int64_t range_start, int64_t range_end) {
     int64_t cursor = range_start;
     TB_LOG("serve_range: start=%lld end=%lld primary=%d", (long long)range_start, (long long)range_end, (int)primary);
@@ -2215,7 +2239,22 @@ static bool serve_range(StreamEngine* s, const ConnState& conn, bool primary,
         // Before a resume's start: the headers, read as needed.
         const bool headers = primary && s->reading_headers(p);
 
-        if (!have_it) {
+        if (!have_it && background) {
+            // Not asked for: waits until playback's download brings it.
+            TB_LOG("serve_range: background read waiting for piece=%d", p);
+            for (;;) {
+                {
+                    std::unique_lock<std::mutex> lk(s->piece_mu);
+                    s->piece_cv.wait_for(lk, chr::seconds(5), [&] {
+                        return stopped() || s->pieces_have.count(p) > 0;
+                    });
+                    if (stopped()) return false;
+                    if (s->pieces_have.count(p) > 0) break;
+                }
+                if (check_have(s, p)) break;
+                if (client_gone(cli)) return false;
+            }
+        } else if (!have_it) {
             // Wider deadline pipeline: current + 16 pieces with stagger.
             // The deadline picker orders by deadline, so i=0 still gets
             // priority — the extra entries just keep peer request queues
@@ -2317,7 +2356,8 @@ static bool serve_range(StreamEngine* s, const ConnState& conn, bool primary,
         // read_piece_data(p+1) returns instantly instead of blocking another
         // ~5-15 ms for the disk round trip. Classic socket-I/O ↔ disk-I/O
         // overlap — free throughput on slow disks and during player buffering.
-        for (int i = 1; i <= 2; ++i) {
+        // (Not for a background read: playback's reads come first.)
+        for (int i = 1; i <= 2 && !background; ++i) {
             int np = p + i;
             if (np > s->end_piece) break;
             bool have_np = false;
@@ -2558,9 +2598,17 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
             bool is_tail_req = (rstart >= fsz - tail_bytes);
             bool reads_on = !rr.present || (rr.suffix < 0 && rr.end < 0)
                          || clen >= 1024 * 1024;
-            bool primary = is_get && !is_tail_req && reads_on;
-            TB_LOG("handle_conn: rstart=%lld rend=%lld old_head=%lld is_tail=%d primary=%d",
-                   (long long)rstart, (long long)rend, (long long)old_head, is_tail_req?1:0, primary?1:0);
+            // A background read (X-Popcorn-Background: the app listening
+            // to the sound, alongside playback) is never playback: it
+            // cancels nothing, moves nothing and asks for no pieces (see
+            // serve_range). A second player reading the file from its start
+            // used to take over as playback — the watched video cut off and
+            // its download moved away from it, every second or two.
+            const bool background = has_header(req, "x-popcorn-background");
+            bool primary = is_get && !is_tail_req && reads_on && !background;
+            TB_LOG("handle_conn: rstart=%lld rend=%lld old_head=%lld is_tail=%d primary=%d background=%d",
+                   (long long)rstart, (long long)rend, (long long)old_head, is_tail_req?1:0, primary?1:0,
+                   background?1:0);
             if (primary) {
                 std::shared_ptr<ConnState> prev;
                 {
@@ -2712,7 +2760,8 @@ static void handle_connection(StreamEngine* s, socket_t cli, int reader_id) {
 
             if (is_get) {
                 TB_LOG("handle_conn: calling serve_range rstart=%lld rend=%lld", (long long)rstart, (long long)rend);
-                bool sr_ok = serve_range(s, *conn, primary, reader, cli, rstart, rend);
+                bool sr_ok = serve_range(s, *conn, primary, background, reader, cli,
+                                         rstart, rend);
                 TB_LOG("handle_conn: serve_range returned %d", (int)sr_ok);
                 if (!sr_ok) goto cleanup;
             }

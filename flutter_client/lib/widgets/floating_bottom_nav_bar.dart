@@ -6,6 +6,7 @@ import 'tv_focus.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
 import '../services/movie_tab_service.dart';
+import '../services/tv_device.dart';
 import 'app_icon.dart';
 
 /// The tabs, in MovieTabShell's order. [ai] only in the movies mode (see
@@ -124,12 +125,15 @@ final bool isComputer = !kIsWeb &&
         defaultTargetPlatform == TargetPlatform.macOS ||
         defaultTargetPlatform == TargetPlatform.linux);
 
-/// Whether the player takes its desktop look (bigger controls, named
-/// buttons, a click anywhere plays/pauses): a computer's wide window. Not
-/// by width alone — a big phone on its side (an S25 Ultra is ~832 wide)
-/// keeps the phone's player.
+/// Whether the player takes its desktop look (bigger title, controls and
+/// text; settings and episodes as side panels): a computer's wide window,
+/// or a TV — laid out like the Windows app (TvScreenScale), it showed the
+/// phone's player, its title and text too small to read across a room.
+/// Not by width alone — a big phone on its side (an S25 Ultra is ~832
+/// wide) keeps the phone's player. (A click anywhere playing/pausing stays
+/// a computer's: see isComputer.)
 bool playerIsWide(BuildContext context) =>
-    isComputer && windowIsWide(context);
+    (isComputer || TvDevice.isTv) && windowIsWide(context);
 
 /// Marks the side column beside a wide window's home (see MovieTabShell):
 /// the tabs in it, though shown as on a phone, have no bar at their foot

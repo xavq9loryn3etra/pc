@@ -115,6 +115,97 @@ class SkipSegment {
 ///      movies and TV episodes (by `imdb_id` or `tmdb_id`).
 ///    - **IntroDB** (`api.introdb.app/segments`) — supports TV episodes
 ///      (by `imdb_id`, `season`, `episode`).
+/// What an episode's end shows (see [UpNextPlan.at]).
+enum UpNextStage {
+  /// Not there yet.
+  none,
+
+  /// The end credits, a preview after them: Skip Credits (on to the
+  /// preview) and Next Episode, nothing counting down — the credits play.
+  credits,
+
+  /// That preview: Next Episode filling over it, so the next episode
+  /// starts as it ends.
+  preview,
+
+  /// No preview after the credits (or no credits known): Watch Credits and
+  /// Next Episode, filling over its few seconds.
+  countdown,
+}
+
+/// Up next at an episode's end. An anime's credits are often followed by
+/// a preview of the next episode: up next came 25 s from the end, in the
+/// middle of it, said "Watch Credits", and its 10 s countdown cut it short
+/// (Attack on Titan S2E3). Now: the credits play with Skip Credits and
+/// Next Episode up, and the preview with Next Episode filling over it —
+/// skip both, skip the credits only, or watch it all, then on.
+class UpNextPlan {
+  final UpNextStage stage;
+
+  /// Where up next begins: the credits' start (the preview's, with none
+  /// known before it), or the old rule's. Also what counts as watched.
+  final Duration start;
+
+  /// [UpNextStage.credits]: where the preview starts, for Skip Credits.
+  final Duration? previewStart;
+
+  /// [UpNextStage.preview]: how much of the preview has played (0–1).
+  final double previewShare;
+
+  const UpNextPlan(this.stage, this.start,
+      {this.previewStart, this.previewShare = 0});
+
+  /// How near the end a part must finish to count as the end's.
+  static const _atEnd = Duration(seconds: 15);
+
+  static UpNextPlan at(
+      List<SkipSegment> segments, Duration duration, Duration position) {
+    // A preview that ends the episode.
+    SkipSegment? preview;
+    for (final s in segments) {
+      if (s.type != SkipSegmentType.preview) continue;
+      final end = s.end ?? duration;
+      if (duration - end <= _atEnd && end > s.start) preview = s;
+    }
+    if (preview != null) {
+      // Credits running into it.
+      SkipSegment? credits;
+      for (final s in segments) {
+        if (s.type != SkipSegmentType.credits || s.start >= preview.start) {
+          continue;
+        }
+        final end = s.end ?? preview.start;
+        if (preview.start - end <= _atEnd) credits = s;
+      }
+      final start = credits?.start ?? preview.start;
+      if (position >= preview.start) {
+        final length = (preview.end ?? duration) - preview.start;
+        final share = (position - preview.start).inMilliseconds /
+            length.inMilliseconds;
+        return UpNextPlan(UpNextStage.preview, start,
+            previewShare: share.clamp(0.0, 1.0));
+      }
+      if (credits != null && position >= credits.start) {
+        return UpNextPlan(UpNextStage.credits, start,
+            previewStart: preview.start);
+      }
+      return UpNextPlan(UpNextStage.none, start);
+    }
+    // The end credits' start, or 25 s from the end.
+    var start = duration - const Duration(seconds: 25);
+    for (final s in segments) {
+      if (s.type != SkipSegmentType.credits) continue;
+      final end = s.end;
+      if (end == null || duration - end <= _atEnd) {
+        start = s.start;
+        break;
+      }
+    }
+    return UpNextPlan(
+        position >= start ? UpNextStage.countdown : UpNextStage.none, start);
+  }
+}
+
 class SkipSegmentsService {
   static final SkipSegmentsService _instance = SkipSegmentsService._internal();
   factory SkipSegmentsService() => _instance;

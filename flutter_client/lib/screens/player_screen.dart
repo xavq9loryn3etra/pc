@@ -189,6 +189,15 @@ class _PlayerScreenState extends State<PlayerScreen>
   // its buttons is, and the play button, where the remote lands on them.
   final FocusNode _rootFocus = FocusNode(debugLabel: 'Player');
   final FocusNode _playButtonFocus = FocusNode(debugLabel: 'Play/pause');
+
+  // On a TV, the seek bar can be selected (up from the buttons), and OK
+  // there selects its pointer: then left and right move it, OK plays from
+  // there and Back puts it back (see _onTvScrubKey). The spot it's moved
+  // to while selected, or null.
+  final FocusNode _seekBarFocus = FocusNode(debugLabel: 'Seek bar');
+  final ValueNotifier<Duration?> _tvScrubTarget = ValueNotifier(null);
+  DateTime? _tvScrubHeldSince;
+  DateTime? _tvScrubLastMove;
   bool _isBuffering = false;
   Timer? _bufferingRevealTimer;
   Timer? _seekRevealTimer;
@@ -204,6 +213,10 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// Whether Watch Credits and Next Episode are up.
   final ValueNotifier<bool> _upNextShown = ValueNotifier(false);
+
+  /// Which of up next's stages is showing (see UpNextPlan).
+  final ValueNotifier<UpNextStage> _upNextStage =
+      ValueNotifier(UpNextStage.none);
 
   /// The episode ("season:episode") whose credits the viewer chose to
   /// watch: no countdown for it again.
@@ -584,7 +597,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (ctx != null) {
       final box = ctx.findRenderObject() as RenderBox?;
       if (box != null && box.hasSize) {
-        final topLeft = box.localToGlobal(Offset.zero);
+        final topLeft = _topLeftInPlayer(box);
         anchorX = topLeft.dx + box.size.width / 2;
       }
     }
@@ -784,7 +797,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         // The screen stays on while the player's open, paused too (it used
         // to sleep a minute into a pause): see initState.
         // Up next's countdown runs only while the video plays.
-        if (_upNextShown.value) {
+        // (The preview's fill follows the video itself: see _updateUpNext.)
+        if (_upNextStage.value == UpNextStage.countdown) {
           val ? _upNextFill.forward() : _upNextFill.stop();
         }
         if (val) {
@@ -1021,6 +1035,12 @@ class _PlayerScreenState extends State<PlayerScreen>
       return;
     }
     _saveProgress(force: true);
+    // The preview's played to the end: on to the next episode, as its
+    // fill would have.
+    if (_upNextStage.value == UpNextStage.preview) {
+      _playNextFromUpNext();
+      return;
+    }
     final next = _nextEpisode;
     if (widget.details.type == 'tv' &&
         next != null &&
@@ -2138,7 +2158,10 @@ class _PlayerScreenState extends State<PlayerScreen>
             _isPlaying &&
             !_loadingVideo &&
             !_seekPending &&
-            !_showSettingsPanel) {
+            !_showSettingsPanel &&
+            // Nor while a TV's seek pointer is out: the spot picked
+            // stays until OK or Back.
+            _tvScrubTarget.value == null) {
           setState(() => _controlsVisible = false);
           // On a TV, off the buttons as they go: the arrows skip again.
           if (TvDevice.isTv) _rootFocus.requestFocus();
@@ -2283,6 +2306,25 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     if (_showSettingsPanel || _showEpisodeDrawer) return false;
 
+    // The seek bar's pointer selected: it takes the arrows and OK.
+    if (_tvScrubTarget.value != null) return _onTvScrubKey(event);
+    // The seek bar selected: OK selects its pointer; left and right do
+    // nothing yet (no seek by accident); up and down move on as anywhere.
+    if (_controlsVisible && _seekBarFocus.hasFocus) {
+      _resetControlsTimer();
+      if (key == LogicalKeyboardKey.select ||
+          key == LogicalKeyboardKey.enter ||
+          key == LogicalKeyboardKey.numpadEnter) {
+        if (pressed) _startTvScrub();
+        return true;
+      }
+      if (key == LogicalKeyboardKey.arrowLeft ||
+          key == LogicalKeyboardKey.arrowRight) {
+        return true;
+      }
+      return false;
+    }
+
     if (_controlsVisible && _tvButtonFocused) {
       _resetControlsTimer();
       return false;
@@ -2311,6 +2353,91 @@ class _PlayerScreenState extends State<PlayerScreen>
       return true;
     }
     return false;
+  }
+
+  /// The seek bar's pointer, selected (see _seekBarFocus): left and right
+  /// move it — 10 s a press; held, faster the longer it's held — while
+  /// the video plays on where it was, and nothing's fetched for the spots
+  /// passed over; OK plays from it; Back (see the PopScope in build) puts
+  /// it back. Up and down do nothing meanwhile: OK or Back first.
+  bool _onTvScrubKey(KeyEvent event) {
+    final key = event.logicalKey;
+    final left = key == LogicalKeyboardKey.arrowLeft;
+    if (left || key == LogicalKeyboardKey.arrowRight) {
+      if (event is KeyUpEvent) {
+        _tvScrubHeldSince = null;
+      } else {
+        _moveTvScrub(left ? -1 : 1, held: event is KeyRepeatEvent);
+      }
+      return true;
+    }
+    if (key == LogicalKeyboardKey.select ||
+        key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      if (event is KeyDownEvent) _commitTvScrub();
+      return true;
+    }
+    return true;
+  }
+
+  void _startTvScrub() {
+    if (_loadingVideo || _duration <= Duration.zero) return;
+    _controlsTimer?.cancel();
+    _tvScrubHeldSince = null;
+    _tvScrubLastMove = null;
+    setState(() => _tvScrubTarget.value = _currentPosition);
+  }
+
+  /// A held arrow repeats some 20–30 times a second: a move at most every
+  /// 120 ms, of 10 s for the first second and a half, then 30 s, then a
+  /// minute from 3½ s on — about a minute, then four, then eight of video
+  /// a second.
+  void _moveTvScrub(int direction, {required bool held}) {
+    final target = _tvScrubTarget.value;
+    if (target == null) return;
+    final now = DateTime.now();
+    if (!held) {
+      _tvScrubHeldSince = now;
+    } else {
+      _tvScrubHeldSince ??= now;
+      final last = _tvScrubLastMove;
+      if (last != null &&
+          now.difference(last) < const Duration(milliseconds: 120)) {
+        return;
+      }
+    }
+    _tvScrubLastMove = now;
+    final heldFor = now.difference(_tvScrubHeldSince!);
+    final seconds = !held || heldFor < const Duration(milliseconds: 1500)
+        ? 10
+        : heldFor < const Duration(milliseconds: 3500)
+            ? 30
+            : 60;
+    var next = target + Duration(seconds: seconds * direction);
+    if (next < Duration.zero) next = Duration.zero;
+    if (next > _duration) next = _duration;
+    _tvScrubTarget.value = next;
+  }
+
+  /// OK on the pointer: the video plays from where it was moved to; the
+  /// seek bar stays selected.
+  void _commitTvScrub() {
+    final target = _tvScrubTarget.value;
+    if (target == null) return;
+    setState(() => _tvScrubTarget.value = null);
+    if (target != _currentPosition) {
+      _currentPosition = target;
+      _positionNotifier.value = target;
+      _seekTo(target);
+      _syncMediaSessionPlaybackState();
+    }
+    _resetControlsTimer();
+  }
+
+  /// Back on the pointer: put back where the video is; nothing moves.
+  void _cancelTvScrub() {
+    setState(() => _tvScrubTarget.value = null);
+    _resetControlsTimer();
   }
 
   /// The controls up, for their usual few seconds — with the play button
@@ -2353,7 +2480,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (_controlsVisible && !_showSettingsPanel) {
       final box = _bottomBarKey.currentContext?.findRenderObject();
       if (box is RenderBox && box.hasSize && box.attached) {
-        final barTop = box.localToGlobal(Offset.zero).dy;
+        final barTop = _topLeftInPlayer(box).dy;
         bottom = MediaQuery.sizeOf(context).height - barTop + 12;
       }
     }
@@ -3221,10 +3348,22 @@ class _PlayerScreenState extends State<PlayerScreen>
   double _bottomBarClearance(Size size) {
     final box = _bottomBarKey.currentContext?.findRenderObject();
     if (box is RenderBox && box.hasSize && box.attached) {
-      final top = box.localToGlobal(Offset.zero).dy;
+      final top = _topLeftInPlayer(box).dy;
       return math.max(0.0, size.height - top) + kSideColumnGap;
     }
     return 140;
+  }
+
+  /// Where [box] is in the player's own layout, the one its menus and
+  /// subtitles are placed in — not on the screen. On a TV the app's laid
+  /// out 1280 wide and shrunk to fit (TvScreenScale), so screen positions
+  /// came out a quarter smaller: the menus floated up and to the left of
+  /// their buttons, and the subtitles rose above the controls. (Elsewhere
+  /// the two are the same.)
+  Offset _topLeftInPlayer(RenderBox box) {
+    final player = context.findRenderObject();
+    return box.localToGlobal(Offset.zero,
+        ancestor: player is RenderBox && player.attached ? player : null);
   }
 
   /// Episodes: opens the browser, or, as a side panel already open,
@@ -3760,38 +3899,45 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _updateUpNext(Duration pos) {
     final key = '$_currentSeason:$_currentEpisode';
     final next = _nextEpisode;
-    final show = widget.details.type == 'tv' &&
+    final eligible = widget.details.type == 'tv' &&
         next != null &&
         !next.isUnreleased &&
         !_loadingVideo &&
         !_switchingQuality &&
         _duration > const Duration(minutes: 2) &&
-        _upNextDismissedFor != key &&
-        pos >= _upNextStart();
-    if (show == _upNextShown.value) return;
-    _upNextShown.value = show;
+        _upNextDismissedFor != key;
+    final plan = UpNextPlan.at(_skipSegments, _duration, pos);
+    final stage = eligible ? plan.stage : UpNextStage.none;
+    if (stage == UpNextStage.preview) {
+      // The fill follows the preview: full as it ends, when the next
+      // episode plays (the fill's status listener) — paused, sought
+      // back or forth, it keeps up.
+      if (_upNextStage.value != stage) {
+        _upNextFill.stop();
+        _upNextStage.value = stage;
+        _upNextShown.value = true;
+      }
+      _upNextFill.value = plan.previewShare >= 0.99 ? 1.0 : plan.previewShare;
+      return;
+    }
+    if (stage == _upNextStage.value) return;
+    _upNextStage.value = stage;
+    _upNextShown.value = stage != UpNextStage.none;
     _upNextFill
       ..stop()
       ..value = 0;
-    if (show && _isPlaying) _upNextFill.forward();
+    if (stage == UpNextStage.countdown && _isPlaying) _upNextFill.forward();
   }
 
-  /// Where up next begins: the end credits' start, or 25 s from the end.
-  Duration _upNextStart() {
-    for (final s in _skipSegments) {
-      if (s.type != SkipSegmentType.credits) continue;
-      final end = s.end;
-      if (end == null || _duration - end <= const Duration(seconds: 15)) {
-        return s.start;
-      }
-    }
-    return _duration - const Duration(seconds: 25);
-  }
+  /// Where up next begins (see UpNextPlan.start).
+  Duration _upNextStart() =>
+      UpNextPlan.at(_skipSegments, _duration, Duration.zero).start;
 
   /// Next Episode pressed, or its fill full: the next episode, now.
   void _playNextFromUpNext() {
     if (!_upNextShown.value) return;
     _upNextShown.value = false;
+    _upNextStage.value = UpNextStage.none;
     _upNextFill
       ..stop()
       ..value = 0;
@@ -3802,9 +3948,19 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _watchCredits() {
     _upNextDismissedFor = '$_currentSeason:$_currentEpisode';
     _upNextShown.value = false;
+    _upNextStage.value = UpNextStage.none;
     _upNextFill
       ..stop()
       ..value = 0;
+  }
+
+  /// Skip Credits, with a preview after them: on to the preview, Next
+  /// Episode filling over it.
+  void _skipCreditsToPreview(Duration previewStart) {
+    _currentPosition = previewStart;
+    _positionNotifier.value = previewStart;
+    _seekTo(previewStart);
+    _syncMediaSessionPlaybackState();
   }
 
   /// Netflix Auto Play Next Episode Feature
@@ -3938,6 +4094,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     WakelockPlus.disable();
     _rootFocus.dispose();
     _playButtonFocus.dispose();
+    _seekBarFocus.dispose();
+    _tvScrubTarget.dispose();
     _screenTapTimer?.cancel();
     _bufferingRevealTimer?.cancel();
     _seekRevealTimer?.cancel();
@@ -4011,6 +4169,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _playPauseFlash.dispose();
     _upNextFill.dispose();
     _upNextShown.dispose();
+    _upNextStage.dispose();
     _settingsCloseRequests.dispose();
 
     // 4. Dispose players and pause (not delete) the active FFI torrent —
@@ -5872,6 +6031,12 @@ class _PlayerScreenState extends State<PlayerScreen>
       canPop: false,
       onPopInvoked: (didPop) {
         if (didPop) return;
+        // On a TV: the seek bar's pointer goes back first (see
+        // _onTvScrubKey).
+        if (_tvScrubTarget.value != null) {
+          _cancelTvScrub();
+          return;
+        }
         // On a TV: a menu open in a panel (the episodes' season menu)
         // closes first (TvBack).
         if (TvBack.handle()) return;
@@ -6397,6 +6562,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                 _bufferNotifier,
                                                 _seekHoverFractionNotifier,
                                                 _timelinePartitionRevision,
+                                                _tvScrubTarget,
                                               ]),
                                               builder: (context, _) {
                                                 final dur =
@@ -6415,8 +6581,21 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                                 totalSeconds)
                                                             .clamp(0.0, 1.0)
                                                         : null;
+                                                // A TV's seek pointer, moved (see
+                                                // _onTvScrubKey).
+                                                final scrubTarget =
+                                                    _tvScrubTarget.value;
+                                                final scrubbing =
+                                                    scrubTarget != null &&
+                                                        totalSeconds > 0;
+                                                final scrubFraction = scrubbing
+                                                    ? (scrubTarget.inSeconds /
+                                                            totalSeconds)
+                                                        .clamp(0.0, 1.0)
+                                                    : null;
                                                 final activeFraction =
-                                                    dragFraction ??
+                                                    scrubFraction ??
+                                                        dragFraction ??
                                                         hoverFraction;
                                                 final showTooltip =
                                                     !_loadingVideo &&
@@ -6456,8 +6635,16 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                         pad + f * trackWidth;
                                                     final halfPill =
                                                         tooltipLabel != null
-                                                            ? 110.0
-                                                            : 44.0;
+                                                            ? (scrubbing
+                                                                ? 140.0
+                                                                : 110.0)
+                                                            : (scrubbing
+                                                                ? 64.0
+                                                                : 44.0);
+                                                    final barFocused =
+                                                        TvDevice.isTv &&
+                                                            _seekBarFocus
+                                                                .hasFocus;
                                                     final clampedCenter =
                                                         targetX.clamp(
                                                       halfPill,
@@ -6468,7 +6655,19 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                       ),
                                                     );
 
-                                                    return Stack(
+                                                    // Selectable with a TV remote, up
+                                                    // from the buttons (see _onTvKey);
+                                                    // the slider itself never is.
+                                                    return Focus(
+                                                      focusNode: _seekBarFocus,
+                                                      canRequestFocus:
+                                                          TvDevice.isTv &&
+                                                              !_loadingVideo,
+                                                      skipTraversal:
+                                                          !TvDevice.isTv,
+                                                      onFocusChange: (_) =>
+                                                          setState(() {}),
+                                                      child: Stack(
                                                       clipBehavior: Clip.none,
                                                       children: [
                                                         if (showTooltip)
@@ -6477,8 +6676,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                                 clampedCenter -
                                                                     halfPill,
                                                             width: halfPill * 2,
-                                                            bottom:
-                                                                wide ? 36 : 32,
+                                                            bottom: scrubbing
+                                                                ? 44
+                                                                : (wide
+                                                                    ? 36
+                                                                    : 32),
                                                             child:
                                                                 IgnorePointer(
                                                               child: Center(
@@ -6527,7 +6729,9 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                                               ),
                                                                               style: TextStyle(
                                                                                 color: Colors.white,
-                                                                                fontSize: wide ? 13 : 11.5,
+                                                                                fontSize: scrubbing
+                                                                                    ? 22
+                                                                                    : (wide ? 13 : 11.5),
                                                                                 fontWeight: FontWeight.w600,
                                                                                 height: 1.1,
                                                                                 fontFeatures: const [
@@ -6645,8 +6849,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                                           _loadingVideo,
                                                                       child:
                                                                           Slider(
-                                                                        value: _positionNotifier
-                                                                            .value
+                                                                        value: (scrubTarget ??
+                                                                                _positionNotifier.value)
                                                                             .inSeconds
                                                                             .toDouble()
                                                                             .clamp(0.0,
@@ -6689,7 +6893,81 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                                     )),
                                                           ),
                                                         ),
+                                                        // The bar selected with a TV
+                                                        // remote: outlined, as a button.
+                                                        if (barFocused &&
+                                                            !scrubbing)
+                                                          Positioned(
+                                                            left: pad - 12,
+                                                            right: pad - 12,
+                                                            top: 2,
+                                                            bottom: 2,
+                                                            child: IgnorePointer(
+                                                              child:
+                                                                  DecoratedBox(
+                                                                decoration:
+                                                                    BoxDecoration(
+                                                                  borderRadius:
+                                                                      BorderRadius
+                                                                          .circular(
+                                                                              999),
+                                                                  border: Border.all(
+                                                                      color: Colors
+                                                                          .white,
+                                                                      width: 2.5),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        // Its pointer selected: ringed,
+                                                        // an arrow either side.
+                                                        if (scrubbing)
+                                                          Positioned(
+                                                            left: targetX - 52,
+                                                            width: 104,
+                                                            top: 0,
+                                                            bottom: 0,
+                                                            child:
+                                                                const IgnorePointer(
+                                                              child: Row(
+                                                                mainAxisAlignment:
+                                                                    MainAxisAlignment
+                                                                        .center,
+                                                                children: [
+                                                                  Icon(
+                                                                      Icons
+                                                                          .arrow_left_rounded,
+                                                                      color: Colors
+                                                                          .white,
+                                                                      size: 30),
+                                                                  SizedBox(
+                                                                    width: 30,
+                                                                    height: 30,
+                                                                    child:
+                                                                        DecoratedBox(
+                                                                      decoration:
+                                                                          BoxDecoration(
+                                                                        shape: BoxShape
+                                                                            .circle,
+                                                                        border: Border.fromBorderSide(
+                                                                            BorderSide(
+                                                                                color: Colors.white,
+                                                                                width: 2.5)),
+                                                                      ),
+                                                                    ),
+                                                                  ),
+                                                                  Icon(
+                                                                      Icons
+                                                                          .arrow_right_rounded,
+                                                                      color: Colors
+                                                                          .white,
+                                                                      size: 30),
+                                                                ],
+                                                              ),
+                                                            ),
+                                                          ),
                                                       ],
+                                                    ),
                                                     );
                                                   },
                                                 );
@@ -7206,7 +7484,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                             // Next Episode, filling to play it (see _updateUpNext).
                             ListenableBuilder(
                               listenable: Listenable.merge(
-                                  [_activeSkipSegmentNotifier, _upNextShown]),
+                                  [_activeSkipSegmentNotifier, _upNextShown, _upNextStage]),
                               builder: (context, _) {
                                 final segment =
                                     _activeSkipSegmentNotifier.value;
@@ -7236,12 +7514,38 @@ class _PlayerScreenState extends State<PlayerScreen>
                                             ? Row(
                                                 mainAxisSize: MainAxisSize.min,
                                                 children: [
-                                                  GlassPillButton(
-                                                    grouped: true,
-                                                    label: 'Watch Credits',
-                                                    onPressed: _watchCredits,
-                                                  ),
-                                                  const SizedBox(width: 10),
+                                                  // The credits, a preview after
+                                                  // them: on to it. During the
+                                                  // preview: Next Episode alone.
+                                                  // Otherwise: Watch Credits.
+                                                  if (_upNextStage.value ==
+                                                      UpNextStage.credits) ...[
+                                                    GlassPillButton(
+                                                      grouped: true,
+                                                      label: 'Skip Credits',
+                                                      onPressed: () {
+                                                        final to = UpNextPlan.at(
+                                                                _skipSegments,
+                                                                _duration,
+                                                                _currentPosition)
+                                                            .previewStart;
+                                                        if (to != null) {
+                                                          _skipCreditsToPreview(
+                                                              to);
+                                                        }
+                                                      },
+                                                    ),
+                                                    const SizedBox(width: 10),
+                                                  ] else if (_upNextStage
+                                                          .value !=
+                                                      UpNextStage.preview) ...[
+                                                    GlassPillButton(
+                                                      grouped: true,
+                                                      label: 'Watch Credits',
+                                                      onPressed: _watchCredits,
+                                                    ),
+                                                    const SizedBox(width: 10),
+                                                  ],
                                                   GlassPillButton(
                                                     grouped: true,
                                                     icon:

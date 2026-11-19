@@ -421,6 +421,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   // start. Cleared once it's playing again.
   Duration? _heldPosition;
 
+  // Where the next file opened starts (mpv's 'start': seconds, "n%", or
+  // "0"), set by _openMediaWithResume and given to mpv as the file loads
+  // (see _applyLoadStart).
+  String _loadStart = '0';
+
   /// True while playback is paused because the device ran low on storage
   /// (see TorrentEngineService.lowDiskSpace), so it only resumes what it
   /// paused itself.
@@ -715,6 +720,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final mpv = player.platform as NativePlayer;
     // A phone's memory is tighter: a smaller demuxer cache there.
     final phone = Platform.isAndroid || Platform.isIOS;
+    mpv.onLoadHooks.add(() => _applyLoadStart(mpv));
     await mpv.observeProperty('chapter-list', _onMpvChapterList);
     // Which subtitle tracks are on, in the log ([subtitles] sid / secondary).
     for (final p in ['sid', 'secondary-sid']) {
@@ -1946,7 +1952,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     _openingStartAt = precisePosition;
     _openingStartShare = null;
     if (precisePosition != null) {
-      await mpv.setProperty('start', '${precisePosition.inSeconds}');
+      _loadStart = '${precisePosition.inSeconds}';
+      await mpv.setProperty('start', _loadStart);
       if (mounted) {
         setState(() {
           _isMediaOpening = true;
@@ -1975,9 +1982,11 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (progress != null && progress > 0.0 && progress < 0.95) {
         _openingStartShare = progress;
         final startPercent = (progress * 100).toStringAsFixed(2);
-        await mpv.setProperty('start', '$startPercent%');
+        _loadStart = '$startPercent%';
+        await mpv.setProperty('start', _loadStart);
         _pendingResumeSnackbarProgress = progress;
       } else {
+        _loadStart = '0';
         await mpv.setProperty('start', '0'); // reset globally persistent option
       }
 
@@ -2007,6 +2016,18 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (_selectedSubtitle != null) {
       await _applySubtitleTrackToPlayer(_selectedSubtitle);
     }
+  }
+
+  /// Gives mpv the spot the file being loaded starts at (_loadStart), as it
+  /// loads. Set only before opening, it was lost whenever a file replaced
+  /// another in this player: media_kit clears 'start' as the old one
+  /// unloads. Every reopen — after a stall, another copy, another quality
+  /// — then played from 0:00, and the progress saved there lost the spot
+  /// (Attack on Titan, again and again, back to the start).
+  Future<void> _applyLoadStart(NativePlayer mpv) async {
+    try {
+      await mpv.setProperty('start', _loadStart);
+    } catch (_) {}
   }
 
   void _subscribeToTorrent(int id) {

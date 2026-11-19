@@ -41,7 +41,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       publish: ${{ steps.version.outputs.publish }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: version
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
@@ -70,8 +70,8 @@ jobs:
       run:
         working-directory: ${{ env.APP_DIR }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: zulu
           java-version: '17'
@@ -134,7 +134,7 @@ jobs:
           has Popcorn-Android-TV.apk arm64-v8a && has Popcorn-Android-TV.apk armeabi-v7a \
             || { echo "Popcorn-Android-TV.apk should have 64- and 32-bit ARM." >&2; exit 1; }
           ls -l "$RUNNER_TEMP/out"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: android
           path: |
@@ -152,7 +152,7 @@ jobs:
         working-directory: ${{ env.APP_DIR }}
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -176,7 +176,7 @@ jobs:
           ./windows/installer/build_installer.ps1 -SkipBuild
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\out" | Out-Null
           Copy-Item "build\installer\Popcorn-Setup-${{ needs.check.outputs.version }}.exe" "$env:RUNNER_TEMP\out\Popcorn-Windows-Setup.exe"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: windows
           path: ${{ runner.temp }}/out/Popcorn-Windows-Setup.exe
@@ -190,7 +190,7 @@ jobs:
       contents: write   # docs/flags.json, once the release is out
       pages: write      # republish the flags on GitHub Pages
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
@@ -241,7 +241,7 @@ jobs:
       # anyone older is asked to update (docs/flags.json, read by the app
       # from GitHub Pages). Android and Windows share the top-level values;
       # iPhone has its own entry there, as there's no iPhone release.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
           path: pc

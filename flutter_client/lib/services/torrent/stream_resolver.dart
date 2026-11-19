@@ -8,6 +8,7 @@ import '../../models/movie.dart';
 import '../audio_language_service.dart';
 import '../episode_numbering.dart';
 import '../tmdb_service.dart';
+import '../tv_device.dart';
 import 'free_space.dart';
 import 'torrent_download_registry.dart';
 import 'torrent_engine_service.dart';
@@ -159,10 +160,54 @@ class StreamResolver {
     // looked (see TrackerScrape).
     streams = await _withLiveCounts(streams);
 
+    // A TV never offers SD: 480p on a screen that size is a blur.
+    if (TvDevice.isTv) {
+      streams = streams.where((s) => tierOf(s) > 1).toList();
+    }
+    // Nor anything a quality nobody's sharing (see withoutUnsharedQualities).
+    streams = withoutUnsharedQualities(streams, onDevice: await _onDevice());
+
     final recommendedTier = _recommendedTierRank(streams);
     streams.sort((a, b) =>
         _score(b, recommendedTier).compareTo(_score(a, recommendedTier)));
     return streams;
+  }
+
+  /// [streams] without the qualities none of whose copies anyone's sharing
+  /// — by the live count where a tracker gave one (see _withLiveCounts),
+  /// else the finder's — so the menu never offers one that can only load
+  /// forever: The Falcon and the Winter Soldier S1E1's three SD copies had
+  /// no one sharing the whole file, and SD spun on a TV. A copy with an
+  /// unknown count, or some of it on the device ([onDevice], lowercase
+  /// info hashes), keeps its quality. Nothing left: the title says it's
+  /// not available right now.
+  @visibleForTesting
+  static List<TorrentStream> withoutUnsharedQualities(
+    List<TorrentStream> streams, {
+    Set<String> onDevice = const {},
+  }) {
+    final shared = <int>{
+      for (final s in streams)
+        if ((s.seeders ?? 1) > 0 || onDevice.contains(s.infoHash.toLowerCase()))
+          tierOf(s),
+    };
+    return [
+      for (final s in streams)
+        if (shared.contains(tierOf(s))) s,
+    ];
+  }
+
+  /// The copies with some of their video downloaded on this device.
+  Future<Set<String>> _onDevice() async {
+    try {
+      final registry = await TorrentDownloadRegistry.loadAll();
+      return {
+        for (final e in registry.entries)
+          if ((e.value.downloadedBytes ?? 0) > 0) e.key.toLowerCase(),
+      };
+    } catch (_) {
+      return const {};
+    }
   }
 
   /// [streams] with their trackers' live sharer counts wherever they

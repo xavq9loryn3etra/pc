@@ -288,6 +288,8 @@ class SettingsPage extends StatelessWidget {
       leadingWidth: 64,
       bottomNavTab: BottomNavTab.settings,
       glow: TabGlow.settings,
+      // Settings' glow is already showing: it doesn't bloom again here.
+      glowBlooms: false,
       body: (context, isDesktop, padding) {
         final side = math.max(0.0, (MediaQuery.sizeOf(context).width - 720) / 2);
         return ListView(

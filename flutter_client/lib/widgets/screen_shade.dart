@@ -12,7 +12,11 @@ import 'ask_orb.dart' show AskClock, AskClockSubscription;
 class TabGlow extends StatefulWidget {
   final List<Color> colors;
 
-  const TabGlow({super.key, required this.colors});
+  /// Whether it blooms in as it's shown. Off for Settings' own pages (Sync,
+  /// Gemini key): the same glow is already on the screen they open over.
+  final bool blooms;
+
+  const TabGlow({super.key, required this.colors, this.blooms = true});
 
   /// Settings' blues.
   static const settings = [
@@ -47,11 +51,13 @@ class _TabGlowState extends State<TabGlow> with SingleTickerProviderStateMixin {
   );
   final _clock = AskClockSubscription();
   ValueListenable<TickerModeData>? _tickerMode;
+  ModalRoute<dynamic>? _route;
   bool _active = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _route = ModalRoute.of(context);
     _clock.update(context);
     // The tab's shown when its TickerMode is on (see MovieTabShell): the
     // bloom plays again each time it is.
@@ -63,7 +69,17 @@ class _TabGlowState extends State<TabGlow> with SingleTickerProviderStateMixin {
 
   void _onTickerMode() {
     final active = _tickerMode?.value.enabled ?? true;
-    if (active && !_active) _bloom.forward(from: 0);
+    if (active && !_active) {
+      // Coming back from a page that was over this one (Sync, Gemini key):
+      // the glow's been here all along, so it isn't played again — it
+      // bloomed a second time under the page sliding away.
+      final uncovered = (_route?.secondaryAnimation?.value ?? 0) > 0;
+      if (widget.blooms && !uncovered) {
+        _bloom.forward(from: 0);
+      } else {
+        _bloom.value = 1;
+      }
+    }
     _active = active;
   }
 

@@ -47,6 +47,9 @@ class ScreenScaffold extends StatefulWidget {
   /// colours. None when null.
   final List<Color>? glow;
 
+  /// Whether [glow] blooms in as the screen's shown (see TabGlow.blooms).
+  final bool glowBlooms;
+
   const ScreenScaffold({
     super.key,
     required this.title,
@@ -61,6 +64,7 @@ class ScreenScaffold extends StatefulWidget {
     this.titleIsLabel = true,
     this.bottomNavTab,
     this.glow,
+    this.glowBlooms = true,
   });
 
   @override
@@ -107,7 +111,8 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
           left: 0,
           right: 0,
           height: MediaQuery.sizeOf(context).height * 0.55,
-          child: RepaintBoundary(child: TabGlow(colors: glow)),
+          child: RepaintBoundary(
+              child: TabGlow(colors: glow, blooms: widget.glowBlooms)),
         ),
         Positioned.fill(child: RepaintBoundary(child: body)),
       ],
@@ -269,10 +274,10 @@ class TitleIsland extends StatelessWidget {
                       borderRadius: BorderRadius.all(
                         Radius.circular(height / 2),
                       ),
-                      // Grouped with the nav bar's glass, which it never
-                      // overlaps.
+                      // Not grouped with the nav bar's glass: sharing its
+                      // backdrop changed how the nav bar's frost looked the
+                      // moment the island came in (as a page was scrolled).
                       child: GlassBlur(
-                        grouped: true,
                         reducedTint: Colors.black,
                         child: Opacity(
                           opacity: t,

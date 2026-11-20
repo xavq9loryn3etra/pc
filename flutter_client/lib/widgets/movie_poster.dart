@@ -10,6 +10,7 @@ import '../services/feature_flags_service.dart';
 import 'artwork_glow.dart';
 import 'episode_card.dart';
 import 'tv_focus.dart';
+import '../services/tv_device.dart';
 import '../screens/details_screen.dart';
 
 class MoviePoster extends StatefulWidget {
@@ -123,6 +124,13 @@ class _MoviePosterState extends State<MoviePoster> {
             // button (see onPlay).
             final resumable =
                 widget.onPlay != null && hasProgress && progress < 0.95;
+            // On a TV, an info button before it: the remote's selection
+            // lands on the buttons inside a card rather than the card
+            // itself (see TvTraversalPolicy), so without one OK could only
+            // play it, never open its page.
+            final tvInfo = TvDevice.isTv && resumable && widget.onTap != null;
+            // Where the play button's circle starts, from the card's edge.
+            final playLeft = tvInfo ? 8 + _playSize + 8 : 8.0;
             final lineHeight =
                 MediaQuery.textScalerOf(context).scale(11) * 1.2;
             // With play buttons (Continue Watching), every poster's bar sits
@@ -228,8 +236,7 @@ class _MoviePosterState extends State<MoviePoster> {
                     children: [
                       // Room for the play button (drawn below, with a
                       // finger-sized target round it).
-                      if (resumable)
-                        const SizedBox(width: _playSize + 8),
+                      if (resumable) SizedBox(width: playLeft + _playSize),
                       if (hasProgress)
                         Expanded(
                           child: Container(
@@ -269,9 +276,42 @@ class _MoviePosterState extends State<MoviePoster> {
                 // The play button: a 28px white circle, 8px in from the
                 // corner, in a 44px target (a finger's) centred on it —
                 // the extra reaching into the poster's corner.
-                if (resumable)
+                // The TV's info button, a frosted-dark circle with an "i",
+                // where the play button would be; the play button after it.
+                if (tvInfo)
                   Positioned(
                     left: 8 - (_playTarget - _playSize) / 2,
+                    bottom: 8 +
+                        (rowHeight - _playSize) / 2 -
+                        (_playTarget - _playSize) / 2,
+                    width: _playTarget,
+                    height: _playTarget,
+                    child: Material(
+                      type: MaterialType.transparency,
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: widget.onTap,
+                        child: Center(
+                          child: Container(
+                            width: _playSize,
+                            height: _playSize,
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white54),
+                            ),
+                            child: const Icon(Icons.info_outline_rounded,
+                                size: 18,
+                                color: Colors.white,
+                                semanticLabel: 'More Info'),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                if (resumable)
+                  Positioned(
+                    left: playLeft - (_playTarget - _playSize) / 2,
                     bottom: 8 +
                         (rowHeight - _playSize) / 2 -
                         (_playTarget - _playSize) / 2,

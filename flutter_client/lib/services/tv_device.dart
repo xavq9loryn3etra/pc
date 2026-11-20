@@ -1,5 +1,6 @@
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// Whether the app is running on a TV (Android TV, Google TV, Fire TV):
@@ -11,6 +12,10 @@ class TvDevice {
   static bool _isTv = false;
 
   static bool get isTv => _isTv;
+
+  /// For tests: as on a TV (true) or not.
+  @visibleForTesting
+  static set debugIsTv(bool value) => _isTv = value;
 
   static Future<void> init() async {
     if (!Platform.isAndroid) return;

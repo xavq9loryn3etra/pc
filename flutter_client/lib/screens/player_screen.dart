@@ -378,6 +378,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   // _seekTo), off once playback visibly moves on again (see
   // _checkSeekFinished).
   bool _seekPending = false;
+  // On a TV, a seek or stall gone on long enough to notice: its spinner
+  // in the middle, the controls staying away (see _revealWait).
+  bool _tvWaitShown = false;
   DateTime? _seekStartedAt;
   Duration? _seekLastPosition;
   DateTime? _lastSaveTime;
@@ -830,10 +833,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (isBuffering) {
         _bufferingRevealTimer = Timer(const Duration(milliseconds: 600), () {
           if (!mounted || !_isBuffering) return;
-          _controlsTimer?.cancel();
-          setState(() => _controlsVisible = true);
+          _revealWait();
         });
       } else {
+        if (_tvWaitShown) setState(() => _tvWaitShown = false);
         _resetControlsTimer();
       }
     });
@@ -1145,8 +1148,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _seekRevealTimer?.cancel();
     _seekRevealTimer = Timer(const Duration(milliseconds: 600), () {
       if (!mounted || !_seekPending) return;
-      _controlsTimer?.cancel();
-      setState(() => _controlsVisible = true);
+      _revealWait();
     });
   }
 
@@ -1180,10 +1182,23 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  /// A wait long enough to notice (a seek, a stall): the controls up to
+  /// show it, the play button ringed with the spinner — or on a TV, where
+  /// only OK brings them up, a spinner of its own (see _tvWaitShown).
+  void _revealWait() {
+    if (TvDevice.isTv) {
+      if (!_controlsVisible) setState(() => _tvWaitShown = true);
+      return;
+    }
+    _controlsTimer?.cancel();
+    setState(() => _controlsVisible = true);
+  }
+
   void _finishSeek() {
     setState(() {
       _seekPending = false;
       _seekStartedAt = null;
+      _tvWaitShown = false;
     });
     // Playing again: the controls can hide as usual.
     _resetControlsTimer();
@@ -2272,9 +2287,10 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// A TV remote, as TV apps' players take it. The remote's own play,
   /// pause, fast-forward and rewind buttons work whatever's showing. With
-  /// none of the player's buttons selected, left and right skip, OK plays
-  /// or pauses (and shows the controls), and up or down bring the controls
-  /// up with the play button selected; on the buttons, the arrows move
+  /// none of the player's buttons selected, left and right skip (the
+  /// controls staying away: only OK brings them up), OK plays or pauses
+  /// and shows the controls, and once they're up, up or down selects the
+  /// play button; on the buttons, the arrows move
   /// between them and OK presses one, as anywhere else in the app (see
   /// TvTraversalPolicy) — until the controls fade, when the arrows skip
   /// again. A menu (subtitles & audio, the episodes) takes the arrows while
@@ -2347,12 +2363,40 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (!_loadingVideo) _skipForward(flash: true);
       return true;
     }
+    // Only OK brings the controls up; once they're up (none of their
+    // buttons selected yet), up or down selects the play button.
     if (key == LogicalKeyboardKey.arrowUp ||
         key == LogicalKeyboardKey.arrowDown) {
-      if (pressed) _showTvControls(selectPlay: true);
+      if (pressed && _controlsVisible) _showTvControls(selectPlay: true);
       return true;
     }
     return false;
+  }
+
+  /// On a TV, with the player itself selected (none of its buttons): the
+  /// arrows and OK are spent here — _onTvKey has already acted on them.
+  /// Every key also goes on to the app's own handling, which moves the
+  /// selection with the arrows: with the controls up, a right arrow meant
+  /// to skip moved it onto the buttons instead (and the presses after it
+  /// moved along them).
+  KeyEventResult _onRootKey(FocusNode node, KeyEvent event) {
+    if (!TvDevice.isTv ||
+        !node.hasPrimaryFocus ||
+        _showSettingsPanel ||
+        _showEpisodeDrawer) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.select ||
+        key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   /// The seek bar's pointer, selected (see _seekBarFocus): left and right
@@ -2829,7 +2873,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     _positionNotifier.value = target;
     if (flash) {
       setState(() {
-        _controlsVisible = true;
+        // Not on a TV: only OK brings them up there.
+        if (!TvDevice.isTv) _controlsVisible = true;
         _flashIcon = delta.isNegative
             ? Icons.replay_10_rounded
             : Icons.forward_10_rounded;
@@ -5057,10 +5102,15 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// phone on its side that came to 42%, the lines small to read. With the
   /// size raised to 38 from 32: about 21 on a phone (13.5 before), 30 on a
   /// laptop (25.6), 38 on a big screen (32).
+  ///
+  /// On a TV, 40% bigger: it's watched from across the room, and the same
+  /// share of the screen as a laptop's (about 3.5% of its height a line)
+  /// read small from the sofa. About 5% of it, as TV apps' subtitles.
   TextScaler _subtitleScaler(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final area = size.width * size.height / (1920 * 1080);
-    return TextScaler.linear(math.max(0.55, math.sqrt(area.clamp(0.0, 1.0))));
+    final scale = math.max(0.55, math.sqrt(area.clamp(0.0, 1.0)));
+    return TextScaler.linear(TvDevice.isTv ? scale * 1.4 : scale);
   }
 
   /// The Sinhala row's "Add key": the Gemini key's steps and paste box
@@ -6066,6 +6116,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           : Focus(
               focusNode: _rootFocus,
               autofocus: true,
+              onKeyEvent: _onRootKey,
               // Keys are the player's own (_onHardwareKey), not its
               // buttons' — except on a TV, where the remote moves between
               // them while they're showing (see _onTvKey).
@@ -6164,7 +6215,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                                         color: _isPlaying
                                             ? const Color(0xffffffff)
                                             : Colors.transparent,
-                                        fontWeight: FontWeight.normal,
+                                        // A touch heavier on a TV: thin
+                                        // strokes blur from across a room.
+                                        fontWeight: TvDevice.isTv
+                                            ? FontWeight.w500
+                                            : FontWeight.normal,
                                         backgroundColor: _isPlaying
                                             ? const Color(0xaa000000)
                                             : Colors.transparent,
@@ -6180,6 +6235,25 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 ),
                               ),
                             ),
+
+                            // On a TV, a wait the controls don't show (see
+                            // _revealWait).
+                            if (TvDevice.isTv &&
+                                _tvWaitShown &&
+                                !_controlsVisible &&
+                                (_seekPending || _isBuffering))
+                              const IgnorePointer(
+                                child: Center(
+                                  child: SizedBox(
+                                    width: 56,
+                                    height: 56,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 3,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ),
 
                             // Play/pause flash: pops in, then fades as it grows
                             IgnorePointer(

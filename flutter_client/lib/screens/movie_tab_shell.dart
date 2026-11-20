@@ -291,10 +291,10 @@ class _WideTabs extends StatelessWidget {
                               right: 0,
                               width: 48 * t,
                               height: 48 * t,
-                              child: const IgnorePointer(
+                              child: IgnorePointer(
                                 child: ClipOval(
                                   child: GlassBlur(
-                                    child: ColoredBox(color: kGlassTint),
+                                    child: ColoredBox(color: glassTint(context)),
                                   ),
                                 ),
                               ),

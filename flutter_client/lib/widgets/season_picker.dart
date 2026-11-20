@@ -258,10 +258,10 @@ class _SeasonPickerState extends State<SeasonPicker>
       borderRadius: _radius,
       child: GlassBlur(
         sigma: 16,
-        reducedTint: const Color(0xF2161616),
+        reducedTint: Colors.black,
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: kGlassSheetTint,
+            color: glassSheetTint(context),
             borderRadius: _radius,
             border: Border.all(color: kGlassEdge),
           ),

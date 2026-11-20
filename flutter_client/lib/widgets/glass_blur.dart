@@ -15,9 +15,9 @@ import 'floating_bottom_nav_bar.dart' show kNavButtonHeight, windowIsWide;
 ///
 /// Use this instead of BackdropFilter directly, so every glass surface:
 ///  * goes plain where VisualEffectsService says to — on phones too slow
-///    for the blur, and in battery saver: no blur, just [child] over
-///    [reducedTint] so text on it stays readable without the blur behind
-///    it;
+///    for the blur, in battery saver, and on TVs: no blur, just [child]
+///    over [reducedTint], solid black — nothing shows through — with the
+///    tint on it black too (see [glassTint]);
 ///  * can share one backdrop capture with the app's other [grouped] glass
 ///    (the BackdropGroup at the app root), instead of each surface taking
 ///    its own copy of the screen every frame;
@@ -56,7 +56,8 @@ class GlassBlur extends StatefulWidget {
     // a 60 Hz frame's 16.7 ms several times a second while scrolling.
     this.sigma = 12,
     this.grouped = false,
-    this.reducedTint = const Color(0xE6000000), // black, 90%
+    // Solid: nothing shows through glass that isn't blurring.
+    this.reducedTint = Colors.black,
     this.paused = false,
     this.keepsFrost = false,
     required this.child,
@@ -208,14 +209,57 @@ class _GlassBlurState extends State<GlassBlur> {
 // screen's back button and the bottom nav), after Apple's dark materials:
 // a neutral dark grey rather than black, so what's behind shows through
 // as soft colour, and only a hairline of an edge to keep it from vanishing
-// against black.
+// against black. Glass reads it through [glassTint], which is black when
+// the glass is plain.
 const kGlassTint = Color(0x8C2C2C2E); // #2C2C2E, 55%
 final kGlassEdge = Colors.white.withValues(alpha: 0.06);
 
 // The thicker glass of big surfaces holding text — dialogs, sheets, side
 // panels — like Apple's thick material: the same grey, darker, so text
-// stays readable over anything behind.
+// stays readable over anything behind. Read through [glassSheetTint].
 const kGlassSheetTint = Color(0xB81C1C1E); // #1C1C1E, 72%
+
+/// [kGlassTint], or solid black where the glass is plain (see
+/// VisualEffectsService): nothing shows through it then, the grey's
+/// gone too — AMOLED black, the edge alone marking its shape.
+Color glassTint(BuildContext context) =>
+    PlainGlassScope.of(context) ? Colors.black : kGlassTint;
+
+/// [kGlassSheetTint], or solid black where the glass is plain.
+Color glassSheetTint(BuildContext context) =>
+    PlainGlassScope.of(context) ? Colors.black : kGlassSheetTint;
+
+/// Whether the app's glass is plain (VisualEffectsService.reduceGlass),
+/// for the tints laid on it ([glassTint]) — rebuilding what reads them
+/// when that changes. Around the whole app (see main.dart).
+class PlainGlassScope extends StatelessWidget {
+  final Widget child;
+
+  const PlainGlassScope({super.key, required this.child});
+
+  static bool of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_PlainGlass>()?.plain ??
+      false;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: VisualEffectsService().reduceGlass,
+      builder: (context, plain, child) =>
+          _PlainGlass(plain: plain, child: child!),
+      child: child,
+    );
+  }
+}
+
+class _PlainGlass extends InheritedWidget {
+  final bool plain;
+
+  const _PlainGlass({required this.plain, required super.child});
+
+  @override
+  bool updateShouldNotify(_PlainGlass old) => old.plain != plain;
+}
 
 /// A round frosted-glass icon button — the back / close buttons over the
 /// player and its episode browser, matching the details screen's.
@@ -251,9 +295,9 @@ class GlassCircleButton extends StatelessWidget {
     return ClipOval(
       child: GlassBlur(
         grouped: grouped,
-        reducedTint: Colors.black.withValues(alpha: 0.9),
+        reducedTint: Colors.black,
         child: Material(
-          color: kGlassTint,
+          color: glassTint(context),
           shape: CircleBorder(
             side: showBorder ? BorderSide(color: kGlassEdge) : BorderSide.none,
           ),
@@ -299,9 +343,9 @@ class GlassActionButton extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(30),
         child: GlassBlur(
-          reducedTint: Colors.black.withValues(alpha: 0.9),
+          reducedTint: Colors.black,
           child: Material(
-            color: kGlassTint,
+            color: glassTint(context),
             shape: _shape.copyWith(side: BorderSide(color: kGlassEdge)),
             child: InkWell(
               mouseCursor: WidgetStateMouseCursor.clickable,
@@ -348,7 +392,7 @@ class GlassSwitch extends StatelessWidget {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(16),
             child: GlassBlur(
-              reducedTint: Colors.black.withValues(alpha: 0.9),
+              reducedTint: Colors.black,
               child: AnimatedContainer(
                 duration: _duration,
                 curve: Curves.easeOut,
@@ -356,7 +400,7 @@ class GlassSwitch extends StatelessWidget {
                 height: 32,
                 padding: const EdgeInsets.all(3),
                 decoration: ShapeDecoration(
-                  color: value ? (activeColor ?? AppTheme.accent) : kGlassTint,
+                  color: value ? (activeColor ?? AppTheme.accent) : glassTint(context),
                   shape: StadiumBorder(
                     side: BorderSide(
                         color: value ? Colors.transparent : kGlassEdge),
@@ -448,14 +492,14 @@ class GlassPillButton extends StatelessWidget {
             borderRadius: BorderRadius.circular(wide ? 24 : 20),
             child: GlassBlur(
               grouped: grouped,
-              reducedTint: Colors.black.withValues(alpha: 0.9),
+              reducedTint: Colors.black,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 180),
                 curve: Curves.easeOut,
                 decoration: ShapeDecoration(
                   color: selected
                       ? Colors.white.withValues(alpha: 0.28)
-                      : kGlassTint,
+                      : glassTint(context),
                   shape: _shape.copyWith(
                     side: BorderSide(
                       color: selected

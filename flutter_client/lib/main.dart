@@ -586,7 +586,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         // instead of sticking app-wide.
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: AppTheme.systemUiStyle,
-          child: BackdropGroup(
+          // Tells the glass's tints (glassTint) when it's plain: black.
+          child: PlainGlassScope(
+            child: BackdropGroup(
             backdropKey: _backdropKey,
             // On a TV, the ring around whatever the remote has selected.
             // On a TV, laid out at laptop-window proportions (see
@@ -607,6 +609,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                 ),
               ),
             ),
+          ),
           ),
         );
       },

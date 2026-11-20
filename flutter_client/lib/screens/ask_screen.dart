@@ -865,7 +865,7 @@ class _AskScreenState extends State<AskScreen>
               grouped: true,
               // Near solid without the blur (slower phones, battery
               // saver): the posters showed through sharp under the text.
-              reducedTint: const Color(0xEB141416),
+              reducedTint: const Color(0xFF141416),
               child: CustomPaint(
                 painter: _EdgePainter(shape),
                 child: const ColoredBox(color: kGlassTint),
@@ -1714,9 +1714,9 @@ class _ExamplePill extends StatelessWidget {
       borderRadius: const BorderRadius.all(Radius.circular(100)),
       child: GlassBlur(
         grouped: true,
-        reducedTint: Colors.black.withValues(alpha: 0.9),
+        reducedTint: Colors.black,
         child: Material(
-          color: kGlassTint,
+          color: glassTint(context),
           shape: shape.copyWith(side: BorderSide(color: kGlassEdge)),
           child: InkWell(
             mouseCursor: WidgetStateMouseCursor.clickable,

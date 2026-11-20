@@ -205,10 +205,10 @@ class GlassPanel extends StatelessWidget {
       borderRadius: _radius,
       child: GlassBlur(
         sigma: 16,
-        reducedTint: const Color(0xF2161616),
+        reducedTint: Colors.black,
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: kGlassSheetTint,
+            color: glassSheetTint(context),
             borderRadius: _radius,
             border: Border.all(color: kGlassEdge),
           ),
@@ -259,7 +259,7 @@ class GlassDialogButton extends StatelessWidget {
       child: SizedBox(
         height: 44,
         child: Material(
-          color: primary ? Colors.white : kGlassTint,
+          color: primary ? Colors.white : glassTint(context),
           shape: primary
               ? _shape
               : _shape.copyWith(side: BorderSide(color: kGlassEdge)),

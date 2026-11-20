@@ -80,7 +80,7 @@ class ModeSwitcherDialog extends StatelessWidget {
                 width: double.infinity,
                 padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
                 decoration: BoxDecoration(
-                  color: kGlassSheetTint,
+                  color: glassSheetTint(context),
                   borderRadius: const BorderRadius.vertical(
                     bottom: Radius.circular(24),
                   ),

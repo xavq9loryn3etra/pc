@@ -249,16 +249,16 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
                     : Alignment.bottomRight,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(22),
-                  // Its own 72% tint (kGlassSheetTint), darker when the blur
-                  // is reduced: about 90% together.
+                  // Its own 72% tint (glassSheetTint): solid black, as
+                  // what's under it, when the blur is off.
                   child: GlassBlur(
                     sigma: 16,
-                    reducedTint: Colors.black.withValues(alpha: 0.65),
+                    reducedTint: Colors.black,
                     child: Container(
                       width: panelWidth,
                       constraints: BoxConstraints(maxHeight: maxPanelHeight),
                       decoration: BoxDecoration(
-                        color: kGlassSheetTint,
+                        color: glassSheetTint(context),
                         borderRadius: BorderRadius.circular(22),
                         border: Border.all(color: kGlassEdge, width: 0.5),
                       ),

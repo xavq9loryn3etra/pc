@@ -528,7 +528,7 @@ class _NavPill extends StatelessWidget {
   Widget build(BuildContext context) {
     final textColor = isActive ? activeColor : Colors.white;
     return Material(
-      color: kGlassTint,
+      color: glassTint(context),
       clipBehavior: Clip.antiAlias,
       shape: StadiumBorder(
         side: BorderSide(
@@ -587,7 +587,7 @@ class _NavCircle extends StatelessWidget {
     // Blur comes from the bar's shared glass layer behind it; this paints
     // just the tint, border and ink (clipped to the circle).
     return Material(
-      color: kGlassTint,
+      color: glassTint(context),
       clipBehavior: Clip.antiAlias,
       shape: CircleBorder(
         side: BorderSide(

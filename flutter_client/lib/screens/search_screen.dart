@@ -325,10 +325,10 @@ class _SearchScreenState extends State<SearchScreen> {
         borderRadius: BorderRadius.circular(_fieldHeight / 2),
         child: GlassBlur(
           grouped: true,
-          reducedTint: Colors.black.withValues(alpha: 0.9),
+          reducedTint: Colors.black,
           child: DecoratedBox(
             decoration: ShapeDecoration(
-              color: kGlassTint,
+              color: glassTint(context),
               shape: StadiumBorder(side: BorderSide(color: kGlassEdge)),
             ),
             child: Padding(
@@ -637,9 +637,9 @@ class _SearchScreenState extends State<SearchScreen> {
             borderRadius: BorderRadius.circular(_recentsHeight / 2),
             child: GlassBlur(
               grouped: true,
-              reducedTint: Colors.black.withValues(alpha: 0.9),
+              reducedTint: Colors.black,
               child: Material(
-                color: kGlassTint,
+                color: glassTint(context),
                 shape: StadiumBorder(side: BorderSide(color: kGlassEdge)),
                 child: InkWell(
                   mouseCursor: WidgetStateMouseCursor.clickable,

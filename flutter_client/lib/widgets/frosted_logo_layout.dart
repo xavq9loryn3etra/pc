@@ -79,7 +79,8 @@ class FrostedLogoLayout extends StatelessWidget {
 
           // Frost over the whole wall, with the icon's silhouette left
           // clear. Where the phone has the app's glass turned down (too
-          // slow, or saving power), a heavier tint stands in for the blur.
+          // slow, saving power, or a TV), solid black stands in for the
+          // blur: the posters only through the icon.
           Positioned.fill(
             child: ClipPath(
               clipper: _FrostClipper(logoRect),
@@ -87,7 +88,7 @@ class FrostedLogoLayout extends StatelessWidget {
               child: ValueListenableBuilder<bool>(
                 valueListenable: VisualEffectsService().reduceGlass,
                 builder: (context, reduced, _) => reduced
-                    ? ColoredBox(color: Colors.black.withValues(alpha: 0.9))
+                    ? const ColoredBox(color: Colors.black)
                     : BackdropFilter(
                         filter: ui.ImageFilter.blur(sigmaX: 36, sigmaY: 36),
                         child: ColoredBox(

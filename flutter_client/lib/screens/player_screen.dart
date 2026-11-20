@@ -2649,12 +2649,12 @@ class _PlayerScreenState extends State<PlayerScreen>
             child: ClipRRect(
               borderRadius: BorderRadius.circular(20),
               child: GlassBlur(
-                reducedTint: Colors.black.withValues(alpha: 0.9),
+                reducedTint: Colors.black,
                 child: Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                   decoration: ShapeDecoration(
-                    color: kGlassTint,
+                    color: glassTint(context),
                     shape: StadiumBorder(side: BorderSide(color: kGlassEdge)),
                   ),
                   child:
@@ -3317,11 +3317,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                     builder: (context, child) => GlassBlur(
                       sigma: 16,
                       paused: _episodeDrawerController.isAnimating,
-                      reducedTint: Colors.black.withValues(alpha: 0.9),
+                      reducedTint: Colors.black,
                       child: child!,
                     ),
                     child: ColoredBox(
-                      color: kGlassSheetTint,
+                      color: glassSheetTint(context),
                       // A phone-sized screen of its own, as the home's side
                       // column.
                       child: MediaQuery(
@@ -6697,7 +6697,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                                       decoration:
                                                                           ShapeDecoration(
                                                                         color:
-                                                                            kGlassTint,
+                                                                            glassTint(context),
                                                                         shape:
                                                                             StadiumBorder(
                                                                           side:

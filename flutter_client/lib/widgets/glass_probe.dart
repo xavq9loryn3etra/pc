@@ -7,8 +7,9 @@ import 'glass_blur.dart';
 /// Measures, out of sight, how long this phone takes to draw the app's
 /// frosted glass, and tells VisualEffectsService whether that's too slow
 /// for it. Placed behind the mode selector's slideshow — which covers it,
-/// and keeps the screen redrawing every frame — once per app version
-/// (VisualEffectsService.needsProbe), so a slow phone has plain glass
+/// and keeps the screen redrawing every frame — once per app version, and
+/// again on the next launch after finding it too slow, to be sure
+/// (VisualEffectsService.needsProbe) — so a slow phone has plain glass
 /// before it reaches a page with glass on it.
 ///
 /// The glass is about what a details page shows over the home as it

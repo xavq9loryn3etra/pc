@@ -105,8 +105,8 @@ class _GlassBubbleBarState extends State<GlassBubbleBar> {
                     grow: grow,
                     mirror: mirror,
                   ),
-                  child: const GlassBlur(
-                    child: ColoredBox(color: kGlassTint),
+                  child: GlassBlur(
+                    child: ColoredBox(color: glassTint(context)),
                   ),
                 ),
               ),

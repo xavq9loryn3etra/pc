@@ -149,14 +149,16 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
                 // highest-frequency backdrop blur in the app, so its cost
                 // matters most. See mode_switcher_dialog.dart's comment.
                 // Grouped with the floating nav bar's glass (they never
-                // overlap), and its own 90% tint needs no extra when the
-                // blur is reduced.
+                // overlap). Its own tint is all it needs: 90% black, and
+                // solid black where the glass is plain — nothing shows
+                // through it then.
                 sigma: 10 * opacity,
                 grouped: true,
                 reducedTint: Colors.transparent,
                 child: Container(
-                  color: Colors.black.withOpacity(
-                      opacity * 0.9), // Increased to 0.9 as requested
+                  color: Colors.black.withValues(
+                      alpha: opacity *
+                          (PlainGlassScope.of(context) ? 1.0 : 0.9)),
                 ),
               ),
             )

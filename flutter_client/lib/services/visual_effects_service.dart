@@ -10,39 +10,54 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../widgets/glass_probe.dart';
+import 'tv_device.dart';
 
 /// Whether frosted-glass surfaces (see GlassBlur) skip their live blur and
-/// use a plain translucent tint instead ([reduceGlass]). Decided by the app
+/// go plain, solid black, instead ([reduceGlass]). Decided by the app
 /// itself, as no setting could be trusted to be found by the people who
-/// need it: plain on phones too slow for the blur, and while battery saver
-/// is on.
+/// need it: plain on phones too slow for the blur, while battery saver is
+/// on, and always on a TV — most have a small processor and slow memory.
 ///
 /// How fast the phone is gets measured twice over:
-///  * once per app version, out of sight, by GlassProbe behind the mode
-///    selector — so a slow phone has plain glass before its first page
-///    with glass on it ([needsProbe], [probeResult]);
+///  * out of sight, by GlassProbe behind the mode selector — so a slow
+///    phone has plain glass before its first page with glass on it
+///    ([needsProbe], [probeResult]);
 ///  * all along, from the frames the app really draws ([_watch]): a phone
 ///    clearly struggling switches; one only slightly behind, in two
 ///    separate sessions — a phone can just be busy or hot for a while —
 ///    unless the probe found it had room to spare ([_roomy]).
+///
+/// "Too slow" sticks (for the app's version) only once two separate
+/// launches have found it ([_slowVotes]): one alone goes plain for that
+/// launch, and the next measures again. A Galaxy S25 Ultra, drawing the
+/// probe in a quarter of its frame, was once found too slow on the first
+/// launch after an update — a busy moment — and kept plain glass for the
+/// whole version; a PC went frosted or plain from one version to the next.
 class VisualEffectsService {
   static final VisualEffectsService _instance =
       VisualEffectsService._internal();
   factory VisualEffectsService() => _instance;
   VisualEffectsService._internal();
 
-  static const _decisionKey = 'glass_decision_v1';
+  static const _decisionKey = 'glass_decision_v2';
   static const _strikesKey = 'glass_strikes_v1';
 
   final ValueNotifier<bool> reduceGlass = ValueNotifier(false);
 
-  // Plain because the phone's too slow for the blur.
+  // Plain because the phone's too slow for the blur (or it's a TV).
   bool _tooSlow = false;
   bool _powerSave = false;
   String? _version;
 
-  /// Whether this version of the app has yet to measure the blur on this
-  /// phone (see GlassProbe).
+  // Separate launches that found the phone too slow, since it was last
+  // found fast enough: at [_votesToStick], plain for the rest of the
+  // version, measured no more.
+  int _slowVotes = 0;
+  static const _votesToStick = 2;
+  bool _votedThisSession = false;
+
+  /// Whether the blur is yet to be measured on this phone, this launch
+  /// (see GlassProbe).
   bool get needsProbe => _needsProbe;
   bool _needsProbe = false;
 
@@ -50,6 +65,13 @@ class VisualEffectsService {
     final prefs = await SharedPreferences.getInstance();
     // The old "Reduce glass effects" setting, now decided automatically.
     unawaited(prefs.remove('reduce_glass_effects'));
+    unawaited(prefs.remove('glass_decision_v1'));
+    // A TV: plain, always — neither measured nor watched.
+    if (TvDevice.isTv) {
+      _tooSlow = true;
+      _update();
+      return;
+    }
     // A debug build (`flutter run`) stutters on any device — it isn't
     // compiled ahead — so its frames say nothing about the glass: neither
     // probed nor watched, and nothing decided. It had switched a PC to
@@ -66,9 +88,14 @@ class VisualEffectsService {
     if (decision != null &&
         decision['version'] == _version &&
         decision['probe'] == GlassProbe.version) {
-      _tooSlow = decision['plain'] == true;
+      final votes = decision['votes'];
+      _slowVotes = votes is int ? votes : 0;
       final share = decision['share'];
       _probeShare = share is num ? share.toDouble() : null;
+      // Found too slow once: plain still, until measured again just now —
+      // a slow phone mustn't frost over before the probe's had its say.
+      _tooSlow = _slowVotes > 0;
+      _needsProbe = _slowVotes > 0 && _slowVotes < _votesToStick;
     } else {
       // New install, a new version or a new probe: measure again — a phone
       // once too slow gets another chance as the app gets lighter. And
@@ -88,7 +115,23 @@ class VisualEffectsService {
   Future<void> probeResult({required bool tooSlow, double? share}) async {
     _needsProbe = false;
     _probeShare = share;
-    await _decide(tooSlow: tooSlow);
+    if (tooSlow) {
+      await _voteSlow();
+    } else {
+      // Fast enough: frosted, and any earlier finding forgotten.
+      _slowVotes = 0;
+      await _decide(tooSlow: false);
+    }
+  }
+
+  /// This launch found the phone too slow: plain now, and for good (for
+  /// the version) once another launch has found it too.
+  Future<void> _voteSlow() async {
+    if (!_votedThisSession) {
+      _votedThisSession = true;
+      _slowVotes++;
+    }
+    await _decide(tooSlow: true);
   }
 
   // The probe's measure of this phone (see probeResult): under
@@ -110,10 +153,10 @@ class VisualEffectsService {
         jsonEncode({
           'version': _version,
           'probe': GlassProbe.version,
-          'plain': tooSlow,
+          'votes': _slowVotes,
           if (_probeShare != null) 'share': _probeShare,
         }));
-    if (tooSlow) await prefs.remove(_strikesKey);
+    if (_slowVotes >= _votesToStick) await prefs.remove(_strikesKey);
   }
 
   void _update() => reduceGlass.value = _tooSlow || _powerSave;
@@ -164,12 +207,9 @@ class VisualEffectsService {
   void _watch() => SchedulerBinding.instance.addTimingsCallback(_onTimings);
 
   void _onTimings(List<FrameTiming> timings) {
-    // Only glass that's blurring can be too slow; battery saver aside.
-    if (_tooSlow) {
-      SchedulerBinding.instance.removeTimingsCallback(_onTimings);
-      return;
-    }
-    if (_powerSave) {
+    // Only glass that's blurring can be too slow; battery saver aside. Not
+    // stopped while plain: measured again, the phone can frost back over.
+    if (_tooSlow || _powerSave) {
       _run.clear();
       _lastVsync = null;
       _lastFinish = null;
@@ -213,7 +253,7 @@ class VisualEffectsService {
   void _judge(List<bool> stutters) {
     final share = stutters.where((s) => s).length / stutters.length;
     if (share >= _clearlySlow && ++_slowWindows >= 2) {
-      _decide(tooSlow: true);
+      _voteSlow();
     } else if (!_roomy &&
         share >= _borderline &&
         ++_borderlineWindows >= 2 &&
@@ -223,11 +263,13 @@ class VisualEffectsService {
     }
   }
 
-  // A second session with a borderline window means too slow.
+  // A second session with a borderline window means too slow — two
+  // sessions have found it already, so for good (for the version).
   Future<void> _strike() async {
     final prefs = await SharedPreferences.getInstance();
     final strikes = prefs.getInt(_strikesKey) ?? 0;
     if (strikes >= 1) {
+      _slowVotes = _votesToStick;
       await _decide(tooSlow: true);
     } else {
       await prefs.setInt(_strikesKey, strikes + 1);

@@ -820,9 +820,9 @@ class _EpisodeSheetFrameState extends State<EpisodeSheetFrame> {
                           // Strong: a big surface, the page's detail would
                           // show through a lighter blur.
                           sigma: 30,
-                          reducedTint: const Color(0xF2161616),
+                          reducedTint: Colors.black,
                           paused: _moving,
-                          child: const ColoredBox(color: kGlassSheetTint),
+                          child: ColoredBox(color: glassSheetTint(context)),
                         )
                       : EpisodeBackdrop(image: widget.image, dim: 0.6),
                 ),

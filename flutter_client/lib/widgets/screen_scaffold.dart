@@ -273,12 +273,12 @@ class TitleIsland extends StatelessWidget {
                       // overlaps.
                       child: GlassBlur(
                         grouped: true,
-                        reducedTint: Colors.black.withValues(alpha: 0.9),
+                        reducedTint: Colors.black,
                         child: Opacity(
                           opacity: t,
                           child: DecoratedBox(
                             decoration: BoxDecoration(
-                              color: kGlassTint,
+                              color: glassTint(context),
                               borderRadius: BorderRadius.all(
                                 Radius.circular(height / 2),
                               ),

@@ -6,6 +6,6 @@
   "maintenance_message": "We are currently performing a scheduled maintenance. Please check back later.",
   "hide_playback": false,
   "ios": {
-    "min_required_version": "3.0.0"
+    "min_required_version": "4.3.7"
   }
 }

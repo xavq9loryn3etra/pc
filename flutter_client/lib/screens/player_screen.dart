@@ -2288,9 +2288,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// A TV remote, as TV apps' players take it. The remote's own play,
   /// pause, fast-forward and rewind buttons work whatever's showing. With
   /// none of the player's buttons selected, left and right skip (the
-  /// controls staying away: only OK brings them up), OK plays or pauses
-  /// and shows the controls, and once they're up, up or down selects the
-  /// play button; on the buttons, the arrows move
+  /// controls staying away: only OK brings them up), OK brings the
+  /// controls up with the play button selected (the film playing on), and
+  /// once they're up, up or down selects the play button; on the buttons, the arrows move
   /// between them and OK presses one, as anywhere else in the app (see
   /// TvTraversalPolicy) — until the controls fade, when the arrows skip
   /// again. A menu (subtitles & audio, the episodes) takes the arrows while
@@ -2346,12 +2346,16 @@ class _PlayerScreenState extends State<PlayerScreen>
       return false;
     }
 
+    // OK, as Netflix's: the controls up, the film playing on, the play
+    // button selected — OK again (on it) pauses. Up already (paused, or by
+    // the remote's own play button) with nothing selected: as the play
+    // button, and onto it.
     if (key == LogicalKeyboardKey.select ||
         key == LogicalKeyboardKey.enter ||
         key == LogicalKeyboardKey.numpadEnter) {
       if (pressed && !_loadingVideo) {
-        _playPause();
-        _showTvControls();
+        if (_controlsVisible) _playPause();
+        _showTvControls(selectPlay: true);
       }
       return true;
     }

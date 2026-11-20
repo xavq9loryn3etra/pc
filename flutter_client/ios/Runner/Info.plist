@@ -14,7 +14,17 @@
 				<string>popcorn</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.261821204607-8ikvf78sirpnmkp1lpp60c43j93iu2i3</string>
+			</array>
+		</dict>
 	</array>
+	<key>GIDClientID</key>
+	<string>261821204607-8ikvf78sirpnmkp1lpp60c43j93iu2i3.apps.googleusercontent.com</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

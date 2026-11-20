@@ -87,8 +87,11 @@ workflows:
       - name: Build IPA for TestFlight
         script: |
           cd flutter_client
-          # This command now has the certificates it needs in the keychain
-          flutter build ipa --release --export-options-plist=$HOME/export_options.plist
+          # This command now has the certificates it needs in the keychain.
+          # GOOGLE_IOS_CLIENT_ID turns on sync (Google sign-in) on iPhone;
+          # it isn't secret (it's in Info.plist too).
+          flutter build ipa --release --export-options-plist=$HOME/export_options.plist \
+            --dart-define=GOOGLE_IOS_CLIENT_ID=261821204607-8ikvf78sirpnmkp1lpp60c43j93iu2i3.apps.googleusercontent.com
     artifacts:
       - flutter_client/build/ios/ipa/*.ipa
     publishing:

@@ -14,24 +14,25 @@ import '../services/saved_movies_service.dart';
 import '../services/movie_tab_service.dart';
 import '../services/tv_device.dart';
 import '../widgets/artwork_glow.dart';
+import '../widgets/hero_carousel.dart';
 import '../widgets/smooth_scroll_controller.dart';
 import '../widgets/custom_app_bar.dart' show LogoIsland;
 
 class DesktopHomeScreen extends StatefulWidget {
-  final Movie featuredMovie;
+  /// The hero slideshow's titles (see HeroCarousel), in order; the first's
+  /// details already loaded.
+  final List<Movie> heroMovies;
   final List<Movie> trendingMovies;
   final List<Movie> historyMovies;
   final List<Movie> topRatedMovies;
-  /// Null hides the hero's Trailer button (no trailer for this title).
-  final VoidCallback? onTrailerHero;
-  final VoidCallback onInfoHero;
+  /// A hero title's Trailer button (only titles with a trailer have one).
+  final void Function(Movie movie) onTrailerHero;
   final Function(Movie) onMovieTap;
   final Function(Movie)? onRemoveHistory;
 
-  /// Where [featuredMovie] stands in TMDB's weekly trending list (1 = top),
-  /// for the "#3 Trending This Week" line; 0 or less hides it.
-  final int trendingRank;
-  /// What the rank's of ("Trending This Week", Ramen's "Popular Right Now").
+  /// What a hero title's place in [trendingMovies] is of, for its "#3
+  /// Trending This Week" line ("Trending This Week", Ramen's "Popular
+  /// Right Now").
   final String rankLabel;
 
   /// Ramen's: its rows between the trending and top rated ones (this
@@ -43,15 +44,13 @@ class DesktopHomeScreen extends StatefulWidget {
 
   const DesktopHomeScreen({
     super.key,
-    required this.featuredMovie,
+    required this.heroMovies,
     required this.trendingMovies,
     required this.historyMovies,
     required this.topRatedMovies,
-    this.onTrailerHero,
-    required this.onInfoHero,
+    required this.onTrailerHero,
     required this.onMovieTap,
     this.onRemoveHistory,
-    this.trendingRank = 0,
     this.rankLabel = 'Trending This Week',
     this.newSeries = const [],
     this.films = const [],
@@ -150,29 +149,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                   SizedBox(
                     height: heroHeight,
                     width: double.infinity,
-                    child: ClipRect(
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          // Background (parallax)
-                          _buildBackground(context),
-                          // Gradients (stationary with the hero section so the
-                          // fade to black stays anchored above the poster rows)
-                          _buildGradients(),
-                          // Hero Content (Positioned from bottom to avoid overlap)
-                          // The overlapping lists start at heroHeight - 150.
-                          // We position this content to end at bottom: 180 (150 + 30px padding)
-                          Positioned(
-                            left: 60,
-                            bottom: 180,
-                            child: SizedBox(
-                              width: MediaQuery.of(context).size.width * 0.4,
-                              child: _buildHeroContent(context),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                    child: ClipRect(child: _buildHero(context, heroHeight)),
                   ),
 
                   // -----------------------------
@@ -298,46 +275,92 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     );
   }
 
-  Widget _buildBackground(BuildContext context) {
-    // accesses widget.featuredMovie
-    // The desktop hero can render wider than TMDB's w1280 backdrop tier on
-    // any 1080p+ display, so this one uses the full-resolution `original`
-    // source instead of the standard `backdrop` field everything else uses.
-    final image =
-        DesktopHomeScreen._heroBackdropUrlFor(widget.featuredMovie);
-    if (image == null) return const SizedBox.shrink();
+  // Where the hero's content ends, from its bottom: clear of the rows
+  // that overlap it (from heroHeight - 150), with 30 to spare. The dots
+  // sit level with its buttons, its last line, at the other side.
+  static const double _heroContentBottom = 180;
 
-    // As the phone hero (MovieHeroBanner) and the details page: the
-    // picture melting into a soft wash of its own colours — and, as there,
-    // moving at half the page's speed as it scrolls (parallax). The
-    // subtree is built once (`child`) behind a RepaintBoundary, so
-    // scrolling just moves its layer.
-    final background = RepaintBoundary(
-      child: Stack(
+  /// The hero: a slideshow of the trending titles (see HeroCarousel), the
+  /// dots at the right, level with the buttons at the left.
+  Widget _buildHero(BuildContext context, double heroHeight) {
+    final contentWidth = MediaQuery.sizeOf(context).width * 0.4;
+    return HeroCarousel(
+      movies: widget.heroMovies,
+      scrollController: _scrollController,
+      // Holds still once it's mostly scrolled away, or a title's open in
+      // the side panel over it.
+      pauseAfterScroll: heroHeight * 0.6,
+      paused: _selectedMovie != null,
+      precache: DesktopHomeScreen.precacheHero,
+      background: _buildBackground,
+      content: (context, movie, slide) => Stack(
+        children: [
+          Positioned(
+            left: 60,
+            bottom: _heroContentBottom,
+            child: SizedBox(
+              width: contentWidth,
+              child: _buildHeroContent(context, movie, slide),
+            ),
+          ),
+        ],
+      ),
+      layout: (context, strip, slides, dots) => Stack(
         fit: StackFit.expand,
         children: [
-          Positioned.fill(
-            child: ArtworkGlow(url: image),
-          ),
-          FadingCoverImage(
-            url: image,
-            cacheWidth: DesktopHomeScreen._heroBackdropCacheWidth(context),
-            alignment: Alignment.topCenter,
+          // The pictures, moving at half the page's speed as it scrolls
+          // (parallax), as the phone hero's and the details page's: built
+          // once (`child`) behind a RepaintBoundary, so scrolling just
+          // moves their layer.
+          ListenableBuilder(
+            listenable: _scrollController,
+            builder: (context, child) => Transform.translate(
+              offset: Offset(
+                0,
+                _scrollController.hasClients
+                    ? _scrollController.offset * 0.5
+                    : 0,
+              ),
+              child: child,
+            ),
+            child: RepaintBoundary(child: strip),
+          ).animate().fadeIn(duration: 800.ms),
+          // Gradients (stationary with the hero section so the fade to
+          // black stays anchored above the poster rows)
+          _buildGradients(),
+          slides,
+          Positioned(
+            right: 60,
+            bottom: _heroContentBottom,
+            height: 50, // the buttons'
+            child: Center(child: dots),
           ),
         ],
       ),
     );
-    return ListenableBuilder(
-      listenable: _scrollController,
-      builder: (context, child) => Transform.translate(
-        offset: Offset(
-          0,
-          _scrollController.hasClients ? _scrollController.offset * 0.5 : 0,
+  }
+
+  /// A hero slide's picture, as the phone hero's (MovieHeroBanner) and the
+  /// details page's: melting into a soft wash of its own colours.
+  Widget _buildBackground(BuildContext context, Movie movie) {
+    // The desktop hero can render wider than TMDB's w1280 backdrop tier on
+    // any 1080p+ display, so this one uses the full-resolution `original`
+    // source instead of the standard `backdrop` field everything else uses.
+    final image = DesktopHomeScreen._heroBackdropUrlFor(movie);
+    if (image == null) return const SizedBox.shrink();
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Positioned.fill(
+          child: ArtworkGlow(url: image),
         ),
-        child: child,
-      ),
-      child: background,
-    ).animate().fadeIn(duration: 800.ms);
+        FadingCoverImage(
+          url: image,
+          cacheWidth: DesktopHomeScreen._heroBackdropCacheWidth(context),
+          alignment: Alignment.topCenter,
+        ),
+      ],
+    );
   }
 
   Widget _buildGradients() {
@@ -410,8 +433,8 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     );
   }
 
-  Widget _buildLogo(BuildContext context) {
-    final url = DesktopHomeScreen._heroLogoUrlFor(widget.featuredMovie)!;
+  Widget _buildLogo(BuildContext context, Movie movie) {
+    final url = DesktopHomeScreen._heroLogoUrlFor(movie)!;
     const height = DesktopHomeScreen._heroLogoHeight;
 
     return CachedNetworkImage(
@@ -422,28 +445,33 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
       fit: BoxFit.contain,
       alignment: Alignment.centerLeft,
       placeholder: (context, url) => const SizedBox(height: height),
-      errorWidget: (context, url, err) => _buildHeroTitle(),
+      errorWidget: (context, url, err) => _buildHeroTitle(movie),
     );
   }
 
-  Widget _buildHeroContent(BuildContext context) {
+  /// A hero slide's logo, lines and buttons. The first slide's make an
+  /// entrance; the rest arrive with their slide.
+  Widget _buildHeroContent(BuildContext context, Movie movie, HeroSlide slide) {
+    final from = slide.entrance ? 0.0 : 1.0;
+    // Where it stands in the trending list (1 = top).
+    final rank = widget.trendingMovies.indexWhere((m) => m.id == movie.id) + 1;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (widget.featuredMovie.logoUrl != null)
-          _buildLogo(context).animate().fadeIn().slideX()
+        if (movie.logoUrl != null)
+          _buildLogo(context, movie).animate(value: from).fadeIn().slideX()
         else
-          _buildHeroTitle().animate().fadeIn().slideX(),
+          _buildHeroTitle(movie).animate(value: from).fadeIn().slideX(),
         const SizedBox(height: 16),
         // Year, what it is (as the phone hero's line) and rating
         Text(
           [
-            '${widget.featuredMovie.year}',
-            widget.featuredMovie.type == 'tv' ? 'TV Show' : 'Movie',
-            ...?widget.featuredMovie.genres?.take(2),
-            if (widget.featuredMovie.certification?.isNotEmpty ?? false)
-              widget.featuredMovie.certification!,
+            '${movie.year}',
+            movie.type == 'tv' ? 'TV Show' : 'Movie',
+            ...?movie.genres?.take(2),
+            if (movie.certification?.isNotEmpty ?? false)
+              movie.certification!,
           ].join(' • '),
           style: const TextStyle(
             color: Colors.white70,
@@ -457,11 +485,11 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
               ),
             ],
           ),
-        ).animate().fadeIn(delay: 200.ms),
-        if (widget.trendingRank > 0) ...[
+        ).animate(value: from).fadeIn(delay: 200.ms),
+        if (rank > 0) ...[
           const SizedBox(height: 6),
           Text(
-            '#${widget.trendingRank} ${widget.rankLabel}',
+            '#$rank ${widget.rankLabel}',
             style: const TextStyle(
               color: Colors.white,
               fontSize: 16,
@@ -474,13 +502,13 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                 ),
               ],
             ),
-          ).animate().fadeIn(delay: 250.ms),
+          ).animate(value: from).fadeIn(delay: 250.ms),
         ],
         const SizedBox(height: 16),
         SizedBox(
           width: 600,
           child: Text(
-            widget.featuredMovie.description,
+            movie.description,
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
@@ -489,7 +517,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
               height: 1.5,
             ),
           ),
-        ).animate().fadeIn(delay: 200.ms),
+        ).animate(value: from).fadeIn(delay: 200.ms),
         const SizedBox(height: 32),
         Row(
           mainAxisSize: MainAxisSize.min,
@@ -499,8 +527,9 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
             // frosted Trailer and Like.
             ElevatedButton.icon(
               // Where a TV remote starts on the home.
-              autofocus: TvDevice.isTv,
-              onPressed: () => _onMovieSelect(widget.featuredMovie),
+              focusNode: slide.primaryFocus,
+              autofocus: TvDevice.isTv && slide.entrance,
+              onPressed: () => _onMovieSelect(movie),
               icon: const Icon(
                 Icons.info_outline_rounded,
                 color: Colors.black,
@@ -522,10 +551,10 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                 ),
               ),
             ),
-            if (widget.onTrailerHero != null) ...[
+            if (movie.trailerUrl != null) ...[
               const SizedBox(width: 12),
               GlassActionButton(
-                onTap: widget.onTrailerHero!,
+                onTap: () => widget.onTrailerHero(movie),
                 child: const _HeroButtonLabel(
                   icon: Icon(Icons.movie_creation_rounded, color: Colors.white),
                   label: 'Trailer',
@@ -538,12 +567,12 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
               builder: (context, _) {
                 final liked =
                     SavedMoviesService().isFavorite(
-                          widget.featuredMovie.id,
-                          type: widget.featuredMovie.type,
+                          movie.id,
+                          type: movie.type,
                         );
                 return GlassActionButton(
                   onTap: () =>
-                      SavedMoviesService().toggleFavorite(widget.featuredMovie),
+                      SavedMoviesService().toggleFavorite(movie),
                   child: _HeroButtonLabel(
                     icon: Icon(
                       liked
@@ -557,14 +586,14 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
               },
             ),
           ],
-        ).animate().fadeIn(delay: 400.ms),
+        ).animate(value: from).fadeIn(delay: 400.ms),
       ],
     );
   }
 
-  Widget _buildHeroTitle() {
+  Widget _buildHeroTitle(Movie movie) {
     return Text(
-      widget.featuredMovie.title.toUpperCase(),
+      movie.title.toUpperCase(),
       style: const TextStyle(
         color: Colors.white,
         fontSize: 64,

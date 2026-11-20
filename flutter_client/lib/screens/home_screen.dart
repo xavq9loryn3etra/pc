@@ -1,5 +1,4 @@
 import 'dart:ui';
-import 'dart:math';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -42,7 +41,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
   // buildup), which tears down and recreates this widget on every visit to
   // the Home tab. Caching the loaded data at the class level survives that
   // recreation, so we only hit the network once per app session instead of
-  // re-fetching (and re-rolling the random featured movie) every time.
+  // re-fetching every time.
   // Per mode: Popcorn's and Ramen's homes each load their own.
   static final Map<AppMode, _HomeData> _cache = {};
 
@@ -59,7 +58,10 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
   // Ramen's rows between those two: this season's series, then films.
   List<Movie> _newSeries = [];
   List<Movie> _films = [];
-  Movie? _featuredMovie;
+  // The hero slideshow's titles (see HeroCarousel): the top of the
+  // trending list, the first's details loaded.
+  List<Movie> _heroMovies = [];
+  static const _heroCount = 10;
 
   bool _loading = true;
   // Skeleton reveal stages after _loading turns false: fading out, then
@@ -86,7 +88,7 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
       _topRatedMovies = cached.topRated;
       _newSeries = cached.newSeries;
       _films = cached.films;
-      _featuredMovie = cached.featured;
+      _heroMovies = cached.heroes;
       _loading = false;
       _skeletonDone = true;
       MovieHomeScreen.revealed.value = true;
@@ -122,26 +124,27 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
         topRated = trending.reversed.toList();
       }
 
-      // Fetch details for featured movie (for logo)
-      Movie? featured;
-      if (trending.isNotEmpty) {
+      // The hero's slideshow: the top ten with a picture to show, from
+      // the top. The first's details (its logo, genres, trailer) before
+      // the page shows; the rest's load as it runs (see HeroCarousel).
+      final heroes = trending
+          .where((m) => m.backdrop != null)
+          .take(_heroCount)
+          .toList();
+      if (heroes.isNotEmpty) {
         try {
-          final randomIndex =
-              Random().nextInt(min(trending.length, 5)); // Pick from top 5
-          final basic = trending[randomIndex];
-          featured = await _tmdb.getDetails(basic.id, type: basic.type);
+          final first =
+              await _tmdb.getDetails(heroes.first.id, type: heroes.first.type);
+          if (first != null) heroes[0] = first;
         } catch (_) {}
       }
-
-      final resolvedFeatured =
-          trending.isNotEmpty ? (featured ?? trending.first) : null;
 
       _cache[_mode] = _HomeData(
         trending: trending,
         topRated: topRated,
         newSeries: newSeries,
         films: films,
-        featured: resolvedFeatured,
+        heroes: heroes,
       );
 
       if (!mounted) return;
@@ -151,17 +154,15 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
         _topRatedMovies = topRated;
         _newSeries = newSeries;
         _films = films;
-        if (resolvedFeatured != null) {
-          _featuredMovie = resolvedFeatured;
-        }
+        _heroMovies = heroes;
       });
 
       // Keep the skeleton up until the hero's backdrop and logo are
       // decoded, so the page doesn't appear with an empty black hero that
       // its artwork then pops into.
-      if (resolvedFeatured != null) {
+      if (heroes.isNotEmpty) {
         try {
-          await _precacheHero(resolvedFeatured).timeout(_maxPreloadWait);
+          await _precacheHero(heroes.first).timeout(_maxPreloadWait);
         } catch (_) {
           // Timed out: show the page regardless.
         }
@@ -171,8 +172,8 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
     }
     await _reveal();
     // The hero's More Info is the likeliest first tap: have its page ready.
-    final featured = _featuredMovie;
-    if (featured != null && mounted) DetailsScreen.prefetch(context, featured);
+    final first = _heroMovies.firstOrNull;
+    if (first != null && mounted) DetailsScreen.prefetch(context, first);
   }
 
   /// The wide (desktop) home, or the phone's. On a TV, still the wide one
@@ -260,30 +261,22 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
             .history
             .where((m) => AppModeService.belongsIn(_mode, isAnime: m.isAnime))
             .toList();
-    // The hero shows More Info + Trailer (no Play button).
-    final trailerUrl = _featuredMovie?.trailerUrl;
-    final VoidCallback? onTrailer =
-        trailerUrl != null ? () => _openTrailer(trailerUrl) : null;
+    // The hero shows More Info + Trailer (no Play button); Trailer only on
+    // titles with one.
+    void onTrailer(Movie movie) => _openTrailer(movie.trailerUrl!);
 
-    if (_isWide(constraints.maxWidth) && _featuredMovie != null) {
+    if (_isWide(constraints.maxWidth) && _heroMovies.isNotEmpty) {
       return DesktopHomeScreen(
-        featuredMovie: _featuredMovie!,
+        heroMovies: _heroMovies,
         trendingMovies: _trendingMovies,
         historyMovies: history,
         topRatedMovies: _topRatedMovies,
-        trendingRank: _trendingMovies
-                .indexWhere((m) => m.id == _featuredMovie!.id) +
-            1,
         rankLabel: _rankLabel,
         newSeries: _newSeries,
         films: _films,
         topRatedTitle: _isRamen ? 'Top Rated of All Time' : 'Top Rated',
         ramen: _isRamen,
         onTrailerHero: onTrailer,
-        onInfoHero: () => _navigateToDetails(
-          _featuredMovie!,
-          heroTag: 'hero_${_featuredMovie!.id}',
-        ),
         onMovieTap: (movie) => _navigateToDetails(
           movie,
           heroTag: 'desktop_trending_${movie.id}',
@@ -310,20 +303,17 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
         child: Column(
           children: [
             // Hero Banner
-            if (_featuredMovie != null)
+            if (_heroMovies.isNotEmpty)
               MovieHeroBanner(
                 scrollController: _scrollController,
-                movie: _featuredMovie!,
-                // Where it stands in TMDB's weekly trending list.
-                trendingRank: _trendingMovies
-                        .indexWhere((m) => m.id == _featuredMovie!.id) +
-                    1,
+                movies: _heroMovies,
+                // Where each stands in TMDB's weekly trending list.
+                rankOf: (movie) =>
+                    _trendingMovies.indexWhere((m) => m.id == movie.id) + 1,
                 rankLabel: _rankLabel,
                 onTrailer: onTrailer,
-                onInfo: () => _navigateToDetails(
-                  _featuredMovie!,
-                  heroTag: 'hero_${_featuredMovie!.id}',
-                ),
+                onInfo: (movie) =>
+                    _navigateToDetails(movie, heroTag: 'hero_${movie.id}'),
               ),
 
             const SizedBox(height: 20),
@@ -483,13 +473,13 @@ class _HomeData {
   final List<Movie> topRated;
   final List<Movie> newSeries;
   final List<Movie> films;
-  final Movie? featured;
+  final List<Movie> heroes;
 
   const _HomeData({
     required this.trending,
     required this.topRated,
     required this.newSeries,
     required this.films,
-    required this.featured,
+    required this.heroes,
   });
 }

@@ -203,11 +203,13 @@ class SubtitleService {
   /// How alike [s]'s release and the video [videoName]'s are, for timing:
   /// 100 made for this very file; +4 the same release group, +2 the same
   /// kind of source (Blu-ray, web, TV), +1 the same streaming service.
+  /// Negative when a digital video is paired with a cinema release subtitle.
   static int likeness(SubtitleTrackData s, String videoName) {
-    if (s.matchesFile) return 100;
     final video = _tokens(videoName);
     final videoSource = _source(video);
     final release = _tokens(s.releaseName ?? '');
+    if (videoSource != null && release.any(_cinemaSources.contains)) return -1;
+    if (s.matchesFile) return 100;
     var score = 0;
     final group = s.releaseGroup?.toLowerCase();
     if (group != null && video.contains(group)) score += 4;
@@ -271,6 +273,10 @@ class SubtitleService {
   /// The kind of source [name] (a release's) says it's from: "bluray",
   /// "web", "hdtv", "dvd" — or null.
   static String? sourceOf(String name) => _source(_tokens(name));
+
+  static const _cinemaSources = {
+    'cam', 'camrip', 'hdcam', 'hdts', 'telesync', 'telecine', 'predvdrip',
+  };
 
   static const _services = {'amzn', 'nf', 'dsnp', 'hmax', 'max', 'atvp', 'pcok', 'hulu', 'pmtp', 'cbs'};
 

@@ -538,8 +538,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
     // After this, whatever stays selected: retimed if it can be now.
     Future<void>.delayed(Duration.zero, _retimeSelected);
     final sinhala = _sinhalaTrack();
-    // Each language's best first (see _subtitleRank): the menu shows it,
-    // and the rest under "Other … subtitles".
+    // Each language’s best first, including when trying another track.
     final ordered = [..._embeddedSubtitles, ..._externalSubtitles];
     final position = {for (var i = 0; i < ordered.length; i++) ordered[i].id: i};
     ordered.sort((a, b) {
@@ -603,12 +602,41 @@ extension _PlayerSubtitles on _PlayerScreenState {
   /// follow the dialogue, then signs-only tracks. Ones found not to fit
   /// (see _tryAnotherSubtitle) last.
   int _subtitleRank(SubtitleTrackData s) {
-    if (_rejectedSubtitles.contains(s.id)) return 5;
+    if (_rejectedSubtitles.contains(s.id)) return 6;
     final kind = SubtitleService.kindOf(s);
-    if (kind == SubtitleKind.signsOnly) return 4;
+    if (kind == SubtitleKind.signsOnly) return 5;
+    if (_subtitleSourceConflicts(s)) return 4;
     final fitsWhatsHeard = _hearingDub ? _followsDub(s) : !_followsDub(s);
     if (fitsWhatsHeard) return s.isEmbedded || s.matchesFile ? 0 : 1;
     return s.isEmbedded || s.matchesFile ? 2 : 3;
+  }
+
+  bool _subtitleSourceConflicts(SubtitleTrackData track) =>
+      !track.isEmbedded && SubtitleService.likeness(track,
+          '${_currentStream.title}\n${_currentStream.name}') < 0;
+
+  SubtitleTrackData? get _anotherSubtitle {
+    final selected = _selectedSubtitle;
+    if (selected == null) return null;
+    final language = _getLanguageName(selected.lang);
+    final alternatives = _availableSubtitles.where((track) =>
+        track.url.isNotEmpty &&
+        !_rejectedSubtitles.contains(track.id) &&
+        _getLanguageName(track.lang) == language &&
+        (track.translatedFrom == null || GeminiKeyService().hasKey)).toList();
+    if (alternatives.isEmpty) return null;
+    final current = alternatives.indexWhere((track) => track.id == selected.id);
+    final next = alternatives[(current + 1) % alternatives.length];
+    return next.id == selected.id ? null : next;
+  }
+
+  Future<void> _selectAnotherSubtitle() async {
+    final track = _anotherSubtitle;
+    if (track == null) return;
+    await _selectSubtitle(track);
+    if (mounted && !_closing && _selectedSubtitle?.id == track.id) {
+      showAppMessage(context, 'Switched subtitle');
+    }
   }
 
   /// Whether [s] follows the title's English dub: English captions, or
@@ -897,27 +925,26 @@ extension _PlayerSubtitles on _PlayerScreenState {
     return sixth > _PlayerScreenState._autoSyncRecheck ? _PlayerScreenState._autoSyncRecheck : sixth;
   }
 
-  /// Whether [track], showing, was picked for the viewer — not by them,
-  /// not the video's own, not made for this file, not made from another
-  /// (Sinhala) — so another may be tried if it doesn't fit.
+  /// An external dialogue track may be replaced if its length rules it out.
   bool _canTryAnother(SubtitleTrackData track) =>
-      !_userPickedSubtitleForThisVideo &&
       !track.isEmbedded &&
-      !track.matchesFile &&
+      (!track.matchesFile || _subtitleSourceConflicts(track)) &&
       track.translatedFrom == null &&
+      SubtitleService.kindOf(track) != SubtitleKind.signsOnly &&
       _selectedSubtitle?.id == track.id;
 
   /// Whether [track]'s length fits the video: its last line well past the
   /// end, or its lines stopping before halfway, it's another film's or
   /// episode's. (Some leeway: subtitles for a 25 fps copy run 4% long.)
   Future<void> _checkSubtitleFits(SubtitleTrackData track) async {
+    final url = _streamUrl;
     try {
       var cues = _subtitleCues[track.url];
       if (cues == null) {
         cues = SubtitleSync.parseCues(await _subtitleText(track));
         _subtitleCues[track.url] = cues;
       }
-      if (!mounted || _duration <= Duration.zero) return;
+      if (!mounted || _streamUrl != url || _duration <= Duration.zero) return;
       final length = _duration.inMilliseconds / 1000;
       final last = cues.fold<double>(0, (m, c) => c.end > m ? c.end : m);
       final fits = cues.isNotEmpty &&

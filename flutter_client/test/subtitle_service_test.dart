@@ -56,6 +56,16 @@ void main() {
         '4');
   });
 
+  test('a cinema subtitle ranks below a web match even with a hash tag', () {
+    final cinema = _sub('1', 'Movie.1080p.TELESYNC.x264', 'Group',
+        matchesFile: true);
+    final web = _sub('2', 'Movie.720p.WEB-DL', 'Other');
+    expect(
+      SubtitleService.rank([cinema, web], 'Movie.720p.WEB-DL-Group.mp4'),
+      [web, cinema],
+    );
+  });
+
   test("what OpenSubtitles says about a subtitle is kept", () {
     final s = SubtitleTrackData.fromJson({
       'id': '8873690',

@@ -405,8 +405,12 @@ extension _PlayerOverlays on _PlayerScreenState {
           onAddGeminiKey: _addGeminiKey,
           isLoadingSubtitles: _isLoadingSubtitles,
           onSubtitleSelected: (track) {
-            _selectSubtitle(track);
+            if (track == null || track.id != _selectedSubtitle?.id) {
+              _selectSubtitle(track);
+            }
           },
+          onTryAnotherSubtitle:
+              _anotherSubtitle == null ? null : _selectAnotherSubtitle,
           getLanguageName: _getLanguageName,
           availableStreams: _availableStreams,
           currentStream: _currentStream,

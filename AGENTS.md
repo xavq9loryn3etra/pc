@@ -68,3 +68,6 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 - TV picture: prefer copies that aren't Dolby-Vision-only, and test debanding on the S10. Awaiting a go-ahead.
 - "Download tonight" (cheap night-time data, Android first): recommended for later, not started.
 - Google "Popcorn (Unverified)" verification: the owner said later.
+- **To do after 23 Nov 2026 (owner approved): hide the source repo's name inside the app.**
+  1. Wikidata User-Agent (`streaming_link_service.dart`): replace the xavq9loryn3etra/pc GitHub link with the public website address.
+  2. Update/maintenance flags: the app reads `https://xavq9loryn3etra.github.io/pc/flags.json` (`feature_flags_service.dart`). Host flags.json on the popcorn-organization website too and point the app there. Keep both copies identical (the release workflow updates both) for a while, so older app versions still get update notices. Only an app release ships this.

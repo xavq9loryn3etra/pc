@@ -305,8 +305,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   // downloaded, by their url; the subtitles done with (synced, given up
   // on, or timed by the viewer) and those tried, by id; where watching
   // carried on from without a jump, and the position last seen.
-  ({int stream, String track})? _speechTimingCheck;
-  final _referenceTimingChecks = <({int stream, String track})>{};
+  bool _autoSyncing = false;
+  Timer? _subtitleTimingDeadline;
   final Map<String, List<SubtitleCue>> _subtitleCues = {};
 
   /// Subtitles (ids) found not to fit this video — their length, or no
@@ -1062,6 +1062,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     });
 
     // 5. Dispose seek bar / stats notifiers
+    _subtitleTimingDeadline?.cancel();
     _subtitleBottom.dispose();
     _positionNotifier.dispose();
     _durationNotifier.dispose();
@@ -1095,6 +1096,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  void _onSinhalaSceneChanged() {
+    if (mounted && !_closing) setState(() {});
+  }
+
   void _onSinhalaProblem() {
     final problem = _sinhala?.problem.value;
     if (problem == null || !mounted) return;
@@ -1109,6 +1114,12 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted) _placeSubtitles();
     });
     final subtitleStyle = _subtitleStyle();
+    final subtitleTextScaler = _subtitleScaler(context);
+    final subtitleTiming = _subtitleTiming;
+    final subtitleActivity = _subtitleActivityLabel(subtitleTiming);
+    final source = _selectedSubtitle?.translatedFrom;
+    final translationLoaded = source == null ||
+        (_sinhala != null && _sinhalaFrom == source.id);
     final size = MediaQuery.of(context).size;
     final wide = playerIsWide(context);
     // Camera cutout (punch hole / notch) — the video draws under it (see
@@ -1237,7 +1248,12 @@ class _PlayerScreenState extends State<PlayerScreen>
                                     // bigger: see _subtitleScaler.
                                     subtitleViewConfiguration:
                                         SubtitleViewConfiguration(
-                                      textScaler: _subtitleScaler(context),
+                                      visible: subtitleActivity == null &&
+                                          subtitleTiming == _SubtitleTiming.ready &&
+                                          translationLoaded,
+                                      padding: EdgeInsets.fromLTRB(
+                                          16, 0, 16, _subtitleBottom.value),
+                                      textScaler: subtitleTextScaler,
                                       style: subtitleStyle,
                                     ),
                                     controls:
@@ -1299,10 +1315,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                               ),
                             ),
 
-                            _buildSubtitleActivity(
-                              style: subtitleStyle,
-                              textScaler: _subtitleScaler(context),
-                            ),
+                            if (subtitleActivity != null)
+                              _buildSubtitleActivity(
+                                subtitleTextScaler,
+                                subtitleActivity,
+                              ),
 
                             ..._buildPlaybackBadges(safe: safe),
 

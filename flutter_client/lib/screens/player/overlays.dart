@@ -1,51 +1,43 @@
 part of '../player_screen.dart';
 
 extension _PlayerOverlays on _PlayerScreenState {
-  Widget _buildSubtitleActivity({
-    required TextStyle style,
-    required TextScaler textScaler,
-  }) {
-    final track = _selectedSubtitle;
-    final source = track?.translatedFrom;
-    final job = source != null && source.id == _sinhalaFrom ? _sinhala : null;
-    final reference = (stream: _streamId, track: source?.id ?? track?.id);
-    final checking =
-        _speechTimingCheck == (stream: _streamId, track: track?.id) ||
-            _referenceTimingChecks.contains(reference);
-
-    Widget buildActivity(bool waiting) {
-      final String? label;
-      if (_loadingVideo || track == null) {
-        label = null;
-      } else if (waiting) {
-        label = 'Generating Sinhala subtitles';
-      } else {
-        label = checking ? 'Checking subtitle timing' : null;
-      }
-      return AnimatedSwitcher(
-        duration: MediaQuery.disableAnimationsOf(context)
-            ? Duration.zero
-            : const Duration(milliseconds: 250),
-        child: label == null
-            ? const SizedBox.expand()
-            : _SubtitleActivity(
-                player: player,
-                bottomPadding: _subtitleBottom,
-                style: style,
-                textScaler: textScaler,
-                label: label,
-                showDialogue: _isPlaying,
-              ),
-      );
-    }
-
-    final starting = job == null && source != null && source.id == _sinhalaFrom;
+  Widget _buildSubtitleActivity(TextScaler textScaler, String label) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final scale = textScaler.scale(38) / 22;
     return Positioned.fill(
       child: IgnorePointer(
-        child: ValueListenableBuilder<bool>(
-          valueListenable:
-              job?.waitingForScene ?? const AlwaysStoppedAnimation(false),
-          builder: (context, waiting, _) => buildActivity(starting || waiting),
+        child: ValueListenableBuilder<double>(
+          valueListenable: _subtitleBottom,
+          builder: (context, bottom, child) => AnimatedPadding(
+            padding: EdgeInsets.only(bottom: bottom),
+            duration: reduceMotion
+                ? Duration.zero
+                : const Duration(milliseconds: 250),
+            child: Align(alignment: Alignment.bottomCenter, child: child),
+          ),
+          child: Semantics(
+            label: label,
+            liveRegion: true,
+            child: SizedBox(
+              width: 184 * scale,
+              height: 59 * scale,
+              child: ClipPath(
+                clipper: const _SubtitleActivityBlocks(),
+                child: ColoredBox(
+                  color: const Color(0xaa000000),
+                  child: reduceMotion
+                      ? ColoredBox(color: AppTheme.accent)
+                      : OverflowBox(
+                          minWidth: 260 * scale,
+                          maxWidth: 260 * scale,
+                          minHeight: 104 * scale,
+                          maxHeight: 104 * scale,
+                          child: const BusyOrb(on: true, spill: false),
+                        ),
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -450,107 +442,15 @@ extension _PlayerOverlays on _PlayerScreenState {
       );
 }
 
-class _SubtitleActivity extends StatelessWidget {
-  const _SubtitleActivity({
-    required this.player,
-    required this.bottomPadding,
-    required this.style,
-    required this.textScaler,
-    required this.label,
-    required this.showDialogue,
-  });
-
-  final Player player;
-  final ValueNotifier<double> bottomPadding;
-  final TextStyle style;
-  final TextScaler textScaler;
-  final String label;
-  final bool showDialogue;
+class _SubtitleActivityBlocks extends CustomClipper<Path> {
+  const _SubtitleActivityBlocks();
 
   @override
-  Widget build(BuildContext context) {
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final scale = textScaler.scale(38) / 22;
-    return LayoutBuilder(
-      builder: (context, constraints) => StreamBuilder<List<String>>(
-        stream: player.stream.subtitle,
-        initialData: player.state.subtitle,
-        builder: (context, snapshot) {
-          final dialogue = [
-            for (final line in snapshot.data ?? const <String>[])
-              if (line.trim().isNotEmpty && line.trim() != '\u200b')
-                line.trim(),
-          ].join('\n');
-          var clearance = 0.0;
-          if (showDialogue && dialogue.isNotEmpty) {
-            final painter = TextPainter(
-              text: TextSpan(
-                text: dialogue,
-                style: Theme.of(context).textTheme.bodyMedium?.merge(style) ??
-                    style,
-              ),
-              textDirection: Directionality.of(context),
-              textScaler: textScaler,
-              textAlign: TextAlign.center,
-            )..layout(maxWidth: math.max(0, constraints.maxWidth - 32));
-            clearance = painter.height + 10;
-            painter.dispose();
-          }
-          return ValueListenableBuilder<double>(
-            valueListenable: bottomPadding,
-            builder: (context, bottom, child) => AnimatedPadding(
-              padding: EdgeInsets.only(bottom: bottom),
-              duration: reduceMotion
-                  ? Duration.zero
-                  : const Duration(milliseconds: 250),
-              child: Padding(
-                padding: EdgeInsets.only(bottom: clearance),
-                child: Align(alignment: Alignment.bottomCenter, child: child),
-              ),
-            ),
-            child: Semantics(
-              label: label,
-              liveRegion: true,
-              child: SizedBox(
-                width: 116 * scale,
-                height: 22 * scale,
-                child: ClipPath(
-                  clipper: const _SubtitleActivityLines(),
-                  child: reduceMotion
-                      ? ColoredBox(color: AppTheme.accent)
-                      : const BusyOrb(on: true, spill: false),
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _SubtitleActivityLines extends CustomClipper<Path> {
-  const _SubtitleActivityLines();
+  Path getClip(Size size) => Path()
+    ..addRect(Rect.fromLTWH(0, 0, size.width, size.height * 0.45))
+    ..addRect(Rect.fromLTWH(size.width * 0.15, size.height * 0.55,
+        size.width * 0.7, size.height * 0.45));
 
   @override
-  Path getClip(Size size) {
-    final radius = Radius.circular(size.height * 0.16);
-    return Path()
-      ..addRRect(RRect.fromRectAndRadius(
-        Rect.fromLTWH(0, size.height * 0.08, size.width, size.height * 0.32),
-        radius,
-      ))
-      ..addRRect(RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-          size.width * 0.18,
-          size.height * 0.58,
-          size.width * 0.64,
-          size.height * 0.32,
-        ),
-        radius,
-      ));
-  }
-
-  @override
-  bool shouldReclip(_SubtitleActivityLines oldClipper) => false;
+  bool shouldReclip(_SubtitleActivityBlocks oldClipper) => false;
 }

@@ -548,6 +548,8 @@ extension _PlayerEpisodes on _PlayerScreenState {
         _subtitleDelaySeconds = 0.0;
         _subtitleSpeed = 1.0;
         _subtitleTimings.clear();
+        _subtitleTimingDeadline?.cancel();
+        _subtitleTimingDeadline = null;
         _autoSyncDone.clear();
         _autoSynced.clear();
         _autoSyncTries.clear();

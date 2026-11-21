@@ -46,6 +46,17 @@ List<SubtitleCue> _talk(double until, {int seed = 7}) {
 }
 
 void main() {
+  test('a shift requires two independent, credible matches', () {
+    const strong = SubtitleSyncResult(delay: 2, speed: 1, score: .4, margin: .1, sure: true);
+    const weak = SubtitleSyncResult(delay: 2, speed: 1, score: .4, margin: .01);
+    final evidence = SubtitleTimingEvidence();
+    expect(evidence.confirms(strong, 0, 160), isFalse);
+    expect(evidence.confirms(strong, 15, 175), isFalse);
+    expect(evidence.confirms(weak, 180, 340), isFalse);
+    expect(evidence.confirms(strong, 180, 340), isTrue);
+    expect(evidence.confirms(strong, 400, 560), isFalse);
+  });
+
   group('parseCues', () {
     test('SRT, leaving out sounds and songs', () {
       const srt = '1\r\n00:00:23,000 --> 00:00:24,500\r\nYou\'re a jerk, Thom.\r\n\r\n'

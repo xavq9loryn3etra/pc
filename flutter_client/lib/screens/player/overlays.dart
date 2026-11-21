@@ -241,19 +241,6 @@ extension _PlayerOverlays on _PlayerScreenState {
           ],
         ),
 
-        // "Subtitles synced" for a moment when syncing moved
-        // them (see _showSyncedBadge) — under "Resumed from" if
-        // that's up too.
-        _glassBadge(
-          top: 16 + safe.top + (_resumeBadge != null ? 44 : 0),
-          visible: _syncedBadge && !_speedBoost,
-          children: const [
-            Icon(Icons.subtitles_rounded, color: Colors.white, size: 16),
-            SizedBox(width: 6),
-            Text('Subtitles synced', style: _PlayerScreenState._badgeTextStyle),
-          ],
-        ),
-
         // "2× ⏩" while a press-and-hold speeds playback up
         // (see _startSpeedBoost) — shown whether or not the
         // controls are.
@@ -386,12 +373,10 @@ extension _PlayerOverlays on _PlayerScreenState {
           audioChanging: _changingAudio,
           subtitleDelaySeconds: _subtitleDelaySeconds,
           onSubtitleDelayChanged: _setSubtitleDelay,
-          subtitleSpeed: _subtitleSpeed,
-          onSubtitleSpeedChanged: _setSubtitleSpeed,
+          onResetSubtitleTiming: () => _setSubtitleDelay(0, resetSpeed: true),
           subtitleSyncNote: _subtitleSyncNote,
           subtitleFitNote: _subtitleFitNote,
           subtitleFollows: _subtitleFollows,
-          subtitleSyncing: _subtitlesSyncing,
           anchorCenterX: _settingsPanelAnchorX,
           initialView: _settingsPanelInitialView,
           closeRequests: _settingsCloseRequests,

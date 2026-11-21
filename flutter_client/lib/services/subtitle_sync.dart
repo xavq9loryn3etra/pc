@@ -50,6 +50,25 @@ class SubtitleSyncResult {
       'margin ${margin.toStringAsFixed(3)}${sure ? '' : ', not sure'}';
 }
 
+/// Accumulates speech matches for one subtitle file on one video copy.
+class SubtitleTimingEvidence {
+  final _samples = <({double start, double end, SubtitleSyncResult result})>[];
+
+  bool confirms(SubtitleSyncResult result, double start, double end) {
+    if (result.score < 0.12 || result.margin < 0.03) return false;
+    final agreed = _samples.any((sample) =>
+        (start >= sample.end || end <= sample.start) &&
+        (sample.result.delay - result.delay).abs() <= 0.4 &&
+        (sample.result.speed - result.speed).abs() < 0.001);
+    if (agreed) {
+      _samples.clear();
+    } else {
+      _samples.add((start: start, end: end, result: result));
+    }
+    return agreed;
+  }
+}
+
 /// Lines subtitles up with a video's sound, in any language: not by what's
 /// said, but by when — the moments people talk against the moments
 /// subtitles are on screen (as ffsubsync and alass do).

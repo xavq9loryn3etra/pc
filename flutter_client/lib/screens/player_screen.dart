@@ -313,6 +313,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// length has been checked (see _checkSubtitleFits).
   final Set<String> _rejectedSubtitles = {};
   final Set<String> _fitChecked = {};
+  int _subtitleSelectionRequest = 0;
+  final Set<String> _manualSubtitleTiming = {};
   final Set<String> _autoSyncDone = {};
   // Subtitles synced at least once: checked again now and then (see
   // _autoSyncRecheck).
@@ -324,9 +326,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   final Set<String> _heardTried = {};
   // What each listen found, for each subtitle (see _autoSync: two
   // stretches agreeing is enough), and where the next listen starts.
-  final Map<String,
-          List<({double delay, double speed, double start, double end})>>
-      _autoSyncSeen = {};
+  final _autoSyncSeen = <String, SubtitleTimingEvidence>{};
   final Map<String, Duration> _autoSyncFrom = {};
 
   // Retiming against reference subtitles (see _retimeFromReferences): each
@@ -366,10 +366,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   // "Resumed from …", shown for a moment at the top (see _showResumeBadge).
   String? _resumeBadge;
 
-  // "Subtitles synced", for a moment, when syncing moved the subtitles
-  // being watched (see _showSyncedBadge).
-  bool _syncedBadge = false;
-  Timer? _syncedBadgeTimer;
   String? _pendingResumeBadge;
   Timer? _resumeBadgeTimer;
   // True from player.open() until playback is actually progressing (see
@@ -679,13 +675,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   // taken.
   static const _autoSyncRecheck = Duration(minutes: 8);
   static const _autoSyncMinChange = 0.4;
-
-  // A shift bigger than this (seconds) is taken only when another stretch
-  // of the video, apart from the first, finds it too. Copies of a show
-  // mostly differ by a few seconds; Ghosts S1E7's opening (a loud cold
-  // open, then a music gap) twice gave a sure-looking 30.5 s too early,
-  // where its Blu-ray subtitles in three languages all say 3.2 s late.
-  static const _autoSyncBigShift = 8.0;
 
   /// The buffered video ahead of the position that auto sync waits for
   /// before starting its second player (see _maybeAutoSync).
@@ -1018,7 +1007,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     _lengthCheckTimer?.cancel();
     _audioCheckTimer?.cancel();
     _resumeBadgeTimer?.cancel();
-    _syncedBadgeTimer?.cancel();
     _mediaActionSub?.cancel();
     _mediaSession.deactivate();
     _episodeDrawerController.dispose();

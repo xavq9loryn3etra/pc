@@ -67,8 +67,7 @@ class PlayerSettingsPanel extends StatefulWidget {
 
   final double subtitleDelaySeconds;
   final ValueChanged<double> onSubtitleDelayChanged;
-  final double subtitleSpeed;
-  final ValueChanged<double> onSubtitleSpeedChanged;
+  final VoidCallback onResetSubtitleTiming;
 
   /// A quiet word under the timing on Auto Sync ("Synced"), or null — see
   /// PlayerScreen._subtitleSyncNote.
@@ -82,9 +81,6 @@ class PlayerSettingsPanel extends StatefulWidget {
   /// English dub") — PlayerScreen._subtitleFollows.
   final String? Function(SubtitleTrackData track)? subtitleFollows;
 
-  /// The subtitles shown are being synced: their timing's controls are
-  /// covered (and can't be used) until that's done.
-  final bool subtitleSyncing;
   final double? anchorCenterX;
 
   final VoidCallback onClose;
@@ -126,12 +122,10 @@ class PlayerSettingsPanel extends StatefulWidget {
     this.unavailableAudio = const {},
     this.subtitleDelaySeconds = 0.0,
     required this.onSubtitleDelayChanged,
-    this.subtitleSpeed = 1.0,
-    required this.onSubtitleSpeedChanged,
+    required this.onResetSubtitleTiming,
     this.subtitleSyncNote,
     this.subtitleFitNote,
     this.subtitleFollows,
-    this.subtitleSyncing = false,
     this.anchorCenterX,
     required this.onClose,
     this.initialView = 'main',
@@ -149,9 +143,6 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
   late final Animation<double> _fadeAnimation;
   late final Animation<double> _scaleAnimation;
   late String _currentView;
-
-  // Languages whose other subtitles are shown (see _buildSubtitlesView).
-  final Set<String> _openLanguages = {};
 
   @override
   void initState() {
@@ -319,14 +310,20 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
       title = 'Audio';
     }
 
-    final Widget? leftButton =
-        (widget.initialView == 'main' && _currentView != 'main')
-            ? IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new_rounded,
-                    color: Colors.white70, size: 16),
-                onPressed: () => setState(() => _currentView = 'main'),
-              )
-            : null;
+    final picking =
+        _currentView == 'subtitleLanguage' || _currentView == 'subtitleFile';
+    if (picking) {
+      title = _currentView == 'subtitleLanguage' ? 'Language' : 'Subtitle file';
+    }
+    final Widget? leftButton = (picking ||
+            (widget.initialView == 'main' && _currentView != 'main'))
+        ? IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                color: Colors.white70, size: 16),
+            onPressed: () =>
+                setState(() => _currentView = picking ? 'subtitles' : 'main'),
+          )
+        : null;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -358,6 +355,8 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
 
   Widget _buildCurrentView() {
     switch (_currentView) {
+      case 'subtitleLanguage':
+      case 'subtitleFile':
       case 'subtitles':
         return _buildSubtitlesView();
       case 'quality':
@@ -593,95 +592,119 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
     return identical(trailing, _check) ? TvAutoSelect(child: shown) : shown;
   }
 
-  /// One row per language: its best subtitles (or the ones picked), with
-  /// the rest under "Other … subtitles" — a dozen English ones for one
-  /// episode was a list nobody needed. The list comes each language's best
-  /// first (PlayerScreen._subtitleRank).
-  Widget _buildSubtitlesView() {
-    if (widget.availableSubtitles.isEmpty && !widget.isLoadingSubtitles) {
-      return const Padding(
-        key: ValueKey('subtitle-settings-empty'),
-        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 28),
-        child: Center(
-          child: Text(
-            'No subtitles found for this media',
-            style: TextStyle(color: Colors.white38, fontSize: 13),
-          ),
-        ),
-      );
-    }
+  static const _arrow = Icon(Icons.chevron_right, color: Colors.white54);
 
+  void _chooseSubtitle(SubtitleTrackData? track) {
+    widget.onSubtitleSelected(track);
+    setState(() => _currentView = 'subtitles');
+  }
+
+  String _fileDescription(SubtitleTrackData track) {
+    if (track.translatedFrom != null) {
+      if (widget.sinhalaProblem != null) return widget.sinhalaProblem!;
+      final progress = widget.sinhalaProgress;
+      if (progress != null && progress < 1) {
+        return 'Translating… ${(progress * 100).floor()}%';
+      }
+      return 'Translated from ${widget.getLanguageName(track.translatedFrom!.lang)}';
+    }
+    if (track.isEmbedded) return 'Built into the video';
+    if (track.matchesFile) return 'Made for this video';
+    return track.releaseName ?? track.label ?? 'Downloaded subtitles';
+  }
+
+  Widget _buildSubtitlesView() {
     final groups = <String, List<SubtitleTrackData>>{};
-    for (final t in widget.availableSubtitles) {
-      groups.putIfAbsent(widget.getLanguageName(t.lang), () => []).add(t);
+    for (final track in widget.availableSubtitles) {
+      groups
+          .putIfAbsent(widget.getLanguageName(track.lang), () => [])
+          .add(track);
     }
     final selected = widget.selectedSubtitle;
-    final rows = <Widget>[
-      _buildRow(
-        title: 'Off',
-        trailing: selected == null ? _check : null,
-        onTap: () => widget.onSubtitleSelected(null),
-      ),
-    ];
-    for (final entry in groups.entries) {
-      final name = entry.key;
-      final tracks = entry.value;
-      final main = tracks.firstWhere((t) => t.id == selected?.id,
-          orElse: () => tracks.first);
-      rows.add(_subtitleRow(main, name));
-      final others = [for (final t in tracks) if (t.id != main.id) t];
-      if (others.isEmpty) continue;
-      final open = _openLanguages.contains(name);
+    final language =
+        selected == null ? 'Off' : widget.getLanguageName(selected.lang);
+    final files = groups[language] ?? const <SubtitleTrackData>[];
+    final rows = <Widget>[];
+    if (_currentView == 'subtitleLanguage') {
       rows.add(_buildRow(
-        title: open
-            ? 'Fewer $name subtitles'
-            : 'Other $name subtitles (${others.length})',
-        trailing: Icon(
-          open ? Icons.expand_less_rounded : Icons.expand_more_rounded,
-          color: Colors.white54,
-          size: 20,
-        ),
-        onTap: () => setState(() {
-          if (!_openLanguages.remove(name)) _openLanguages.add(name);
-        }),
-      ));
-      if (open) {
-        for (var i = 0; i < others.length; i++) {
-          rows.add(_subtitleRow(others[i], name, number: i + 2));
-        }
+          title: 'Off',
+          trailing: selected == null ? _check : null,
+          onTap: () => _chooseSubtitle(null)));
+      for (final entry in groups.entries) {
+        final track = entry.value.firstWhere((t) => t.id == selected?.id,
+            orElse: () => entry.value.first);
+        rows.add(_subtitleRow(track, entry.key));
+      }
+    } else if (_currentView == 'subtitleFile') {
+      for (final track in files) {
+        rows.add(_subtitleRow(
+            track,
+            track.label ??
+                track.releaseName ??
+                'Subtitle file ${files.indexOf(track) + 1}'));
+      }
+    } else {
+      rows.add(_buildRow(
+          title: 'Language',
+          subtitle: language,
+          trailing: _arrow,
+          onTap: () => setState(() => _currentView = 'subtitleLanguage')));
+      if (selected != null) {
+        rows.add(_buildRow(
+            title: 'Subtitle file',
+            subtitle: _fileDescription(selected),
+            trailing: _arrow,
+            onTap: () => setState(() => _currentView = 'subtitleFile')));
+        final delay = widget.subtitleDelaySeconds;
+        final offset = delay == 0
+            ? '0.0 s'
+            : '${delay.abs().toStringAsFixed(2)} s ${delay < 0 ? 'earlier' : 'later'}';
+        rows.add(Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Timing   $offset',
+                style: const TextStyle(color: Colors.white)),
+            if (widget.subtitleSyncNote != null)
+              Text(widget.subtitleSyncNote!,
+                  style: const TextStyle(color: Colors.white70)),
+            Wrap(children: [
+              TextButton(
+                  onPressed: () => widget.onSubtitleDelayChanged(delay - 0.5),
+                  child: const Text('Show earlier')),
+              TextButton(
+                  onPressed: () => widget.onSubtitleDelayChanged(delay + 0.5),
+                  child: const Text('Show later')),
+              TextButton(
+                  onPressed: widget.onResetSubtitleTiming,
+                  child: const Text('Reset timing')),
+            ]),
+          ]),
+        ));
       }
     }
-
-    return Column(
-      key: const ValueKey('subtitle-settings'),
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return ListView(
+      key: ValueKey(_currentView),
+      shrinkWrap: true,
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
       children: [
-        Flexible(
-          child: ListView(
-            shrinkWrap: true,
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
-            children: [
-              _buildGroup(rows),
-              if (widget.subtitleFitNote != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(6, 10, 6, 0),
-                  child: Text(
-                    widget.subtitleFitNote!,
-                    style: const TextStyle(
-                        color: Colors.white54, fontSize: 12.5, height: 1.35),
-                  ),
-                ),
-            ],
-          ),
-        ),
+        _buildGroup(rows),
+        if (groups.isEmpty)
+          Text(
+              widget.isLoadingSubtitles
+                  ? 'Looking for subtitles…'
+                  : 'No subtitles found',
+              style: const TextStyle(color: Colors.white70)),
+        if (_currentView == 'subtitles' && widget.subtitleFitNote != null)
+          Text(widget.subtitleFitNote!,
+              style: const TextStyle(color: Colors.white70)),
       ],
     );
   }
 
   /// A subtitle track's row: its language (numbered, among a language's
   /// others), and a line on what it is, where that helps.
-  Widget _subtitleRow(SubtitleTrackData track, String name, {int? number}) {
+  Widget _subtitleRow(SubtitleTrackData track, String name) {
     final chosen = widget.selectedSubtitle?.id == track.id;
     // Sinhala made from English with the viewer's Gemini key: greyed out
     // until there's a key.
@@ -691,13 +714,14 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
       if (!hasKey) {
         return _buildRow(
           title: name,
-          subtitle: 'Needs a free Gemini key',
-          trailing: GlassPillButton(
-            icon: Icons.key_rounded,
-            label: 'Add key',
-            onPressed: widget.onAddGeminiKey,
-          ),
-          onTap: widget.onAddGeminiKey ?? () {},
+          subtitle: 'Add your Gemini key in Settings',
+          enabled: false,
+          trailing: widget.onAddGeminiKey == null
+              ? null
+              : TextButton(
+                  onPressed: widget.onAddGeminiKey,
+                  child: const Text('Add key')),
+          onTap: () {},
         );
       }
       final progress = widget.sinhalaProgress;
@@ -714,7 +738,7 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
         title: name,
         subtitle: note,
         trailing: chosen ? _check : null,
-        onTap: () => widget.onSubtitleSelected(track),
+        onTap: () => _chooseSubtitle(track),
       );
     }
 
@@ -737,10 +761,10 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
       line = what;
     }
     return _buildRow(
-      title: number == null ? name : '$name $number',
+      title: name,
       subtitle: line,
       trailing: chosen ? _check : null,
-      onTap: () => widget.onSubtitleSelected(track),
+      onTap: () => _chooseSubtitle(track),
     );
   }
 

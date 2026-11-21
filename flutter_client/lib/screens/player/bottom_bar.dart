@@ -471,9 +471,8 @@ extension _PlayerBottomBar on _PlayerScreenState {
                     grouped: true,
                     key: _subtitlesButtonKey,
                     icon: Icons.subtitles_rounded,
-                    label: _subtitlesSyncing ? 'Syncing…' : 'Subtitles',
+                    label: 'Subtitles',
                     selected: _menuOpen('subtitles'),
-                    busy: _subtitlesSyncing,
                     onPressed: () =>
                         _toggleSettingsPanel('subtitles', _subtitlesButtonKey),
                   )),
@@ -493,13 +492,9 @@ extension _PlayerBottomBar on _PlayerScreenState {
                   _menuButton(GlassPillButton(
                     grouped: true,
                     key: _settingsButtonKey,
-                    // Syncing: what's being synced.
-                    icon: _subtitlesSyncing
-                        ? Icons.subtitles_rounded
-                        : Icons.tune_rounded,
-                    label: _subtitlesSyncing ? 'Syncing…' : 'Settings',
+                    icon: Icons.tune_rounded,
+                    label: 'Settings',
                     // Subtitles are in here.
-                    busy: _subtitlesSyncing,
                     selected: _menuOpen('main'),
                     onPressed: () =>
                         _toggleSettingsPanel('main', _settingsButtonKey),

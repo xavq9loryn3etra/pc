@@ -314,7 +314,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   final Set<String> _rejectedSubtitles = {};
   final Set<String> _fitChecked = {};
   int _subtitleSelectionRequest = 0;
-  final Set<String> _manualSubtitleTiming = {};
   final Set<String> _autoSyncDone = {};
   // Subtitles synced at least once: checked again now and then (see
   // _autoSyncRecheck).

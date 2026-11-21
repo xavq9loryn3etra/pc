@@ -291,7 +291,6 @@ extension _PlayerSubtitles on _PlayerScreenState {
     _stopSinhala();
     _subtitleTimings.clear();
     _autoSyncDone.clear();
-    _manualSubtitleTiming.clear();
     _autoSynced.clear();
     _autoSyncTries.clear();
     _heard = null;
@@ -863,19 +862,6 @@ extension _PlayerSubtitles on _PlayerScreenState {
     await mpv.setProperty('sub-speed', _subtitleSpeed.toStringAsFixed(6));
   }
 
-  Future<void> _setSubtitleDelay(double seconds, {bool resetSpeed = false}) async {
-    final track = _selectedSubtitle;
-    if (track == null) return;
-    _manualSubtitleTiming.add(track.id);
-    _autoSyncDone.add(track.id);
-    _updateState(() {
-      _subtitleDelaySeconds = ((seconds * 100).round() / 100).clamp(-60.0, 60.0);
-      if (resetSpeed) _subtitleSpeed = 1;
-    });
-    _rememberTiming(track, byViewer: true);
-    await _applySubtitleTimingToMpv();
-  }
-
   /// [_autoSyncRecheck], for the video playing: a sixth of it, between 4
   /// and 8 minutes — a 22-minute episode was checked only twice after its
   /// first sync.
@@ -890,7 +876,6 @@ extension _PlayerSubtitles on _PlayerScreenState {
   /// not the video's own, not made for this file, not made from another
   /// (Sinhala) — so another may be tried if it doesn't fit.
   bool _canTryAnother(SubtitleTrackData track) =>
-      !_manualSubtitleTiming.contains(track.id) &&
       !_userPickedSubtitleForThisVideo &&
       !track.isEmbedded &&
       !track.matchesFile &&
@@ -950,8 +935,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
   /// otherwise from the next few minutes from where the video began
   /// playing here, soon after it starts; tried again a little later when
   /// that wasn't clear, up to [_autoSyncMaxTries] times, and checked again
-  /// now and then once synced. Never over the viewer's own timing (see
-  /// _setSubtitleDelay), nor for subtitles in the video file, which are
+  /// now and then once synced. Skipped for subtitles in the video file, which are
   /// made for it.
   void _maybeAutoSync(Duration pos) {
     // Watching carried on from where it last jumped (a seek, a new video).
@@ -1078,7 +1062,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
       final end = start + pcm.length / SubtitleSync.sampleRate;
       print('[sync] ${track.lang} ${start.round()}–${end.round()} s: $result '
           '(${took.elapsedMilliseconds} ms)');
-      // The viewer set it meanwhile, references retimed it, or another
+      // Checking stopped, references retimed it, or another
       // copy's playing.
       if (!mounted ||
           _streamUrl != url ||
@@ -1120,15 +1104,15 @@ extension _PlayerSubtitles on _PlayerScreenState {
         // Switched from meanwhile: for when it's back.
         _subtitleTimings[track.id] = (delay: delay, speed: result.speed);
       }
-      if (!mounted || _streamUrl != url || _manualSubtitleTiming.contains(track.id)) return;
+      if (!mounted || _streamUrl != url) return;
       _rememberTiming(track,
-          timing: (delay: delay, speed: result.speed), byViewer: false);
+          timing: (delay: delay, speed: result.speed));
     } catch (e) {
       print('[sync] failed: $e');
     } finally {
       _autoSyncing = false;
       if (!mounted || _streamUrl != url || _autoSyncDone.contains(track.id)) {
-        // The viewer's timing: left alone.
+        // Discard results from obsolete or completed checks.
       } else if (clear) {
         // In time: checked again a while on.
         _autoSynced.add(track.id);
@@ -1181,13 +1165,12 @@ extension _PlayerSubtitles on _PlayerScreenState {
   Future<void> _retimeFromReferences(SubtitleTrackData track) async {
     // Sinhala made from English: the English is retimed, and the Sinhala
     // follows it (see below).
-    if (_manualSubtitleTiming.contains(track.id)) return;
     if (track.translatedFrom != null) {
       return _retimeFromReferences(track.translatedFrom!);
     }
     if (track.isEmbedded ||
         _retimedPaths.containsKey(track.id) ||
-        _autoSyncDone.contains(track.id) || // the viewer's own timing
+        _autoSyncDone.contains(track.id) ||
         _retimeTried.contains(track.id)) {
       return;
     }
@@ -1223,10 +1206,6 @@ extension _PlayerSubtitles on _PlayerScreenState {
         [for (final r in picked) r.matchesFile],
       );
       if (!mounted || _streamUrl != url) return;
-      bool manualTiming() => _manualSubtitleTiming.contains(track.id) ||
-          (_selectedSubtitle?.translatedFrom?.id == track.id &&
-           _manualSubtitleTiming.contains(_selectedSubtitle?.id));
-      if (manualTiming()) return;
       if (map == null) {
         print('[sync] references (${picked.map((r) => r.lang).join(', ')}) '
             "don't agree; listening instead");
@@ -1238,19 +1217,19 @@ extension _PlayerSubtitles on _PlayerScreenState {
               ? 'vtt'
               : 'srt';
       final temp = await getTemporaryDirectory();
-      if (!mounted || _streamUrl != url || manualTiming()) return;
+      if (!mounted || _streamUrl != url) return;
       final file = File('${temp.path}${Platform.pathSeparator}'
           'popcorn_sub_${track.id}_${DateTime.now().millisecondsSinceEpoch}.$ext');
       final retimed = SubtitleRetime.retime(text, map);
       await file.writeAsString(retimed);
-      if (!mounted || _streamUrl != url || manualTiming()) {
+      if (!mounted || _streamUrl != url) {
         await file.delete();
         return;
       }
       _retimedPaths[track.id] = file.path;
       // Sinhala made from it: its lines move with it.
       if (_sinhalaFrom == track.id) await _sinhala?.retime(retimed);
-      if (!mounted || _streamUrl != url || manualTiming()) return;
+      if (!mounted || _streamUrl != url) return;
       _referenceTimed.add(track.id);
       final key = _timingKey(track);
       SharedPreferences.getInstance().then((prefs) {
@@ -1318,12 +1297,11 @@ extension _PlayerSubtitles on _PlayerScreenState {
   }
 
   /// The subtitle menu's word on Auto Sync for the subtitles shown: at it,
-  /// done — or nothing (the viewer's own timing, subtitles in the video
+  /// done — or nothing (subtitles in the video
   /// file, or given up on).
   String? get _subtitleSyncNote {
     final track = _selectedSubtitle;
     if (track == null) return null;
-    if (_manualSubtitleTiming.contains(track.id)) return 'Timing set by you';
     if (track.isEmbedded) return null;
     if (_referenceTimed.contains(track.translatedFrom?.id ?? track.id)) return 'Matched to this video';
     if (_autoSyncDone.contains(track.id) || (_autoSyncTries[track.id]?.tries ?? 0) > 0) {
@@ -1338,35 +1316,33 @@ extension _PlayerSubtitles on _PlayerScreenState {
       'subtitle_timing2_${_currentStream.infoHash.toLowerCase()}_${track.id}';
 
   /// Keeps [track]'s timing ([timing], or the one set now) for the next
-  /// time this copy plays with it — and whether the viewer set it.
+  /// time this copy plays with it — using its confirmation marker.
   Future<void> _rememberTiming(
     SubtitleTrackData track, {
     ({double delay, double speed})? timing,
-    required bool byViewer,
   }) async {
     final t = timing ?? (delay: _subtitleDelaySeconds, speed: _subtitleSpeed);
     final key = _timingKey(track);
     final prefs = await SharedPreferences.getInstance();
-    if (!byViewer && prefs.getString(key)?.endsWith('|viewer') == true) return;
     await prefs.setString(
-        key, '${t.delay}|${t.speed}|${byViewer ? 'viewer' : 'confirmed'}');
+        key, '${t.delay}|${t.speed}|confirmed');
   }
 
   /// [track]'s timing kept from an earlier visit (see _rememberTiming).
-  Future<({double delay, double speed, bool byViewer})?> _savedTiming(
+  Future<({double delay, double speed})?> _savedTiming(
     SubtitleTrackData track,
   ) async {
     final key = _timingKey(track);
     final prefs = await SharedPreferences.getInstance();
     final parts = prefs.getString(key)?.split('|');
     if (parts == null || parts.length < 3 ||
-        (parts[2] != 'viewer' && parts[2] != 'confirmed')) {
+        parts[2] != 'confirmed') {
       return null;
     }
     final delay = double.tryParse(parts[0]);
     final speed = double.tryParse(parts[1]);
     if (delay == null || speed == null) return null;
-    return (delay: delay, speed: speed, byViewer: parts[2] == 'viewer');
+    return (delay: delay, speed: speed);
   }
 
   /// SubtitleSync.find, off the screen's thread: a few hundred
@@ -1398,13 +1374,12 @@ extension _PlayerSubtitles on _PlayerScreenState {
     var timing = track == null ? null : _subtitleTimings[track.id];
     if (track != null && timing == null) {
       final url = _streamUrl;
-      // Synced (or set) when this copy was played before.
+      // Confirmed when this copy was played before.
       final saved = await _savedTiming(track);
       if (!mounted || _streamUrl != url || request != _subtitleSelectionRequest) return;
       if (saved != null) {
         timing = (delay: saved.delay, speed: saved.speed);
-        (saved.byViewer ? _autoSyncDone : _autoSynced).add(track.id);
-        if (saved.byViewer) _manualSubtitleTiming.add(track.id);
+        _autoSynced.add(track.id);
       }
     }
     final retime = (timing?.delay ?? 0.0) != _subtitleDelaySeconds ||

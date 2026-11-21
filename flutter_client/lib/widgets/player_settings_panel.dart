@@ -65,9 +65,6 @@ class PlayerSettingsPanel extends StatefulWidget {
   /// as on the details page's picker (it never plays in another).
   final Set<AudioLanguage> unavailableAudio;
 
-  final double subtitleDelaySeconds;
-  final ValueChanged<double> onSubtitleDelayChanged;
-  final VoidCallback onResetSubtitleTiming;
 
   /// A quiet word under the timing on Auto Sync ("Synced"), or null — see
   /// PlayerScreen._subtitleSyncNote.
@@ -120,9 +117,6 @@ class PlayerSettingsPanel extends StatefulWidget {
     this.onAudioLanguageSelected,
     this.audioChanging = false,
     this.unavailableAudio = const {},
-    this.subtitleDelaySeconds = 0.0,
-    required this.onSubtitleDelayChanged,
-    required this.onResetSubtitleTiming,
     this.subtitleSyncNote,
     this.subtitleFitNote,
     this.subtitleFollows,
@@ -655,32 +649,13 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
             subtitle: _fileDescription(selected),
             trailing: _arrow,
             onTap: () => setState(() => _currentView = 'subtitleFile')));
-        final delay = widget.subtitleDelaySeconds;
-        final offset = delay == 0
-            ? '0.0 s'
-            : '${delay.abs().toStringAsFixed(2)} s ${delay < 0 ? 'earlier' : 'later'}';
-        rows.add(Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Timing   $offset',
-                style: const TextStyle(color: Colors.white)),
-            if (widget.subtitleSyncNote != null)
-              Text(widget.subtitleSyncNote!,
-                  style: const TextStyle(color: Colors.white70)),
-            Wrap(children: [
-              TextButton(
-                  onPressed: () => widget.onSubtitleDelayChanged(delay - 0.5),
-                  child: const Text('Show earlier')),
-              TextButton(
-                  onPressed: () => widget.onSubtitleDelayChanged(delay + 0.5),
-                  child: const Text('Show later')),
-              TextButton(
-                  onPressed: widget.onResetSubtitleTiming,
-                  child: const Text('Reset timing')),
-            ]),
-          ]),
-        ));
+        if (widget.subtitleSyncNote != null) {
+          rows.add(Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Text(widget.subtitleSyncNote!,
+                style: const TextStyle(color: Colors.white70)),
+          ));
+        }
       }
     }
     return ListView(

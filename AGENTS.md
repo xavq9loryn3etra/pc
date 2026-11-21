@@ -8,6 +8,7 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 - **Questions are not instructions.** For a "can we…?" or "is it possible…?" question, investigate (reading code and measuring is fine), propose an approach with a recommendation, then **wait for a clear go-ahead** ("do it", "go with it") before editing code. Clear instructions ("remove it", "do the new release") mean act now.
 - **Publish without asking.** Once a requested change is finished and checked, commit and push in the same turn and say it's live. Don't ask "should I publish?". An app release reaches every user, so always say clearly when you've done one.
 - Be honest: if something is untested or only partly works, say so.
+- **No AI co-author lines in commits** (no "Co-Authored-By: Claude" or similar) in this repo or popcorn-organization/popcorn. They make Claude show up as a contributor. (22 Nov 2026)
 - Never commit secrets (`secrets.json`, `flutter_client/.env`, `android/key.properties`).
 - **Keep this file up to date.** When the owner makes a new decision, gives a correction or says "always"/"never", add it to the right section of this file in plain words (with the date), commit and push it with the work. Change or remove rules here that turn out to be wrong. Don't add one-off details that only matter to the current task.
 

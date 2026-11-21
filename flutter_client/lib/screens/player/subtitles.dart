@@ -12,11 +12,31 @@ extension _PlayerSubtitles on _PlayerScreenState {
         bottom = MediaQuery.sizeOf(context).height - barTop + 12;
       }
     }
-    if ((bottom - _subtitleBottom).abs() < 1) return;
-    _subtitleBottom = bottom;
+    if ((bottom - _subtitleBottom.value).abs() < 1) return;
+    _subtitleBottom.value = bottom;
     _videoKey.currentState?.setSubtitleViewPadding(
       EdgeInsets.fromLTRB(16, 0, 16, bottom),
       duration: const Duration(milliseconds: 250),
+    );
+  }
+
+  TextStyle _subtitleStyle() {
+    final track = _selectedSubtitle;
+    return TextStyle(
+      // Keep Sinhala punctuation and spaces in the same font as the words.
+      fontFamily: track != null && _getLanguageName(track.lang) == 'Sinhala'
+          ? 'NotoSansSinhala'
+          : null,
+      height: 1.4,
+      fontSize: 38,
+      letterSpacing: 0,
+      wordSpacing: 0,
+      color: _isPlaying ? Colors.white : Colors.transparent,
+      fontWeight: TvDevice.isTv ? FontWeight.w500 : FontWeight.normal,
+      backgroundColor: _isPlaying
+          ? const Color(0xaa000000)
+          : Colors.transparent,
+      fontFamilyFallback: ['NotoSansSinhala'],
     );
   }
 
@@ -768,7 +788,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
     if (_sinhalaFrom == from.id && starting != null) return starting;
     _stopSinhala();
     if (!GeminiKeyService().hasKey) return Future.value(null);
-    _sinhalaFrom = from.id;
+    _updateState(() => _sinhalaFrom = from.id);
     return _sinhalaStarting = () async {
       final url = _streamUrl;
       try {
@@ -787,7 +807,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
           job.stop();
           return null;
         }
-        _sinhala = job;
+        _updateState(() => _sinhala = job);
         job.updates.addListener(_onSinhalaUpdate);
         job.problem.addListener(_onSinhalaProblem);
         // Retimed against references if it can be: the Sinhala follows.
@@ -804,7 +824,12 @@ extension _PlayerSubtitles on _PlayerScreenState {
             error: true,
           );
         }
-        if (_sinhalaFrom == from.id) _sinhalaStarting = null;
+        if (mounted && _streamUrl == url && _sinhalaFrom == from.id) {
+          _updateState(() {
+            _sinhalaStarting = null;
+            _sinhalaFrom = null;
+          });
+        }
         return null;
       }
     }();
@@ -950,7 +975,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
     if (track == null ||
         track.isEmbedded ||
         _referenceTimed.contains(track.id) ||
-        _autoSyncing ||
+        _speechTimingCheck != null ||
         _autoSyncDone.contains(track.id) ||
         _isMediaOpening ||
         _switchingQuality ||
@@ -1007,7 +1032,9 @@ extension _PlayerSubtitles on _PlayerScreenState {
     ({String url, double start, Int16List pcm})? heard,
   }) async {
     final url = _streamUrl;
-    _autoSyncing = true;
+    _updateState(() {
+      _speechTimingCheck = (stream: _streamId, track: track.id);
+    });
     final took = Stopwatch()..start();
     var clear = false;
     Duration? checkFrom;
@@ -1110,7 +1137,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
     } catch (e) {
       print('[sync] failed: $e');
     } finally {
-      _autoSyncing = false;
+      _speechTimingCheck = null;
       if (!mounted || _streamUrl != url || _autoSyncDone.contains(track.id)) {
         // Discard results from obsolete or completed checks.
       } else if (clear) {
@@ -1163,6 +1190,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
   /// and 5.6 s by the end, in steps at the ad breaks, which no one delay
   /// fits. Without references, Auto Sync's listening goes on.
   Future<void> _retimeFromReferences(SubtitleTrackData track) async {
+    if (!mounted || _closing) return;
     // Sinhala made from English: the English is retimed, and the Sinhala
     // follows it (see below).
     if (track.translatedFrom != null) {
@@ -1191,6 +1219,8 @@ extension _PlayerSubtitles on _PlayerScreenState {
     if (refs.length < 2 && !refs.any((r) => r.matchesFile)) return;
     _retimeTried.add(track.id);
     final url = _streamUrl;
+    final check = (stream: _streamId, track: track.id);
+    _updateState(() => _referenceTimingChecks.add(check));
     final took = Stopwatch()..start();
     try {
       final picked = refs.take(4).toList();
@@ -1256,6 +1286,8 @@ extension _PlayerSubtitles on _PlayerScreenState {
       }
     } catch (e) {
       print('[sync] retiming failed: $e');
+    } finally {
+      if (mounted) _updateState(() => _referenceTimingChecks.remove(check));
     }
   }
 

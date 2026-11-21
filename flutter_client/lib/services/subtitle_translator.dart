@@ -442,8 +442,22 @@ class SinhalaSubtitles {
 
   bool get done => progress.value >= 1;
 
+  /// Whether there are still untranslated lines in the scene being watched.
+  final ValueNotifier<bool> waitingForScene = ValueNotifier(false);
+
   /// The viewer moved to [seconds]: the lines there are translated next.
-  void watchingAt(double seconds) => _from = seconds;
+  void watchingAt(double seconds) {
+    _from = seconds;
+    _updateWaitingForScene();
+  }
+
+  void _updateWaitingForScene() {
+    const lookAhead = 8.0;
+    waitingForScene.value = !_stopped &&
+        !done &&
+        problem.value == null &&
+        _ahead(within: lookAhead) <= lookAhead;
+  }
 
   /// The English lines retimed (see PlayerScreen's _retimeFromReferences):
   /// the Sinhala ones follow, if the lines are the same.
@@ -475,17 +489,11 @@ class SinhalaSubtitles {
   }
 
   Future<void> _write() async {
-    var srt = SubtitleTranslator.toSrt(_cues, _said);
-    if (srt.isEmpty) {
-      // Nothing yet (the player won't take an empty file): a line saying
-      // so where they're watching, there until the first lines replace it
-      // — or, if it stopped, that it couldn't.
-      final failed = problem.value != null;
-      srt = '1\n${SubtitleTranslator._stamp(_from)} --> '
-          '${SubtitleTranslator._stamp(_from + (failed ? 10 : 900))}\n'
-          '${failed ? 'සිංහල උපසිරැසි සකසන්න බැරි වුණා' : 'සිංහල උපසිරැසි සකසමින්…'}\n\n';
-    }
-    await File(path).writeAsString(srt);
+    final srt = SubtitleTranslator.toSrt(_cues, _said);
+    // mpv needs a valid file before it can reload newly translated lines.
+    const emptyTrack = '1\n00:00:00,000 --> 00:00:00,001\n\u200b\n\n';
+    await File(path).writeAsString(srt.isEmpty ? emptyTrack : srt);
+    _updateWaitingForScene();
   }
 
   /// The next lines to translate: those not yet done from where they're
@@ -516,8 +524,9 @@ class SinhalaSubtitles {
   static const _pace = Duration(seconds: 20);
 
   // Seconds of the video translated ahead of where they're watching.
-  double _ahead() {
+  double _ahead({double within = double.infinity}) {
     for (var i = 0; i < _cues.length; i++) {
+      if (_cues[i].start > _from + within) break;
       if (_cues[i].end >= _from && _said[i] == null) {
         return _cues[i].start - _from;
       }

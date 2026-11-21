@@ -305,7 +305,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   // downloaded, by their url; the subtitles done with (synced, given up
   // on, or timed by the viewer) and those tried, by id; where watching
   // carried on from without a jump, and the position last seen.
-  bool _autoSyncing = false;
+  ({int stream, String track})? _speechTimingCheck;
+  final _referenceTimingChecks = <({int stream, String track})>{};
   final Map<String, List<SubtitleCue>> _subtitleCues = {};
 
   /// Subtitles (ids) found not to fit this video — their length, or no
@@ -556,7 +557,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// The subtitles' space below them now, so they're moved only on a
   /// change.
-  double _subtitleBottom = 24;
+  final ValueNotifier<double> _subtitleBottom = ValueNotifier(24);
 
   /// Whether the last click landed in [_inBottomBand] (so a double-click
   /// there doesn't toggle full screen either).
@@ -1061,6 +1062,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     });
 
     // 5. Dispose seek bar / stats notifiers
+    _subtitleBottom.dispose();
     _positionNotifier.dispose();
     _durationNotifier.dispose();
     _bufferNotifier.dispose();
@@ -1106,6 +1108,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _placeSubtitles();
     });
+    final subtitleStyle = _subtitleStyle();
     final size = MediaQuery.of(context).size;
     final wide = playerIsWide(context);
     // Camera cutout (punch hole / notch) — the video draws under it (see
@@ -1235,38 +1238,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                     subtitleViewConfiguration:
                                         SubtitleViewConfiguration(
                                       textScaler: _subtitleScaler(context),
-                                      style: TextStyle(
-                                        // Sinhala in its own font throughout,
-                                        // spaces and commas too: switching
-                                        // fonts between words left gaps in
-                                        // the black behind the line.
-                                        fontFamily: _selectedSubtitle != null &&
-                                                _getLanguageName(
-                                                        _selectedSubtitle!
-                                                            .lang) ==
-                                                    'Sinhala'
-                                            ? 'NotoSansSinhala'
-                                            : null,
-                                        height: 1.4,
-                                        fontSize: 38.0,
-                                        letterSpacing: 0.0,
-                                        wordSpacing: 0.0,
-                                        // Out of sight while paused: clear,
-                                        // not removed, so the line on
-                                        // screen comes back with play.
-                                        color: _isPlaying
-                                            ? const Color(0xffffffff)
-                                            : Colors.transparent,
-                                        // A touch heavier on a TV: thin
-                                        // strokes blur from across a room.
-                                        fontWeight: TvDevice.isTv
-                                            ? FontWeight.w500
-                                            : FontWeight.normal,
-                                        backgroundColor: _isPlaying
-                                            ? const Color(0xaa000000)
-                                            : Colors.transparent,
-                                        fontFamilyFallback: ['NotoSansSinhala'],
-                                      ),
+                                      style: subtitleStyle,
                                     ),
                                     controls:
                                         NoVideoControls, // Pure custom controls overlay
@@ -1325,6 +1297,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                                   ],
                                 ),
                               ),
+                            ),
+
+                            _buildSubtitleActivity(
+                              style: subtitleStyle,
+                              textScaler: _subtitleScaler(context),
                             ),
 
                             ..._buildPlaybackBadges(safe: safe),

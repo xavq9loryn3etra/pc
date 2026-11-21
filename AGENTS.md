@@ -9,6 +9,7 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 - **Publish without asking.** Once a requested change is finished and checked, commit and push in the same turn and say it's live. Don't ask "should I publish?". An app release reaches every user, so always say clearly when you've done one.
 - Be honest: if something is untested or only partly works, say so.
 - Never commit secrets (`secrets.json`, `flutter_client/.env`, `android/key.properties`).
+- **Keep this file up to date.** When the owner makes a new decision, gives a correction or says "always"/"never", add it to the right section of this file in plain words (with the date), commit and push it with the work. Change or remove rules here that turn out to be wrong. Don't add one-off details that only matter to the current task.
 
 ## Releases
 

@@ -79,3 +79,6 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
   5. Accept two separate stretches agreeing within 0.4 s even when each one alone is "not sure" (e.g. 11.44 and 11.77 s).
   6. Don't give up after 6 tries or 90 s. Keep checking quietly through the film, showing the glowing blocks meanwhile. If no copy fits, say so in the panel.
   Afterwards, test Street Fighter on the S10 at about 50 min.
+- **To do after 23 Nov 2026 (owner approved): hear dialogue better when syncing subtitles.**
+  1. First: on surround copies (5.1/7.1), listen to the centre (dialogue) channel only, not a mono mix of everything (`subtitle_sync.dart` sets `audio-channels: mono`; speech is detected by loudness in the 300–3400 Hz band, which fights and music also fill).
+  2. Only if action films still fail after that: build a quick test of a small on-device speech detector (e.g. Silero VAD). Measure speed and battery on the S10 and report before adding it. Expected: a few seconds of one core per listen; the runtime adds maybe 5–15 MB to the app; cheap TV sticks are slower.

@@ -61,7 +61,7 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 
 ## Open items (waiting on the owner)
 
-- **Split `flutter_client/lib/screens/player_screen.dart`** (~7,800 lines) into `part` files by topic (streaming, subtitles, episodes, controls/TV remote, skip intro, sound), moving code word for word; then break up build(). The plan is agreed but needs a go-ahead. Remind the owner from 24 Nov 2026. After each step: analyzer, build, and a quick play test on the S10.
+- **Player split:** Step 1 moved the methods into six `part` files on 21 Nov 2026. Step 2 needs the owner's go-ahead before splitting `build()` into the top bar, bottom bar and seek bar, TV controls, and overlays. Remind the owner from 24 Nov 2026. After each step: analyzer, build, and a quick play test on the S10.
 - TV picture: prefer copies that aren't Dolby-Vision-only, and test debanding on the S10. Awaiting a go-ahead.
 - "Download tonight" (cheap night-time data, Android first): recommended for later, not started.
 - Google "Popcorn (Unverified)" verification: the owner said later.

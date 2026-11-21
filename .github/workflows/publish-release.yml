@@ -211,9 +211,9 @@ jobs:
           - **Windows:** download **Popcorn-Windows-Setup.exe** below and run it. If Windows says it protected your PC, click **More info**, then **Run anyway**.
 
           Updating keeps your favourites and history. Earlier versions are listed below this one.
-
-          <sub>Built from ${GITHUB_REPOSITORY}@${GITHUB_SHA::7}.</sub>
           EOF
+          # Never name this (source) repo anywhere public: the release, README
+          # and website belong to popcorn-organization only.
           gh release create "v$VERSION" dist/Popcorn-Android.apk dist/Popcorn-Android-TV.apk \
             dist/Popcorn-Windows-Setup.exe \
             -R "$RELEASE_REPO" \

@@ -17,6 +17,7 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 - `.github/workflows/publish-release.yml` in this repo publishes a release **only when `version:` in `flutter_client/pubspec.yaml` changes** on main. To ship: bump the version and push. Never reuse a version number. The workflow also updates the README's latest line and sets `docs/flags.json` `min_required_version` (Android and Windows).
 - iPhone: Codemagic (`codemagic.yaml`, `xcode: latest`) builds TestFlight. The workflow does **not** raise the iPhone flag (`ios.min_required_version` in flags.json). Raise it only when asked, after the Codemagic "iOS TestFlight Release" check on the release commit succeeds plus ~10 minutes for Apple processing.
 - From April 2027 iOS uploads need the iOS 27 SDK (Xcode 27). Near then, check that Codemagic's "latest" has moved; if it hasn't, pin `xcode: 27.x`.
+- **Never name this source repo (xavq9loryn3etra/pc) on anything public** (release notes, README, website, download page). The source repo stays public only so GitHub Actions minutes stay free; the public face is popcorn-organization. (22 Nov 2026)
 - Set GitHub secrets with `gh secret set NAME --body "..."`. Piping from PowerShell adds CRLF and broke a release before.
 - There is no Mac build yet (owner chose "later").
 

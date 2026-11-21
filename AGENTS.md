@@ -71,3 +71,11 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 - **To do after 23 Nov 2026 (owner approved): hide the source repo's name inside the app.**
   1. Wikidata User-Agent (`streaming_link_service.dart`): replace the xavq9loryn3etra/pc GitHub link with the public website address.
   2. Update/maintenance flags: the app reads `https://xavq9loryn3etra.github.io/pc/flags.json` (`feature_flags_service.dart`). Host flags.json on the popcorn-organization website too and point the app there. Keep both copies identical (the release workflow updates both) for a while, so older app versions still get update notices. Only an app release ships this.
+- **To do after 23 Nov 2026 (owner approved): Netflix-style subtitles that sync robustly in the background.** Why: Street Fighter (tt27419420) never synced on the S10 (22 Nov): reference files disagreed, the speech checks gave 4.8–15.9 s, the sound fetch failed, and the subtitle made for the file was found but never selected.
+  1. Show one button per language only. Remove "Try another subtitle" (this replaces the subtitle-panel rule above; update it when done). The app picks and swaps copies itself.
+  2. When the fingerprint finds a subtitle made for this file, switch to it at once, unless the viewer chose. Start that search immediately, not after 15 s. (`_fingerprint…` in `player/subtitles.dart` only reorders the list today.)
+  3. After one listen, test every copy in the chosen language against the stored sound (about 0.2 s each) and keep the one that clearly fits.
+  4. Listen to stretches with dense dialogue (taken from the subtitle cues) and only to parts already downloaded, not just the next 160 s.
+  5. Accept two separate stretches agreeing within 0.4 s even when each one alone is "not sure" (e.g. 11.44 and 11.77 s).
+  6. Don't give up after 6 tries or 90 s. Keep checking quietly through the film, showing the glowing blocks meanwhile. If no copy fits, say so in the panel.
+  Afterwards, test Street Fighter on the S10 at about 50 min.

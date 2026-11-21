@@ -82,3 +82,8 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 - **To do after 23 Nov 2026 (owner approved): hear dialogue better when syncing subtitles.**
   1. First: on surround copies (5.1/7.1), listen to the centre (dialogue) channel only, not a mono mix of everything (`subtitle_sync.dart` sets `audio-channels: mono`; speech is detected by loudness in the 300–3400 Hz band, which fights and music also fill).
   2. Only if action films still fail after that: build a quick test of a small on-device speech detector (e.g. Silero VAD). Measure speed and battery on the S10 and report before adding it. Expected: a few seconds of one core per listen; the runtime adds maybe 5–15 MB to the app; cheap TV sticks are slower.
+- **To do after 23 Nov 2026 (owner approved): more ways to make subtitle syncing robust.**
+  1. Drifting timing: when listening, allow a piece-by-piece timing map (as `subtitle_retime.dart` already does for reference files) instead of one delay and speed for the whole film, for subtitles made for a slightly different cut.
+  2. Series: start from the previous episode's confirmed timing for the same subtitle source and release (Attack on Titan S2E5 and E6 were both +50 s), so one agreeing listen confirms it.
+  3. When picking a copy, prefer ones with built-in subtitles in the viewer's subtitle language if they usually watch with subtitles (built-in subtitles are always in sync).
+  4. Sync confirmed timings per copy through the Google Drive sync, so the phone, TV and PC share them.

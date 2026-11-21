@@ -31,6 +31,7 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 
 ## Product rules
 
+- **Viewing experience (21 Nov 2026):** Use Netflix and the Apple TV app as references for how Popcorn should feel. Keep playback controls familiar, menus simple, and technical details out of the way. Use Popcorn's own visual design.
 - **Movies and series only.** Hide documentaries, making-ofs/featurettes, stand-up specials, concert films, and talk/news/reality TV. Every list, row, recommendation and Ask result goes through `TMDBService.isUnsuitable`. Real musicals, comedies and sitcoms stay.
 - **Never switch audio language.** Never play a different language than the one chosen: no fallback to a dub, not even with a notice. Every automatic copy choice (start fallback, stall recovery, next episode, resume) must filter to the chosen language. If nothing in that language works, stop and say so.
 - **Streaming-service buttons ("watch on Netflix" etc.)** open only that service's app, directly to the title (`LaunchMode.externalNonBrowserApplication`). Never fall back to TMDB, a search page or any website. If it can't open, show a message.

@@ -17,6 +17,7 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 
 - The public app and website live at **popcorn-organization/popcorn** (website: GitHub Pages from `docs/` on main, https://popcorn-organization.github.io/popcorn/).
 - `.github/workflows/publish-release.yml` in this repo publishes a release **only when `version:` in `flutter_client/pubspec.yaml` changes** on main. To ship: bump the version and push. Never reuse a version number. The workflow also updates the README's latest line and sets `docs/flags.json` `min_required_version` (Android and Windows).
+- **Update flags (23 Nov 2026):** the app reads `https://popcorn-organization.github.io/popcorn/flags.json` (the public repo's `docs/flags.json`). This repo's `docs/flags.json` is an identical copy that app versions up to 4.4.1 still read. The release workflow updates this repo's copy and then copies it to the public repo, so this repo's is the master: make any change by hand (e.g. the iPhone flag) identically in both. Versions after 4.4.1 read the public one.
 - iPhone: Codemagic (`codemagic.yaml`, `xcode: latest`) builds TestFlight. The workflow does **not** raise the iPhone flag (`ios.min_required_version` in flags.json). Raise it only when asked, after the Codemagic "iOS TestFlight Release" check on the release commit succeeds plus ~10 minutes for Apple processing.
 - From April 2027 iOS uploads need the iOS 27 SDK (Xcode 27). Near then, check that Codemagic's "latest" has moved; if it hasn't, pin `xcode: 27.x`.
 - **Never name this source repo (xavq9loryn3etra/pc) on anything public** (release notes, README, website, download page). The source repo stays public only so GitHub Actions minutes stay free; the public face is popcorn-organization. (22 Nov 2026)
@@ -70,9 +71,6 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 
 - TV picture: prefer copies that aren't Dolby-Vision-only, and test debanding on the S10. Awaiting a go-ahead.
 - Google "Popcorn (Unverified)" verification: the owner will do it later (23 Nov 2026).
-- **To do after 23 Nov 2026 (owner approved): hide the source repo's name inside the app.**
-  1. Wikidata User-Agent (`streaming_link_service.dart`): replace the xavq9loryn3etra/pc GitHub link with the public website address.
-  2. Update/maintenance flags: the app reads `https://xavq9loryn3etra.github.io/pc/flags.json` (`feature_flags_service.dart`). Host flags.json on the popcorn-organization website too and point the app there. Keep both copies identical (the release workflow updates both) for a while, so older app versions still get update notices. Only an app release ships this.
 - **To do (owner approved 23 Nov 2026): video stutters on TV while subtitles sync.** A tester saw it on the TV app (4.4.1). Likely causes: each listen converts ~2 million sound samples (`decodeSound`) and parses subtitle files (`_cuesOf`) on the screen's thread, which also draws the video; and the silent second player decodes the sound flat out on weak TV processors (surround formats are costly).
   1. First measure on the S10 how long those steps hold the screen's thread during a listen.
   2. Move that work off the screen's thread (as the matching already is).

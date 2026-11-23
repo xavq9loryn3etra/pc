@@ -4,10 +4,12 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Remote flags, read from a static JSON file on GitHub Pages
-/// (`docs/flags.json` at the repo root). Edit and push that file to change
-/// them; apps pick the change up on next launch or when brought back to
-/// the foreground.
+/// Remote flags, read from a static JSON file on the public website
+/// (`docs/flags.json` in popcorn-organization/popcorn, on GitHub Pages).
+/// This repo's `docs/flags.json` is an identical copy that older app
+/// versions still read; the release workflow copies it to the public repo,
+/// so a change by hand goes into both. Apps pick a change up on next launch
+/// or when brought back to the foreground.
 ///
 /// Top-level keys apply to every platform; an `android` / `ios` /
 /// `windows` / `macos` object overrides them for that platform only, e.g.
@@ -29,7 +31,7 @@ class FeatureFlagsService {
   FeatureFlagsService._internal();
 
   static const String flagsUrl =
-      'https://xavq9loryn3etra.github.io/pc/flags.json';
+      'https://popcorn-organization.github.io/popcorn/flags.json';
   static const String _cacheKey = 'feature_flags_json';
   // Foreground re-checks closer together than this are skipped.
   static const Duration _minRefreshInterval = Duration(minutes: 1);

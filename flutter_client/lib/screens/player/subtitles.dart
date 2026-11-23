@@ -575,9 +575,34 @@ extension _PlayerSubtitles on _PlayerScreenState {
     await _rebuildAvailableSubtitles();
   }
 
+  /// The timings confirmed for copies of this video before (see
+  /// _rememberTiming), every copy's: one known to fit is picked at once,
+  /// not checked afresh behind another.
+  Future<void> _loadSavedTimings() async {
+    final url = _streamUrl;
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted || _streamUrl != url) return;
+    for (final s in _externalSubtitles) {
+      if (_autoSynced.contains(s.id) || _referenceTimed.contains(s.id)) {
+        continue;
+      }
+      final parts = prefs.getString(_timingKey(s))?.split('|');
+      if (parts == null || parts.length < 3 || parts[2] != 'confirmed') {
+        continue;
+      }
+      final delay = double.tryParse(parts[0]);
+      final speed = double.tryParse(parts[1]);
+      if (delay == null || speed == null) continue;
+      _autoSynced.add(s.id);
+      _subtitleTimings[s.id] = (delay: delay, speed: speed);
+    }
+  }
+
   Future<void> _rebuildAvailableSubtitles() async {
     // After this, whatever stays selected: retimed if it can be now.
     Future<void>.delayed(Duration.zero, _retimeSelected);
+    await _loadSavedTimings();
+    if (!mounted) return;
     final sinhala = _sinhalaTrack();
     // Each language's best first (the panel shows one per language).
     final ordered = [..._embeddedSubtitles, ..._externalSubtitles];
@@ -1637,18 +1662,18 @@ extension _PlayerSubtitles on _PlayerScreenState {
         : _SubtitleTiming.checking;
   }
 
-  /// What the glowing blocks in the subtitles' place stand for (read out
-  /// to screen readers), or null when there are none: Sinhala being made
-  /// for the scene, or the timing being checked.
+  /// What the quiet bar in the subtitles' place says (see
+  /// _buildSubtitleActivity), or null when there's none: Sinhala being made
+  /// for the scene (said in Sinhala), or the timing being checked.
   String? _subtitleActivityLabel(_SubtitleTiming? timing) {
     final source = _selectedSubtitle?.translatedFrom;
     if (timing == _SubtitleTiming.noFit) return null;
     if (source != null && source.id == _sinhalaFrom &&
         (_sinhala?.waitingForScene.value ?? _sinhalaStarting != null)) {
-      return 'Generating Sinhala subtitles';
+      return 'සිංහල උපසිරැසි සකසමින්…';
     }
     return timing == _SubtitleTiming.checking
-        ? 'Checking subtitle timing'
+        ? 'Syncing subtitles…'
         : null;
   }
 

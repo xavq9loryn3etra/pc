@@ -1,9 +1,11 @@
 part of '../player_screen.dart';
 
 extension _PlayerOverlays on _PlayerScreenState {
+  /// In the subtitles' place while they can't be shown yet (see
+  /// _subtitleActivityLabel): a quiet grey bar saying why, with a slow
+  /// shimmer across its words — where the subtitles sit, moving with them.
   Widget _buildSubtitleActivity(TextScaler textScaler, String label) {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final scale = textScaler.scale(38) / 22;
     return Positioned.fill(
       child: IgnorePointer(
         child: ValueListenableBuilder<double>(
@@ -15,28 +17,12 @@ extension _PlayerOverlays on _PlayerScreenState {
                 : const Duration(milliseconds: 250),
             child: Align(alignment: Alignment.bottomCenter, child: child),
           ),
-          child: Semantics(
+          child: _SubtitleActivityBar(
             label: label,
-            liveRegion: true,
-            child: SizedBox(
-              width: 184 * scale,
-              height: 59 * scale,
-              child: ClipPath(
-                clipper: const _SubtitleActivityBlocks(),
-                child: ColoredBox(
-                  color: const Color(0xaa000000),
-                  child: reduceMotion
-                      ? ColoredBox(color: AppTheme.accent)
-                      : OverflowBox(
-                          minWidth: 260 * scale,
-                          maxWidth: 260 * scale,
-                          minHeight: 104 * scale,
-                          maxHeight: 104 * scale,
-                          child: const BusyOrb(on: true, spill: false),
-                        ),
-                ),
-              ),
-            ),
+            // A third smaller than a subtitle line: a note, not dialogue.
+            fontSize: textScaler.scale(38) * 0.62,
+            // Out of sight while paused, as the subtitles are.
+            visible: _isPlaying,
           ),
         ),
       ),
@@ -445,15 +431,114 @@ extension _PlayerOverlays on _PlayerScreenState {
       );
 }
 
-class _SubtitleActivityBlocks extends CustomClipper<Path> {
-  const _SubtitleActivityBlocks();
+/// The bar of _buildSubtitleActivity: shown only after a few seconds (a
+/// short wait flashes nothing), faded in and out.
+class _SubtitleActivityBar extends StatefulWidget {
+  final String label;
+  final double fontSize;
+  final bool visible;
+
+  const _SubtitleActivityBar({
+    required this.label,
+    required this.fontSize,
+    required this.visible,
+  });
 
   @override
-  Path getClip(Size size) => Path()
-    ..addRect(Rect.fromLTWH(0, 0, size.width, size.height * 0.45))
-    ..addRect(Rect.fromLTWH(size.width * 0.15, size.height * 0.55,
-        size.width * 0.7, size.height * 0.45));
+  State<_SubtitleActivityBar> createState() => _SubtitleActivityBarState();
+}
+
+class _SubtitleActivityBarState extends State<_SubtitleActivityBar>
+    with SingleTickerProviderStateMixin {
+  static const _after = Duration(seconds: 3);
+  late final AnimationController _shimmer = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2400),
+  );
+  Timer? _wait;
+  bool _due = false;
 
   @override
-  bool shouldReclip(_SubtitleActivityBlocks oldClipper) => false;
+  void initState() {
+    super.initState();
+    _wait = Timer(_after, () {
+      if (mounted) setState(() => _due = true);
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _shimmer.stop();
+    } else if (!_shimmer.isAnimating) {
+      _shimmer.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _wait?.cancel();
+    _shimmer.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sinhala = RegExp(r'[\u0D80-\u0DFF]').hasMatch(widget.label);
+    final style = TextStyle(
+      fontSize: widget.fontSize,
+      height: 1.3,
+      fontWeight: FontWeight.w500,
+      color: Colors.white,
+      fontFamily: sinhala ? 'NotoSansSinhala' : null,
+    );
+    final text = Text(
+      widget.label,
+      textScaler: TextScaler.noScaling,
+      style: style,
+    );
+    return Semantics(
+      label: widget.label,
+      liveRegion: true,
+      excludeSemantics: true,
+      child: AnimatedOpacity(
+        opacity: _due && widget.visible ? 1 : 0,
+        duration: const Duration(milliseconds: 400),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: const Color(0x66000000),
+            borderRadius: BorderRadius.circular(widget.fontSize * 0.4),
+          ),
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: widget.fontSize * 0.7,
+              vertical: widget.fontSize * 0.25,
+            ),
+            child: AnimatedBuilder(
+              animation: _shimmer,
+              child: text,
+              builder: (context, child) {
+                // Grey words, a soft lighter band passing across them.
+                final x = _shimmer.value * 3 - 1;
+                return ShaderMask(
+                  blendMode: BlendMode.srcIn,
+                  shaderCallback: (bounds) => LinearGradient(
+                    begin: Alignment(x - 0.6, 0),
+                    end: Alignment(x + 0.6, 0),
+                    colors: const [
+                      Color(0x80FFFFFF),
+                      Color(0xD9FFFFFF),
+                      Color(0x80FFFFFF),
+                    ],
+                  ).createShader(bounds),
+                  child: child,
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

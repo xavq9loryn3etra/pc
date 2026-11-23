@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../theme/app_theme.dart';
 import 'glass_blur.dart';
 
 /// Shows the app's one kind of pop-up message: a frosted pill floating near
@@ -12,12 +13,17 @@ import 'glass_blur.dart';
 /// [text] says what happened in plain words — never an exception's text.
 /// [aboveNavBar] lifts it clear of the home screens' floating bottom nav
 /// bar, which is drawn over the Scaffold rather than in it.
+///
+/// [actionLabel] with [onAction] adds a button at its end ("Undo"): tapping
+/// it closes the message, then calls [onAction].
 ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? showAppMessage(
   BuildContext context,
   String text, {
   bool error = false,
   bool aboveNavBar = false,
   Duration duration = const Duration(seconds: 4),
+  String? actionLabel,
+  VoidCallback? onAction,
 }) {
   final messenger = ScaffoldMessenger.maybeOf(context);
   if (messenger == null) return null;
@@ -29,6 +35,7 @@ ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? showAppMessage(
   final bottom =
       aboveNavBar ? 110 + MediaQuery.paddingOf(context).bottom : 16.0;
   messenger.hideCurrentSnackBar();
+  final hasAction = actionLabel != null && onAction != null;
   return messenger.showSnackBar(SnackBar(
     behavior: SnackBarBehavior.floating,
     backgroundColor: Colors.transparent,
@@ -36,7 +43,20 @@ ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? showAppMessage(
     padding: EdgeInsets.zero,
     margin: EdgeInsets.fromLTRB(side, 0, side, bottom),
     duration: duration,
-    content: _MessagePill(text: text, error: error),
+    // Its own button (below) rather than SnackBar.action: kept in the
+    // pill's look.
+    content: _MessagePill(
+      text: text,
+      error: error,
+      actionLabel: hasAction ? actionLabel : null,
+      onAction: hasAction
+          ? () {
+              messenger.hideCurrentSnackBar(
+                  reason: SnackBarClosedReason.action);
+              onAction();
+            }
+          : null,
+    ),
   ));
 }
 
@@ -45,13 +65,21 @@ const double _maxWidth = 480;
 class _MessagePill extends StatelessWidget {
   final String text;
   final bool error;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
-  const _MessagePill({required this.text, required this.error});
+  const _MessagePill({
+    required this.text,
+    required this.error,
+    this.actionLabel,
+    this.onAction,
+  });
 
   static const _radius = BorderRadius.all(Radius.circular(24));
 
   @override
   Widget build(BuildContext context) {
+    final action = actionLabel;
     return ClipRRect(
       borderRadius: _radius,
       child: GlassBlur(
@@ -65,7 +93,11 @@ class _MessagePill extends StatelessWidget {
             border: Border.all(color: kGlassEdge),
           ),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            // With a button, less round it: the button's own padding (a
+            // finger-sized target) makes up the rest.
+            padding: action == null
+                ? const EdgeInsets.symmetric(horizontal: 18, vertical: 14)
+                : const EdgeInsets.fromLTRB(18, 2, 6, 2),
             child: Row(
               children: [
                 if (error) ...[
@@ -79,6 +111,8 @@ class _MessagePill extends StatelessWidget {
                 Expanded(
                   child: Text(
                     text,
+                    maxLines: action == null ? null : 2,
+                    overflow: action == null ? null : TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 14,
@@ -87,6 +121,23 @@ class _MessagePill extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (action != null) ...[
+                  const SizedBox(width: 8),
+                  TextButton(
+                    onPressed: onAction,
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppTheme.accent,
+                      minimumSize: const Size(64, 48),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      shape: const StadiumBorder(),
+                      textStyle: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    child: Text(action),
+                  ),
+                ],
               ],
             ),
           ),

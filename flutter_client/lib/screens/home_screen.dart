@@ -17,7 +17,9 @@ import '../widgets/skeletons.dart';
 import 'desktop_home_screen.dart';
 import '../widgets/desktop_skeletons.dart';
 import '../widgets/custom_app_bar.dart';
-import '../widgets/glass_dialog.dart';
+import '../widgets/app_message.dart';
+import '../widgets/card_menu.dart';
+import '../widgets/floating_bottom_nav_bar.dart' show navBarAtTop;
 import '../widgets/smooth_scroll_controller.dart';
 
 /// A video mode's home: Popcorn's ([AppMode.movies]) or Ramen's
@@ -281,7 +283,8 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
           movie,
           heroTag: 'desktop_trending_${movie.id}',
         ),
-        onRemoveHistory: (movie) => _confirmRemoveHistory(movie),
+        onHistoryMenu: (movie, rect, onInfo) =>
+            _openHistoryMenu(movie, rect, onInfo: onInfo),
       );
     }
 
@@ -393,21 +396,62 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
     }
   }
 
-  Future<void> _confirmRemoveHistory(Movie movie) async {
-    final confirmed = await showGlassConfirm(
+  /// A Continue Watching card's menu (see showCardMenu), its poster at
+  /// [posterRect]: More Info ([onInfo], as tapping the card) and Remove.
+  Future<void> _openHistoryMenu(
+    Movie movie,
+    Rect posterRect, {
+    required VoidCallback onInfo,
+  }) {
+    return showCardMenu(
       context,
-      title: 'Remove from Continue Watching?',
-      message: '"${movie.title}" and your progress in it will be removed.',
-      confirmLabel: 'Remove',
-      destructive: true,
+      anchor: posterRect,
+      // The card as it looks, play button and all (not live: the menu's
+      // copy only shows).
+      preview: MoviePoster(
+        movie: movie,
+        width: posterRect.width,
+        height: posterRect.height,
+        onPlay: () {},
+      ),
+      actions: [
+        CardMenuAction(
+          label: 'More Info',
+          icon: Icons.info_outline_rounded,
+          onSelected: onInfo,
+        ),
+        CardMenuAction(
+          label: 'Remove from Continue Watching',
+          icon: Icons.remove_circle_outline_rounded,
+          destructive: true,
+          onSelected: () => _removeHistory(movie),
+        ),
+      ],
     );
+  }
 
-    if (confirmed) {
-      // removeFromHistory() calls notifyListeners() itself — the
-      // ListenableBuilder(SavedMoviesService()) around _buildContent picks
-      // it up without a manual setState here.
-      await SavedMoviesService().removeFromHistory(movie.id, type: movie.type);
-    }
+  /// Takes [movie] off Continue Watching at once, with Undo in a message
+  /// for a few seconds: Undo puts it back exactly as it was (progress,
+  /// episode, episodes' progress), and sync spreads that as the latest
+  /// change.
+  Future<void> _removeHistory(Movie movie) async {
+    final saved = SavedMoviesService();
+    final snapshot = await saved.snapshotHistory(movie.id, type: movie.type);
+    // removeFromHistory() calls notifyListeners() itself — the
+    // ListenableBuilder(SavedMoviesService()) around _buildContent picks
+    // it up without a manual setState here.
+    await saved.removeFromHistory(movie.id, type: movie.type);
+    if (!mounted) return;
+    showAppMessage(
+      context,
+      'Removed ${movie.title}',
+      // On a phone, clear of the floating bottom nav bar.
+      aboveNavBar: !navBarAtTop(context),
+      duration: const Duration(seconds: 5),
+      actionLabel: 'Undo',
+      onAction:
+          snapshot == null ? null : () => saved.restoreHistory(snapshot),
+    );
   }
 
   Widget _buildSection({
@@ -451,8 +495,10 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
                 showTitle: true,
                 heroTag: tag,
                 onTap: () => _navigateToDetails(movieDisplay, heroTag: tag),
-                onLongPress: heroPrefix == 'history'
-                    ? () => _confirmRemoveHistory(movieDisplay)
+                onMenu: heroPrefix == 'history'
+                    ? (rect) => _openHistoryMenu(movieDisplay, rect,
+                        onInfo: () =>
+                            _navigateToDetails(movieDisplay, heroTag: tag))
                     : null,
                 // Continue Watching: straight back into it.
                 onPlay: heroPrefix == 'history'

@@ -3,12 +3,15 @@ import 'dart:math' as math;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:shimmer/shimmer.dart';
 import '../models/movie.dart';
 import '../theme/app_theme.dart';
 import '../services/saved_movies_service.dart';
 import '../services/feature_flags_service.dart';
 import 'artwork_glow.dart';
+import 'card_menu.dart';
 import 'episode_card.dart';
 import 'tv_focus.dart';
 import '../services/tv_device.dart';
@@ -18,6 +21,12 @@ class MoviePoster extends StatefulWidget {
   final Movie movie;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
+
+  /// Opens the card's menu (see showCardMenu), given the poster's rect on
+  /// screen: on a long press on a phone or tablet, a right-click on a
+  /// computer (whose long press does nothing then). Never on a TV, whose
+  /// remote has the card's own buttons instead.
+  final void Function(Rect posterRect)? onMenu;
 
   /// Plays it at once, from where it was left (Continue Watching). Given,
   /// a part-way watched title has a round play button at the start of its
@@ -33,6 +42,7 @@ class MoviePoster extends StatefulWidget {
     required this.movie,
     this.onTap,
     this.onLongPress,
+    this.onMenu,
     this.onPlay,
     this.width = 120,
     this.height = 180,
@@ -52,6 +62,64 @@ class _MoviePosterState extends State<MoviePoster> {
   // Under the mouse: only the poster's zoom listens (see _zoomed), not the
   // whole card rebuilt on every hover.
   final ValueNotifier<bool> _hovered = ValueNotifier(false);
+
+  // The poster's picture, for where its menu opens (see onMenu).
+  final GlobalKey _posterKey = GlobalKey();
+
+  Future<void> _openMenu() async {
+    final onMenu = widget.onMenu;
+    final poster = _posterKey.currentContext;
+    if (onMenu == null || poster == null) return;
+    var rect = globalRectOf(poster);
+    if (rect == null) return;
+    // Partly off the bottom or top of the screen (a wide window's
+    // Continue Watching row starts below the fold): scrolled fully into
+    // view first, so its lifted copy isn't cut off at the edge.
+    final height = MediaQuery.sizeOf(context).height;
+    if (rect.bottom > height || rect.top < 0) {
+      await Scrollable.ensureVisible(
+        poster,
+        duration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: rect.bottom > height
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtEnd
+            : ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+      );
+      if (!mounted || !poster.mounted) return;
+      rect = globalRectOf(poster);
+      if (rect == null) return;
+    }
+    // Not left grown under the mouse beneath the menu's lifted copy.
+    _hovered.value = false;
+    onMenu(rect);
+  }
+
+  /// The long press: the menu's on a phone or tablet (with a tap of the
+  /// phone's haptics, as a lifted card has on an iPhone), not on a
+  /// computer — a right-click there — nor a TV.
+  VoidCallback? get _longPress {
+    if (widget.onMenu == null) return widget.onLongPress;
+    if (TvDevice.isTv || _onComputer) return null;
+    return () {
+      HapticFeedback.mediumImpact();
+      _openMenu();
+    };
+  }
+
+  /// A computer's (as isComputer, but asked each time: tests set the
+  /// platform).
+  static bool get _onComputer =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.macOS ||
+          defaultTargetPlatform == TargetPlatform.linux);
+
+  /// A right-click (or a two-finger click on an iPad's trackpad): the menu,
+  /// anywhere but on a TV.
+  VoidCallback? get _secondaryTap =>
+      widget.onMenu == null || TvDevice.isTv ? null : _openMenu;
 
   @override
   void dispose() {
@@ -383,6 +451,7 @@ class _MoviePosterState extends State<MoviePoster> {
       onFocusChange: (focused) => _hovered.value = focused,
       child: imageContent,
     );
+    imageContent = KeyedSubtree(key: _posterKey, child: imageContent);
     if (widget.height == double.infinity && widget.showTitle) {
       imageContent = Expanded(child: imageContent);
     }
@@ -395,7 +464,8 @@ class _MoviePosterState extends State<MoviePoster> {
         child: GestureDetector(
           onTapDown: _prefetchDetails,
           onTap: widget.onTap,
-          onLongPress: widget.onLongPress,
+          onLongPress: _longPress,
+          onSecondaryTap: _secondaryTap,
           child: imageContent,
         ),
       );
@@ -408,7 +478,8 @@ class _MoviePosterState extends State<MoviePoster> {
       child: GestureDetector(
         onTapDown: _prefetchDetails,
         onTap: widget.onTap,
-        onLongPress: widget.onLongPress,
+        onLongPress: _longPress,
+        onSecondaryTap: _secondaryTap,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

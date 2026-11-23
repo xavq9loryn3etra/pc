@@ -559,6 +559,67 @@ class SavedMoviesService with ChangeNotifier {
     }
   }
 
+  /// Everything [removeFromHistory] would take away for the title with
+  /// [id] — its entry, its episodes' progress and lengths, the copy it
+  /// last played — for [restoreHistory] to put back exactly (Undo). Null
+  /// if it isn't in history.
+  Future<HistorySnapshot?> snapshotHistory(String id, {String? type}) async {
+    final key = _historyKeyFor(id, type);
+    if (key == null) return null;
+    final movie = getMovieFromHistory(id, type: type);
+    final imdbId = movie?.imdbId;
+    // As removeFromHistory: only a show's episodes go with it.
+    final prefix = movie?.type == 'tv' ? 'tv_${id}_' : null;
+    Map<String, dynamic> episodesOf(Map<String, dynamic> map) => prefix == null
+        ? <String, dynamic>{}
+        : _copy(<String, dynamic>{
+            for (final e in map.entries)
+              if (e.key.startsWith(prefix)) e.key: e.value,
+          });
+    final lastPlayed = await LastPlayedTorrents.snapshotTitle(
+        [id, if (imdbId != null) imdbId]);
+    return HistorySnapshot._(
+      key: key,
+      entry: _copy(Map<String, dynamic>.from(_history[key] as Map)),
+      episodes: episodesOf(_episodeHistory),
+      lengths: episodesOf(_episodeLengths),
+      lastPlayed: lastPlayed,
+    );
+  }
+
+  /// Puts a title taken off Continue Watching back as [snapshot] kept it
+  /// (Undo): its place in the row (its last-watched time), progress,
+  /// episode and episodes' progress, and the copy it last played. Recorded
+  /// as changed just now, so sync spreads it over the removal (the latest
+  /// change wins on every device). Anything saved for it since — watched
+  /// again meanwhile — is kept over the snapshot.
+  Future<void> restoreHistory(HistorySnapshot snapshot) async {
+    final key = snapshot.key;
+    if (!_history.containsKey(key)) {
+      _history[key] = _copy(snapshot.entry);
+    }
+    SyncLedger().touch('history', key);
+    final episodeKeys = <String>[];
+    for (final e in snapshot.episodes.entries) {
+      if (_episodeHistory.containsKey(e.key)) continue;
+      _episodeHistory[e.key] = e.value;
+      episodeKeys.add(e.key);
+    }
+    if (episodeKeys.isNotEmpty) SyncLedger().touchAll('episodes', episodeKeys);
+    for (final e in snapshot.lengths.entries) {
+      _episodeLengths.putIfAbsent(e.key, () => e.value);
+    }
+    await LastPlayedTorrents.restoreTitle(snapshot.lastPlayed);
+    _evictOldest();
+    _historyCache = null;
+    _historyById.clear();
+    await _saveHistory();
+    await _saveEpisodeHistory();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_episodeLengthsKey, jsonEncode(_episodeLengths));
+    notifyListeners();
+  }
+
   Future<void> _saveHistory() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_historyKey, jsonEncode(_history));
@@ -693,4 +754,31 @@ class SavedMoviesService with ChangeNotifier {
       _saveTimer ??= Timer(_saveInterval, flush);
     }
   }
+}
+
+/// A Continue Watching title as it was just before it was removed (see
+/// [SavedMoviesService.snapshotHistory]), to put back with Undo.
+class HistorySnapshot {
+  /// Where its entry was kept ('type_id').
+  final String key;
+
+  /// Its stored entry: `{movie, last_watched}`.
+  final Map<String, dynamic> entry;
+
+  /// Its episodes' progress, 'tv_id_s_e' → fraction (a show's only).
+  final Map<String, dynamic> episodes;
+
+  /// Its episodes' played lengths, 'tv_id_s_e' → seconds.
+  final Map<String, dynamic> lengths;
+
+  /// The copy it and its episodes last played, as stored settings.
+  final Map<String, String> lastPlayed;
+
+  const HistorySnapshot._({
+    required this.key,
+    required this.entry,
+    required this.episodes,
+    required this.lengths,
+    required this.lastPlayed,
+  });
 }

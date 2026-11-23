@@ -160,6 +160,11 @@ void main() async {
   // loaded. Its first sync starts at once, in the background, while the
   // splash plays, so Home usually opens with the lists up to date.
   await _initStep('SyncService', SyncService().init);
+  // A TV or a computer: Home stays open, the app's seldom put away — a
+  // quiet check every few minutes while it's on screen.
+  if (TvDevice.isTv || Platform.isWindows || Platform.isMacOS) {
+    SyncService().startForegroundChecks();
+  }
   // Opening a tab that shows synced lists (Continue Watching on Home, My
   // List, Settings' sync status) is a moment to check what the other
   // devices did. Not Search: nothing synced shows there.
@@ -577,6 +582,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     return MaterialApp(
       title: 'Popcorn',
       navigatorKey: _navigatorKey,
+      navigatorObservers: [_BackHomeSync()],
       debugShowCheckedModeBanner: false,
       scrollBehavior: const _AppScrollBehavior(),
       theme: AppTheme.darkTheme,
@@ -724,4 +730,18 @@ class _AppScrollBehavior extends MaterialScrollBehavior {
   Widget buildScrollbar(
           BuildContext context, Widget child, ScrollableDetails details) =>
       child;
+}
+
+/// The player or a page over the app closed, back to its first screen on
+/// the Home tab: a moment to check what the other devices did (see
+/// SyncService.onBackHome). (A wide layout's title column: see
+/// ColumnPageCounter.)
+class _BackHomeSync extends NavigatorObserver {
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    if (route is! PageRoute || !(previousRoute?.isFirst ?? false)) return;
+    if (MovieTabService().currentTab.value == BottomNavTab.home) {
+      SyncService().onBackHome();
+    }
+  }
 }

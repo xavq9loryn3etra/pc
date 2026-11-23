@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -11,48 +10,51 @@ import '../services/torrent/last_played_torrents.dart';
 import '../services/torrent/stream_resolver.dart';
 import '../services/torrent/torrent_download_registry.dart';
 import '../services/torrent/free_space.dart';
+import '../services/quick_play_state.dart';
 import '../widgets/app_message.dart';
-import '../widgets/glass_dialog.dart';
 import '../widgets/player_route.dart';
 import 'player_screen.dart';
+
+/// The start under way (see quickPlay): pressing play again, or on
+/// another card, gives it up.
+Object? _starting;
 
 /// Continue Watching's play button: straight into the player with what
 /// Resume would play — the film, or the series' episode being watched —
 /// from the copy it was last watched in (else the one Play would pick),
-/// with no title page or quality popup on the way: a small "Starting…"
-/// card over the home, which Cancel (or a tap outside) gives up.
+/// with no title page or quality popup on the way. Meanwhile the card's
+/// play button turns into a loading ring (quickPlayStarting), no popup:
+/// pressing it again gives up. Only a failure is said.
 Future<void> quickPlay(BuildContext context, Movie movie) async {
-  var cancelled = false;
+  final key = movie.storageKey;
+  if (quickPlayStarting.value == key) {
+    // Pressed again while starting: given up.
+    _starting = null;
+    quickPlayStarting.value = null;
+    return;
+  }
+  final token = Object();
+  _starting = token;
+  quickPlayStarting.value = key;
+  bool cancelledNow() => _starting != token;
   final navigator = Navigator.of(context, rootNavigator: true);
-  final status = ValueNotifier<String>('Getting it ready…');
-  var cardOpen = true;
-  final card = showGlassDialog<void>(
-    context,
-    builder: (dialogContext) => _StartingCard(
-      title: movie.title,
-      status: status,
-      onCancel: () => Navigator.pop(dialogContext),
-    ),
-  ).whenComplete(() {
-    cardOpen = false;
-    cancelled = true;
-  });
-  void closeCard() {
-    if (cardOpen) {
-      cardOpen = false;
-      navigator.pop();
+  void done() {
+    if (_starting == token) {
+      _starting = null;
+      quickPlayStarting.value = null;
     }
   }
 
   void fail(String message) {
-    closeCard();
-    if (context.mounted) showAppMessage(context, message, error: true);
+    final shown = !cancelledNow();
+    done();
+    if (shown && context.mounted) showAppMessage(context, message, error: true);
   }
 
   try {
     final isTv = movie.type == 'tv';
     final details = await TMDBService().getDetails(movie.id, type: movie.type);
-    if (cancelled) return;
+    if (cancelledNow()) return;
     if (details == null) {
       return fail("Couldn't load ${movie.title}. Check your connection.");
     }
@@ -63,7 +65,7 @@ Future<void> quickPlay(BuildContext context, Movie movie) async {
     final episodes = isTv
         ? await TMDBService().getSeasonDetails(details.id, season!)
         : const <Episode>[];
-    if (cancelled) return;
+    if (cancelledNow()) return;
     final target = isTv
         ? episodes.where((e) => e.episodeNumber == episode).firstOrNull
         : null;
@@ -71,7 +73,6 @@ Future<void> quickPlay(BuildContext context, Movie movie) async {
       return fail("${movie.title} isn't out yet.");
     }
 
-    status.value = isTv ? 'Starting S$season E$episode…' : 'Starting…';
     final imdbId = details.imdbId ?? details.id;
     final resolver = StreamResolver();
     final streams = await resolver.getAvailableStreams(
@@ -81,7 +82,7 @@ Future<void> quickPlay(BuildContext context, Movie movie) async {
       episode: episode,
       title: details,
     );
-    if (cancelled) return;
+    if (cancelledNow()) return;
     if (streams.isEmpty) {
       return fail("Couldn't find a copy of ${movie.title} to play right now.");
     }
@@ -93,14 +94,13 @@ Future<void> quickPlay(BuildContext context, Movie movie) async {
     final lastPlayed = await LastPlayedTorrents.lastPlayed(prefs, key, details);
     final pick = StreamResolver.likelyPick(streams, lastPlayedHash: lastPlayed)!;
 
-    status.value = 'Connecting…';
     final StreamResolveResult resolved;
     try {
       // The copy, then the others of its quality, as the popup's pick.
       resolved = await resolver.resolveWithFallback(
         pick,
         StreamResolver.sameQuality(pick, streams),
-        isCancelled: () => cancelled,
+        isCancelled: cancelledNow,
         title: details,
       );
     } on ResolveCancelledException {
@@ -109,7 +109,7 @@ Future<void> quickPlay(BuildContext context, Movie movie) async {
       return fail('Too few people are sharing ${movie.title} right now. '
           'Try again in a little while, or pick a quality on its page.');
     }
-    if (cancelled) {
+    if (cancelledNow()) {
       resolver.pause(resolved.result.torrentId);
       return;
     }
@@ -132,12 +132,12 @@ Future<void> quickPlay(BuildContext context, Movie movie) async {
     );
     await SavedMoviesService()
         .addToHistory(movie, season: season, episode: episode);
-    if (cancelled) {
+    if (cancelledNow()) {
       resolver.pause(resolved.result.torrentId);
       return;
     }
 
-    closeCard();
+    done();
     final result = resolved.result;
     await navigator.push(
       PlayerRoute(
@@ -161,68 +161,9 @@ Future<void> quickPlay(BuildContext context, Movie movie) async {
     fail(e.toString());
   } catch (e) {
     debugPrint('Quick play failed: $e');
-    if (!cancelled) {
-      fail("Couldn't start ${movie.title}. Try again, or pick a quality on "
-          'its page.');
-    }
+    fail("Couldn't start ${movie.title}. Try again, or pick a quality on "
+        'its page.');
   } finally {
-    // Shown until the player's up (or it's given up).
-    unawaited(card.then((_) => status.dispose()));
-  }
-}
-
-/// The "Starting…" card: the title, what's happening, a spinner, Cancel.
-class _StartingCard extends StatelessWidget {
-  final String title;
-  final ValueListenable<String> status;
-  final VoidCallback onCancel;
-
-  const _StartingCard({
-    required this.title,
-    required this.status,
-    required this.onCancel,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 24, 22, 18),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox.square(
-            dimension: 28,
-            child: CircularProgressIndicator(
-                strokeWidth: 2.5, color: Colors.white),
-          ),
-          const SizedBox(height: 18),
-          Text(
-            title,
-            textAlign: TextAlign.center,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 6),
-          ValueListenableBuilder<String>(
-            valueListenable: status,
-            builder: (context, text, _) => Text(
-              text,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white60, fontSize: 14),
-            ),
-          ),
-          const SizedBox(height: 20),
-          SizedBox(
-            width: double.infinity,
-            child: GlassDialogButton(label: 'Cancel', onTap: onCancel),
-          ),
-        ],
-      ),
-    );
+    done();
   }
 }

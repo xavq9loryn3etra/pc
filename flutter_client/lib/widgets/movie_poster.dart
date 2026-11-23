@@ -1,3 +1,4 @@
+import '../services/quick_play_state.dart';
 import 'dart:math' as math;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -326,15 +327,35 @@ class _MoviePosterState extends State<MoviePoster> {
                           customBorder: const CircleBorder(),
                           onTap: widget.onPlay,
                           child: Center(
-                            child: Container(
-                              width: _playSize,
-                              height: _playSize,
-                              decoration: const BoxDecoration(
-                                color: Colors.white,
-                                shape: BoxShape.circle,
+                            // Starting (quickPlay): a loading ring round
+                            // the button; pressed again, it's given up.
+                            child: ValueListenableBuilder<String?>(
+                              valueListenable: quickPlayStarting,
+                              builder: (context, starting, button) => Stack(
+                                alignment: Alignment.center,
+                                clipBehavior: Clip.none,
+                                children: [
+                                  button!,
+                                  if (starting == widget.movie.storageKey)
+                                    const SizedBox.square(
+                                      dimension: _playSize + 10,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2.5,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                ],
                               ),
-                              child: const Icon(Icons.play_arrow_rounded,
-                                  size: 20, color: Colors.black),
+                              child: Container(
+                                width: _playSize,
+                                height: _playSize,
+                                decoration: const BoxDecoration(
+                                  color: Colors.white,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.play_arrow_rounded,
+                                    size: 20, color: Colors.black),
+                              ),
                             ),
                           ),
                         ),

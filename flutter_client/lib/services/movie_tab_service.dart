@@ -3,6 +3,7 @@ import 'package:flutter/cupertino.dart';
 import '../enums/app_mode.dart';
 import '../models/movie.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
+import 'sync/sync_service.dart';
 
 /// Tracks which movies-mode tab (Home/Search/Favorites/Settings) is active.
 ///
@@ -135,6 +136,8 @@ class ColumnPageCounter extends NavigatorObserver {
       // TV remote's selection goes back to where it was on the home.
       if (_depth == 0 && tabs.currentTab.value == BottomNavTab.home) {
         tabs.restoreFocus();
+        // Back on the home: what the other devices did, checked now.
+        SyncService().onBackHome();
       }
     }
 

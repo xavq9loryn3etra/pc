@@ -641,8 +641,20 @@ extension on GlassPillButton {
     final progress = this.progress;
     if (progress == null) return content;
     return Stack(
+      clipBehavior: Clip.none,
       children: [
-        Positioned.fill(child: _PillFill(progress)),
+        // Over the pill's 1 px edge too, in its round shape: inside it, the
+        // edge showed as an unfilled sliver at the round left end.
+        Positioned(
+          left: -1,
+          top: -1,
+          right: -1,
+          bottom: -1,
+          child: ClipPath(
+            clipper: const ShapeBorderClipper(shape: StadiumBorder()),
+            child: _PillFill(progress),
+          ),
+        ),
         content,
       ],
     );

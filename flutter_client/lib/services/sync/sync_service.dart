@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState, WidgetsBinding;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -437,6 +438,27 @@ class SyncService {
       _schedule(const Duration(seconds: 2));
     }
   }
+
+  /// TVs and computers (see main.dart): Home can stay open for hours,
+  /// and the app's seldom put away, so nothing else would check: a quiet
+  /// check every [_foregroundEvery] while it's on screen — one small
+  /// request to Google, downloading only what changed.
+  void startForegroundChecks() {
+    _foregroundChecks ??= Timer.periodic(_foregroundEvery, (_) {
+      if (!status.value.on) return;
+      if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+        return;
+      }
+      unawaited(syncNow());
+    });
+  }
+
+  Timer? _foregroundChecks;
+  static const _foregroundEvery = Duration(minutes: 5);
+
+  /// Back on Home from the player or a title's page: Continue Watching is
+  /// what's looked at then — what the other devices did is checked now.
+  void onBackHome() => onTabSwitch();
 
   /// Home, My List or Settings was opened: checks right away for what the
   /// other devices changed (one more right after, if one's running). A

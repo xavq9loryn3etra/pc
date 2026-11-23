@@ -1058,7 +1058,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
             : await _englishFor(track);
         // Off the screen's thread: a dozen files read at once held it up
         // (and the video with it) on a TV.
-        final cues = await Isolate.run(() => SubtitleSync.parseCues(text));
+        final cues = await _parseCuesInBackground(text);
         _subtitleCues[key] = cues;
         _cuesFailed.remove(track.url);
         return cues;
@@ -1885,6 +1885,12 @@ extension _PlayerSubtitles on _PlayerScreenState {
     if (delay == null || speed == null) return null;
     return (delay: delay, speed: speed);
   }
+
+  /// SubtitleSync.parseCues, off the screen's thread. (Static: a closure
+  /// made in the screen's methods would carry the screen along, which an
+  /// isolate can't be sent.)
+  static Future<List<SubtitleCue>> _parseCuesInBackground(String text) =>
+      Isolate.run(() => SubtitleSync.parseCues(text));
 
   /// SubtitleSync.findAll, off the screen's thread: a few hundred
   /// milliseconds' sums on a phone for the sound, a fraction of a second

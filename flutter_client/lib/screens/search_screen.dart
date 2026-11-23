@@ -244,13 +244,6 @@ class _SearchScreenState extends State<SearchScreen> {
                 _fieldHeight +
                 (recents ? _recentsHeight + 10 : 0) +
                 24;
-            // The same with the keyboard down (see _centred).
-            _closedContentBottom = (barAtFoot
-                    ? padding.bottom - 34
-                    : padding.bottom + 16) +
-                _fieldHeight +
-                (recents ? _recentsHeight + 10 : 0) +
-                24;
             // Each layer keyed: unkeyed, the pills going (the first letter's
             // search starting) left the field's layer matched to theirs, and
             // the field was built anew — the phone's keyboard closed, and a
@@ -557,28 +550,39 @@ class _SearchScreenState extends State<SearchScreen> {
   /// [child] in the middle of the space between the title and the search
   /// bar (and its recent searches).
   /// [child] in the middle of the space — as it is with the keyboard
-  /// down: the keyboard coming up (the field moving onto it, the space
-  /// shrinking) doesn't move it.
+  /// down: the keyboard coming up (the page shortened above it, the field
+  /// moving onto it) doesn't move it. The keyboard only ever shortens the
+  /// page, so the tallest it's been at this width is its height without
+  /// one; that, and the room kept at its foot then, are kept.
   Widget _centred(BuildContext context, EdgeInsets padding, Widget child) =>
       LayoutBuilder(builder: (context, constraints) {
-        // The page is shortened by the keyboard: its height without it.
-        final height =
-            constraints.maxHeight + MediaQuery.viewInsetsOf(context).bottom;
+        final width = constraints.maxWidth;
+        final tallest = _tallest;
+        if (tallest == null ||
+            tallest.width != width ||
+            constraints.maxHeight >= tallest.height) {
+          _tallest = (
+            width: width,
+            height: constraints.maxHeight,
+            bottom: padding.bottom,
+          );
+        }
+        final kept = _tallest!;
         return OverflowBox(
           alignment: Alignment.topCenter,
-          minHeight: height,
-          maxHeight: height,
+          minHeight: kept.height,
+          maxHeight: kept.height,
           child: Padding(
-            padding: EdgeInsets.fromLTRB(24, _topPadding(context), 24,
-                _closedContentBottom ?? padding.bottom),
+            padding:
+                EdgeInsets.fromLTRB(24, _topPadding(context), 24, kept.bottom),
             child: child,
           ),
         );
       });
 
-  // What's kept clear at the foot for the field (and the pills) with the
-  // keyboard down, for [_centred].
-  double? _closedContentBottom;
+  // The tallest the space [_centred] fills has been (keyboard down), at
+  // its width, and the room at its foot then.
+  ({double width, double height, double bottom})? _tallest;
 
   static const double _recentsHeight = 36;
 

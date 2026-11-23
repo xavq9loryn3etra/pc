@@ -703,10 +703,10 @@ class TvGroup extends StatefulWidget {
   final double borderRadius;
 
   @override
-  State<TvGroup> createState() => _TvGroupState();
+  State<TvGroup> createState() => TvGroupState();
 }
 
-class _TvGroupState extends State<TvGroup> {
+class TvGroupState extends State<TvGroup> {
   FocusNode? _own;
   FocusNode get _node =>
       widget.focusNode ?? (_own ??= FocusNode(debugLabel: 'TvGroup'));
@@ -738,6 +738,10 @@ class _TvGroupState extends State<TvGroup> {
   void _onFocus() {
     if (_open && !_node.hasFocus) setState(() => _open = false);
   }
+
+  /// Goes into it, as OK on it does: [TvGroup.enterOn] selected (a text
+  /// field, its keyboard opening). For a screen arriving at its field.
+  void enter() => _enter();
 
   void _enter() {
     setState(() => _open = true);

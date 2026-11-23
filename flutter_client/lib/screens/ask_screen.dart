@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 import '../widgets/smooth_scroll_controller.dart';
 
 import 'package:flutter/cupertino.dart';
@@ -14,7 +13,6 @@ import '../enums/app_mode.dart';
 import '../models/movie.dart';
 import '../services/ai_service.dart';
 import '../services/tv_device.dart';
-import '../widgets/tv_focus.dart';
 import '../services/gemini_key_service.dart';
 import '../widgets/gemini_key_form.dart';
 import '../services/movie_tab_service.dart';
@@ -22,6 +20,8 @@ import '../theme/iridescent.dart';
 import '../widgets/ask_orb.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/glass_blur.dart';
+import '../widgets/glass_text_bar.dart';
+import '../services/app_mode_service.dart';
 import '../widgets/movie_poster.dart';
 import '../widgets/screen_scaffold.dart';
 import 'details_screen.dart';
@@ -73,8 +73,7 @@ class AskScreen extends StatefulWidget {
   State<AskScreen> createState() => _AskScreenState();
 }
 
-class _AskScreenState extends State<AskScreen>
-    with SingleTickerProviderStateMixin {
+class _AskScreenState extends State<AskScreen> {
   final _controller = TextEditingController();
   final _focus = FocusNode();
   // On a TV, the bar round the field: what the remote selects.
@@ -138,38 +137,14 @@ class _AskScreenState extends State<AskScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) => _onTab());
   }
 
-  bool get _autoFocusField =>
-      !kIsWeb &&
-      (defaultTargetPlatform == TargetPlatform.windows ||
-          defaultTargetPlatform == TargetPlatform.macOS);
-
+  // The entrance on Ask's first opening. Selecting the field, and the
+  // line round it, are the bar's own (see GlassTextBar).
   void _onTab() {
-    if (!mounted) return;
-    if (MovieTabService().currentTab.value != BottomNavTab.ai) {
-      if (_autoFocusField) _focus.unfocus();
-      return;
-    }
-    if (_autoFocusField) _focus.requestFocus();
-    final first = !_presented;
-    if (first) setState(() => _presented = true);
-    // The trace round the field, once it's in place: after its entrance
-    // the first time.
-    _traceTimer?.cancel();
-    _traceTimer = Timer(Duration(milliseconds: first ? 650 : 150), () {
-      if (!mounted) return;
-      _traceStart = _random.nextDouble();
-      _trace.forward(from: 0);
-    });
+    if (!mounted || _presented) return;
+    if (MovieTabService().currentTab.value != BottomNavTab.ai) return;
+    if (AppModeService().currentMode.value != widget.mode) return;
+    setState(() => _presented = true);
   }
-
-  // Each time Ask's opened: a line of the app's colours runs once round
-  // the field, from somewhere new each time (see _TracePainter).
-  late final _trace = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 2400),
-  );
-  double _traceStart = 0;
-  Timer? _traceTimer;
 
   // How far down the screen the content starts, under the title.
   // Where the conversation starts: below the app bar, or near the top in
@@ -329,8 +304,6 @@ class _AskScreenState extends State<AskScreen>
   @override
   void dispose() {
     _awayFromEnd.dispose();
-    _traceTimer?.cancel();
-    _trace.dispose();
     MovieTabService().currentTab.removeListener(_onTab);
     _unlock?.cancel();
     _controller.dispose();
@@ -445,20 +418,12 @@ class _AskScreenState extends State<AskScreen>
   final _fieldKey = GlobalKey();
   double _fieldHeight = 48;
 
-  // The box's height at one line — its least — which New chat matches.
-  final _boxKey = GlobalKey();
-  double? _lineHeight;
-
   void _measureField() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final height = _fieldKey.currentContext?.size?.height;
       if (height != null && (height - _fieldHeight).abs() > 0.5) {
         setState(() => _fieldHeight = height);
-      }
-      final box = _boxKey.currentContext?.size?.height;
-      if (box != null && box < (_lineHeight ?? double.infinity) - 0.5) {
-        setState(() => _lineHeight = box);
       }
     });
   }
@@ -833,200 +798,33 @@ class _AskScreenState extends State<AskScreen>
     );
   }
 
-  // New chat and the field, one piece of frosted glass: a circle as tall
-  // as the field at one line, joined to it by a thin neck, as the details
-  // page's back button is to its title. The posters blur softly through
-  // it as they scroll under. Grouped with the nav bar's glass, which it
-  // never overlaps.
-  Widget _field() {
-    final d = math.max(52.0, _lineHeight ?? 52.0);
-    final gap = d * 0.15;
-    final shape = _JoinedShape(diameter: d, gap: gap);
-    final enabled = _turns.isNotEmpty;
-    // On a TV the remote first selects it all as one; OK goes in, to the
-    // field with its keyboard open, and the arrows then move between
-    // new chat, the field and send (see TvGroup).
-    return TvGroup(
-      borderRadius: d / 2,
-      enterOn: () => GeminiKeyService().key.value != null ? _focus : null,
-      child: _fieldStack(d, gap, shape, enabled),
-    );
-  }
-
-  Widget _fieldStack(double d, double gap, _JoinedShape shape, bool enabled) {
-    return Stack(
-      // The trace's glow spills a little past the glass.
-      clipBehavior: Clip.none,
-      children: [
-        Positioned.fill(
-          child: ClipPath(
-            clipper: shape,
-            child: GlassBlur(
-              grouped: true,
-              // Near solid without the blur (slower phones, battery
-              // saver): the posters showed through sharp under the text.
-              reducedTint: const Color(0xFF141416),
-              child: CustomPaint(
-                painter: _EdgePainter(shape),
-                child: const ColoredBox(color: kGlassTint),
-              ),
-            ),
-          ),
-        ),
-        Row(
-          // Level with the field's bottom line as it grows.
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            // Faded and untappable while the chat's already new.
-            Tooltip(
-              message: 'New chat',
-              child: Material(
-                type: MaterialType.transparency,
-                child: InkWell(
-                  mouseCursor: WidgetStateMouseCursor.clickable,
-                  customBorder: const CircleBorder(),
-                  onTap: enabled ? _newChat : null,
-                  child: SizedBox.square(
-                    dimension: d,
-                    child: AnimatedOpacity(
-                      opacity: enabled ? 1 : 0.3,
-                      duration: const Duration(milliseconds: 250),
-                      child: const Icon(
-                        Icons.add_rounded,
-                        color: Colors.white,
-                        size: 26,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(width: gap),
-            Expanded(
-              child: Padding(
-                key: _boxKey,
-                padding: const EdgeInsets.fromLTRB(18, 7, 7, 7),
-                child: _fieldRow(),
-              ),
-            ),
-          ],
-        ),
-        // Over it all, on the glass's edge.
-        Positioned.fill(
-          child: IgnorePointer(
-            child: RepaintBoundary(
-              child: CustomPaint(
-                foregroundPainter:
-                    _TracePainter(_trace, () => _traceStart, shape),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // Tapping the cursor shows Cut, Copy and Paste, as in the phone's own
-  // apps — Flutter does on Android only for a long press or a tap on the
-  // handle under it: a tap on the field, already focused, that leaves
-  // the cursor where it was.
-  final _textKey = GlobalKey();
-  TextSelection? _selectionAtTap;
-
-  void _onFieldTap() {
-    final before = _selectionAtTap;
-    _selectionAtTap = null;
-    if (before == null ||
-        !before.isCollapsed ||
-        _controller.selection != before) {
-      return;
-    }
-    _editableText()?.showToolbar();
-  }
-
-  // The field's EditableText, which TextField doesn't hand out.
-  EditableTextState? _editableText() {
-    EditableTextState? found;
-    void visit(Element element) {
-      if (found != null) return;
-      if (element is StatefulElement && element.state is EditableTextState) {
-        found = element.state as EditableTextState;
-        return;
-      }
-      element.visitChildren(visit);
-    }
-
-    (_textKey.currentContext as Element?)?.visitChildren(visit);
-    return found;
-  }
-
-  Widget _fieldRow() => ValueListenableBuilder<String?>(
+  // New chat and the field, one piece of frosted glass (see GlassTextBar,
+  // Search's too): the field closed to typing with no Gemini key yet, and
+  // "Add key" in send's place.
+  Widget _field() => ValueListenableBuilder<String?>(
         valueListenable: GeminiKeyService().key,
-        builder: (context, key, _) => _fieldRowFor(hasKey: key != null),
-      );
-
-  /// The field and its button: send — or, with no Gemini key yet, the
-  /// field closed to typing and "Add key" in send's place.
-  Widget _fieldRowFor({required bool hasKey}) {
-    return Row(
-      // Send stays at the bottom as the text grows.
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Expanded(
-          // On a TV: the remote selects the field's bar and opens the
-          // keyboard from it, never stuck in the field (see TvTextField).
-          child: TvTextField(
-            field: _focus,
+        builder: (context, key, _) {
+          final hasKey = key != null;
+          return GlassTextBar(
+            controller: _controller,
+            focusNode: _focus,
             barFocus: _fieldBar,
             enabled: hasKey,
-            borderRadius: 19,
-            // The field scrolls its own lines: not the page scrolling, for
-            // the title's island (see ScreenScaffold).
-            child: NotificationListener<ScrollNotification>(
-              onNotification: (_) => true,
-              child: Listener(
-                onPointerDown: (_) => _selectionAtTap =
-                    _focus.hasFocus ? _controller.selection : null,
-                child: TextField(
-                  key: _textKey,
-                  enabled: hasKey,
-                  onTap: _onFieldTap,
-                  controller: _controller,
-                  focusNode: _focus,
-                  minLines: 1,
-                  maxLines: 4,
-                  maxLength: 300,
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => _ask(),
-                  style: const TextStyle(color: Colors.white, fontSize: 16),
-                  decoration: InputDecoration(
-                    // One line, however narrow the phone: the bar stays its
-                    // usual height beside "Add key" (three lines made it
-                    // tall and lumpy).
-                    hintText: hasKey ? "What's up?" : 'Add a key to ask',
-                    hintMaxLines: 1,
-                    hintStyle: const TextStyle(color: Colors.white38),
-                    border: InputBorder.none,
-                    counterText: '',
-                    isDense: true,
-                    // The text sat low in this field (measured on a phone:
-                    // 2.8 below the middle): 3 up, it's centred. 3 less in
-                    // all, the bar is Search's height at one line (52; it
-                    // was 55).
-                    contentPadding:
-                        const EdgeInsets.only(top: 4.5, bottom: 10.5),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-        // Centred in a box one line tall: in the middle of the field at
-        // one line, by its last line as it grows.
-        SizedBox(
-          height: math.max(38, (_lineHeight ?? 0) - 14),
-          child: Center(
-            child: !hasKey
+            hintText: hasKey ? "What's up?" : 'Add a key to ask',
+            maxLines: 4,
+            maxLength: 300,
+            textInputAction: TextInputAction.send,
+            onSubmitted: (_) => _ask(),
+            // Faded and untappable while the chat's already new.
+            leadingIcon: Icons.add_rounded,
+            leadingTooltip: 'New chat',
+            onLeadingPressed: _turns.isNotEmpty ? _newChat : null,
+            traceColors: _traceColors,
+            tab: BottomNavTab.ai,
+            mode: widget.mode,
+            // After its entrance (the first opening).
+            traceDelay: const Duration(milliseconds: 650),
+            trailing: !hasKey
                 ? TextButton.icon(
                     onPressed: () =>
                         showGeminiKeyDialog(context, title: 'Popcorn Ask'),
@@ -1065,11 +863,17 @@ class _AskScreenState extends State<AskScreen>
                       ),
                     ),
                   ),
-          ),
-        ),
-      ],
-    );
-  }
+          );
+        },
+      );
+
+  // The line run round the field on Ask's first opening: the app icon's
+  // pastels (see AppIridescence), head to tail cream, pink, tan.
+  static const _traceColors = [
+    Color(0xFFFBEFB8),
+    Color(0xFFF8B4CB),
+    Color(0xFFF4CDA6),
+  ];
 
   /// [upsideDown]: on a TV, the other way up — the examples first and
   /// the title last, at the foot of the screen (see _content).
@@ -1219,120 +1023,6 @@ class _Appear extends StatelessWidget {
   }
 }
 
-/// A line of the app icon's pastels running once round [shape]'s outline,
-/// from [start] (a share of the way round), as [progress] goes 0 to 1:
-/// its tail growing out behind its head, then fading as it finishes the
-/// lap. Drawn in short pieces, each its own colour and strength, with a
-/// soft glow under them; nothing at all outside the run.
-class _TracePainter extends CustomPainter {
-  final Animation<double> progress;
-  final double Function() start;
-  final _JoinedShape shape;
-
-  _TracePainter(this.progress, this.start, this.shape)
-      : super(repaint: progress);
-
-  Size? _size;
-  List<ui.PathMetric> _metrics = const [];
-  double _total = 0;
-
-  // Head to tail (see AppIridescence): cream, pink, tan.
-  static const _colors = [
-    Color(0xFFFBEFB8),
-    Color(0xFFF8B4CB),
-    Color(0xFFF4CDA6),
-  ];
-  // How much of the way round the line reaches, head to tail.
-  static const _length = 0.35;
-  // Short enough that its colour and strength change smoothly along it.
-  static const _pieces = 60;
-  static const _glowEvery = 10;
-
-  static Color _colorAt(double k) {
-    final x = k * (_colors.length - 1);
-    final i = x.floor().clamp(0, _colors.length - 2);
-    return Color.lerp(_colors[i], _colors[i + 1], x - i)!;
-  }
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final t = progress.value;
-    if (t <= 0 || t >= 1) return;
-    // The outline worked out once for the run, not every frame of it.
-    if (size != _size) {
-      _size = size;
-      _metrics = shape.getClip(size).computeMetrics().toList();
-      _total = _metrics.fold(0.0, (sum, m) => sum + m.length);
-    }
-    final metrics = _metrics, total = _total;
-    if (total <= 0) return;
-
-    // Once round, gently easing in and out. The tail grows out behind the
-    // head, and at the end catches it up — the line drawing itself into
-    // its tip as it fades, rather than stopping and fading where it was.
-    final head = start() + Curves.easeInOutSine.transform(t);
-    final grow = Curves.easeOut.transform(math.min(1.0, t / 0.25));
-    final shrink =
-        t < 0.6 ? 1.0 : 1 - Curves.easeInOutCubic.transform((t - 0.6) / 0.4);
-    final fade = t < 0.7 ? 1.0 : 1 - Curves.easeIn.transform((t - 0.7) / 0.3);
-    final length = _length * grow * shrink;
-    if (length <= 0) return;
-
-    // Square ends, the pieces meeting edge to edge: round ends overlapped,
-    // and the overlaps showed as brighter dots along the line.
-    final glow = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 5
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
-    final line = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.6;
-    // The glow in a few longer stretches: blurred, their joins don't show.
-    for (var i = 0; i < _pieces; i += _glowEvery) {
-      final k = (i + _glowEvery / 2) / _pieces;
-      canvas.drawPath(
-        _piece(metrics, total, head - length * (i + _glowEvery) / _pieces,
-            head - length * i / _pieces),
-        glow..color = _colorAt(k).withValues(alpha: 0.4 * (1 - k) * fade),
-      );
-    }
-    for (var i = 0; i < _pieces; i++) {
-      final k = i / _pieces; // 0 at the head
-      canvas.drawPath(
-        _piece(metrics, total, head - length * (i + 1) / _pieces,
-            head - length * i / _pieces),
-        line..color = _colorAt(k).withValues(alpha: (1 - k) * fade),
-      );
-    }
-  }
-
-  // The outline from [from] to [to], shares of the way round (any number
-  // of laps on), across its contours.
-  static Path _piece(
-      List<ui.PathMetric> metrics, double total, double from, double to) {
-    final path = Path();
-    final a = (from % 1) * total;
-    final b = a + (to - from) * total;
-    // Round past the end: on from the start again.
-    for (final (s, e)
-        in b <= total ? [(a, b)] : [(a, total), (0.0, b - total)]) {
-      var offset = 0.0;
-      for (final m in metrics) {
-        final lo = math.max(s, offset), hi = math.min(e, offset + m.length);
-        if (hi > lo) {
-          path.addPath(m.extractPath(lo - offset, hi - offset), Offset.zero);
-        }
-        offset += m.length;
-      }
-    }
-    return path;
-  }
-
-  @override
-  bool shouldRepaint(_TracePainter old) =>
-      old.progress != progress || old.shape.shouldReclip(shape);
-}
-
 /// The disclaimer's badge: a pill of the app icon's colours (see
 /// AppIridescence), faint enough for its silver text, with a brighter edge.
 class _BadgePainter extends CustomPainter {
@@ -1356,83 +1046,6 @@ class _BadgePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_BadgePainter old) => false;
-}
-
-/// New chat's circle, [diameter] across at the bottom left, and the
-/// field's rounded box [gap] to its right, joined by a thin, concave neck
-/// level with the circle's middle — GlassBubbleBar's shape, the box
-/// growing upwards as the field does.
-class _JoinedShape extends CustomClipper<Path> {
-  final double diameter;
-  final double gap;
-
-  const _JoinedShape({required this.diameter, required this.gap});
-
-  // As GlassBubbleBar's: the neck's half-thickness at its narrowest, for
-  // the circle's radius, and where it meets each side, from level.
-  static const _neck = 0.225;
-  static const _attach = 38 * math.pi / 180;
-
-  @override
-  Path getClip(Size size) {
-    final r = diameter / 2;
-    final cy = size.height - r;
-    final circle = Path()
-      ..addOval(Rect.fromCircle(center: Offset(r, cy), radius: r));
-    final left = diameter + gap;
-    final box = Path()
-      ..addRRect(RRect.fromLTRBR(
-          left, 0, size.width, size.height, Radius.circular(r)));
-
-    final sinA = math.sin(_attach), cosA = math.cos(_attach);
-    final p1 = Offset(r + r * cosA, cy - r * sinA); // circle, upper
-    final p2 = Offset(r + r * cosA, cy + r * sinA); // circle, lower
-    final q1 = Offset(left + r - r * cosA, cy - r * sinA); // box, upper
-    final q2 = Offset(left + r - r * cosA, cy + r * sinA); // box, lower
-    final midX = (p1.dx + q1.dx) / 2;
-    final neck = r * _neck;
-    // Control points putting each curve's middle at cy ∓ neck.
-    final c1y = (4 * (cy - neck) - p1.dy - q1.dy) / 2;
-    final c2y = (4 * (cy + neck) - p2.dy - q2.dy) / 2;
-    final bridge = Path()
-      ..moveTo(p1.dx, p1.dy)
-      ..quadraticBezierTo(midX, c1y, q1.dx, q1.dy)
-      ..lineTo(q2.dx, q2.dy)
-      ..quadraticBezierTo(midX, c2y, p2.dx, p2.dy)
-      ..close();
-
-    return Path.combine(
-      PathOperation.union,
-      Path.combine(PathOperation.union, circle, box),
-      bridge,
-    );
-  }
-
-  @override
-  bool shouldReclip(_JoinedShape old) =>
-      old.diameter != diameter || old.gap != gap;
-}
-
-/// The glass's faint edge, round [shape]: drawn 2px wide on its outline,
-/// of which the inner 1px shows inside the clip.
-class _EdgePainter extends CustomPainter {
-  final _JoinedShape shape;
-
-  const _EdgePainter(this.shape);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.drawPath(
-      shape.getClip(size),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..color = kGlassEdge,
-    );
-  }
-
-  @override
-  bool shouldRepaint(_EdgePainter old) => shape.shouldReclip(old.shape);
 }
 
 // The app's colours, as on Ask's button (see FloatingBottomNavBar):

@@ -234,6 +234,15 @@ const kGlassSheetTint = Color(0xB81C1C1E); // #1C1C1E, 72%
 Color glassTint(BuildContext context) =>
     PlainGlassScope.of(context) ? Colors.black : kGlassTint;
 
+/// The text bar's glass (Ask's and Search's, see GlassTextBar): [kGlassTint]
+/// over [kGlassFieldBase] — dark grey rather than black where the glass is
+/// plain, so the field still reads as a field there (the owner's choice
+/// for Ask's input, kept now Search's bar is the same one).
+Color glassFieldTint(BuildContext context) => kGlassTint;
+
+/// What [glassFieldTint] lies on where the text bar isn't blurring.
+const kGlassFieldBase = Color(0xFF141416);
+
 /// [kGlassSheetTint], or solid black where the glass is plain.
 Color glassSheetTint(BuildContext context) =>
     PlainGlassScope.of(context) ? Colors.black : kGlassSheetTint;

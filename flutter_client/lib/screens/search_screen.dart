@@ -244,6 +244,13 @@ class _SearchScreenState extends State<SearchScreen> {
                 _fieldHeight +
                 (recents ? _recentsHeight + 10 : 0) +
                 24;
+            // The same with the keyboard down (see _centred).
+            _closedContentBottom = (barAtFoot
+                    ? padding.bottom - 34
+                    : padding.bottom + 16) +
+                _fieldHeight +
+                (recents ? _recentsHeight + 10 : 0) +
+                24;
             // Each layer keyed: unkeyed, the pills going (the first letter's
             // search starting) left the field's layer matched to theirs, and
             // the field was built anew — the phone's keyboard closed, and a
@@ -298,18 +305,20 @@ class _SearchScreenState extends State<SearchScreen> {
         textInputAction: TextInputAction.search,
         onChanged: _onSearchChanged,
         onSubmitted: _searchNow,
+        // Always there, as Ask's New chat: dimmed with nothing to clear.
         leadingIcon: Icons.close_rounded,
         leadingTooltip: 'Clear',
-        showLeading: value.text.isNotEmpty,
-        onLeadingPressed: () {
-          _controller.clear();
-          _onSearchChanged('');
-          // Back to typing: the ✕ is gone. On a TV, to the bar, its
-          // keyboard closed.
-          TvDevice.isTv
-              ? _barFocus.requestFocus()
-              : _searchFocusNode.requestFocus();
-        },
+        onLeadingPressed: value.text.isEmpty
+            ? null
+            : () {
+                _controller.clear();
+                _onSearchChanged('');
+                // Back to typing. On a TV, to the bar, its keyboard
+                // closed.
+                TvDevice.isTv
+                    ? _barFocus.requestFocus()
+                    : _searchFocusNode.requestFocus();
+              },
         // The line round it on Search's first opening: Search's purples
         // (its glow's, TabGlow.search), the lightest at the head.
         traceColors: [
@@ -547,12 +556,29 @@ class _SearchScreenState extends State<SearchScreen> {
 
   /// [child] in the middle of the space between the title and the search
   /// bar (and its recent searches).
+  /// [child] in the middle of the space — as it is with the keyboard
+  /// down: the keyboard coming up (the field moving onto it, the space
+  /// shrinking) doesn't move it.
   Widget _centred(BuildContext context, EdgeInsets padding, Widget child) =>
-      Padding(
-        padding: EdgeInsets.fromLTRB(
-            24, _topPadding(context), 24, padding.bottom),
-        child: child,
-      );
+      LayoutBuilder(builder: (context, constraints) {
+        // The page is shortened by the keyboard: its height without it.
+        final height =
+            constraints.maxHeight + MediaQuery.viewInsetsOf(context).bottom;
+        return OverflowBox(
+          alignment: Alignment.topCenter,
+          minHeight: height,
+          maxHeight: height,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(24, _topPadding(context), 24,
+                _closedContentBottom ?? padding.bottom),
+            child: child,
+          ),
+        );
+      });
+
+  // What's kept clear at the foot for the field (and the pills) with the
+  // keyboard down, for [_centred].
+  double? _closedContentBottom;
 
   static const double _recentsHeight = 36;
 

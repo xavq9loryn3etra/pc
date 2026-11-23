@@ -127,13 +127,14 @@ void main() {
     expect(tracing(tester), isFalse);
   });
 
-  testWidgets("Search's ✕ shows only with text, and clears it",
+  testWidgets("Search's ✕ is always there, as Ask's New chat, and clears",
       (tester) async {
     SharedPreferences.setMockInitialValues({});
     await SearchHistoryService().load(force: true);
     await tester.pumpWidget(const MaterialApp(home: SearchScreen()));
     await tester.pump();
-    expect(find.byTooltip('Clear'), findsNothing);
+    // There with nothing to clear too (dimmed: pressing it does nothing).
+    expect(find.byTooltip('Clear'), findsOneWidget);
 
     final field = find.byType(EditableText);
     await tester.enterText(field, 'dune');
@@ -145,7 +146,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(tester.widget<EditableText>(field).controller.text, isEmpty);
-    expect(find.byTooltip('Clear'), findsNothing);
+    expect(find.byTooltip('Clear'), findsOneWidget);
     // Nothing searched: the pause before searching was cut short.
     await tester.pumpAndSettle(const Duration(seconds: 1));
     expect(find.text('Find something to watch'), findsOneWidget);

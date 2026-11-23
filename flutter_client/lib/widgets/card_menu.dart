@@ -207,7 +207,12 @@ class _CardMenuLayer extends StatelessWidget {
               },
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(previewRadius),
-                child: preview,
+                // Its text in the app's style: outside the page's Material,
+                // Flutter's yellow underline showed under "S1 · E1".
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: preview,
+                ),
               ),
             ),
           ),

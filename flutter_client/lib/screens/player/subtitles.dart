@@ -324,6 +324,9 @@ extension _PlayerSubtitles on _PlayerScreenState {
     _kindCache.clear();
     _conflictCache.clear();
     _cuesFailed.clear();
+    _resyncing = null;
+    _resyncKept = null;
+    _distrusted.clear();
   }
 
   /// Before opening another copy of the same video (a quality switch, a
@@ -583,7 +586,9 @@ extension _PlayerSubtitles on _PlayerScreenState {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted || _streamUrl != url) return;
     for (final s in _externalSubtitles) {
-      if (_autoSynced.contains(s.id) || _referenceTimed.contains(s.id)) {
+      if (_autoSynced.contains(s.id) ||
+          _referenceTimed.contains(s.id) ||
+          _distrusted.contains(s.id)) {
         continue;
       }
       final parts = prefs.getString(_timingKey(s))?.split('|');
@@ -729,10 +734,11 @@ extension _PlayerSubtitles on _PlayerScreenState {
   /// blocks while they're checked.
   bool _isTimed(SubtitleTrackData s) {
     final source = s.translatedFrom ?? s;
-    return source.isEmbedded ||
-        _referenceTimed.contains(source.id) ||
-        (source.matchesFile && !_subtitleSourceConflicts(source)) ||
-        _autoSynced.contains(s.id);
+    if (source.isEmbedded || _autoSynced.contains(s.id)) return true;
+    // Doubted by the viewer (see _resyncSubtitles): only listening says.
+    if (_distrusted.contains(source.id)) return false;
+    return _referenceTimed.contains(source.id) ||
+        (source.matchesFile && !_subtitleSourceConflicts(source));
   }
 
   /// Whether [s] follows the title's English dub: English captions, or
@@ -1034,24 +1040,86 @@ extension _PlayerSubtitles on _PlayerScreenState {
     return cues.isNotEmpty && last <= length * 1.08 + 60 && last >= length * 0.5;
   }
 
-  /// [track]'s lines (when each is on screen), downloaded and read once —
-  /// a download under way is shared.
+  /// Where [track]'s lines are kept (see _cuesOf): its retimed copy's,
+  /// once retimed (see _retimeFromReferences), as that's what's shown.
+  String _cueKey(SubtitleTrackData track) =>
+      _retimedPaths[(track.translatedFrom ?? track).id] ?? track.url;
+
+  /// [track]'s lines (when each is on screen) as shown — retimed, if it is
+  /// — downloaded and read once; a download under way is shared.
   Future<List<SubtitleCue>> _cuesOf(SubtitleTrackData track) {
-    final done = _subtitleCues[track.url];
+    final key = _cueKey(track);
+    final done = _subtitleCues[key];
     if (done != null) return Future.value(done);
-    return _cuesLoading[track.url] ??= () async {
+    return _cuesLoading[key] ??= () async {
       try {
-        final cues = SubtitleSync.parseCues(await _subtitleText(track));
-        _subtitleCues[track.url] = cues;
+        final text = track.translatedFrom != null
+            ? await _subtitleText(track)
+            : await _englishFor(track);
+        final cues = SubtitleSync.parseCues(text);
+        _subtitleCues[key] = cues;
         _cuesFailed.remove(track.url);
         return cues;
       } catch (_) {
         _cuesFailed.add(track.url);
         rethrow;
       } finally {
-        _cuesLoading.remove(track.url);
+        _cuesLoading.remove(key);
       }
     }();
+  }
+
+  /// The viewer pressed the subtitles' sync button: they look out of time.
+  /// What was decided about them is forgotten — made for the file or
+  /// retimed, they're doubted too — and they, with the language's other
+  /// copies, are tested afresh against the sound heard so far: often an
+  /// answer in a moment (a better copy switched to, or theirs moved);
+  /// otherwise listening goes on as at the start. They stay on screen
+  /// meanwhile.
+  Future<void> _resyncSubtitles() async {
+    final track = _selectedSubtitle;
+    if (track == null || track.isEmbedded || _resyncing != null) return;
+    final source = track.translatedFrom ?? track;
+    print('[sync] the viewer asked to sync ${track.lang} (${track.id}) again');
+    final kept = _isTimed(track)
+        ? (delay: _subtitleDelaySeconds, speed: _subtitleSpeed)
+        : null;
+    _updateState(() {
+      _resyncing = track.id;
+      _resyncKept = kept;
+      _distrusted
+        ..add(source.id)
+        ..add(track.id);
+      _autoSynced.remove(track.id);
+      _autoSyncTries.remove(track.id);
+      // Every copy heard afresh, against every stretch kept.
+      _autoSyncSeen.clear();
+      _testedOn.clear();
+      _noFitLanguage = null;
+      _nextListenAt = Duration.zero;
+    });
+    await _testCopies();
+  }
+
+  /// A sync the viewer asked for found nothing clearer — in a fight, or
+  /// music, stretches can disagree — for subtitles that were in time
+  /// before: they stay as they were, rather than being taken away.
+  void _keepTimingAfterResync(SubtitleTrackData track) {
+    final kept = _resyncKept;
+    _resyncing = null;
+    _resyncKept = null;
+    if (kept == null) return;
+    final source = track.translatedFrom ?? track;
+    _distrusted
+      ..remove(source.id)
+      ..remove(track.id);
+    if (!_isTimed(track)) {
+      _autoSynced.add(track.id);
+      _subtitleTimings[track.id] = kept;
+    }
+    _autoSyncTries[track.id] =
+        (tries: 0, next: _currentPosition + _autoSyncRecheckEvery);
+    print('[sync] nothing clearer found; the timing it had is kept');
   }
 
   /// The copies tested against each listen while [selected] isn't timed:
@@ -1126,8 +1194,9 @@ extension _PlayerSubtitles on _PlayerScreenState {
       return;
     }
     final source = track.translatedFrom ?? track;
-    if (_referenceTimed.contains(source.id) ||
-        (source.matchesFile && !_subtitleSourceConflicts(source))) {
+    if (!_distrusted.contains(source.id) &&
+        (_referenceTimed.contains(source.id) ||
+            (source.matchesFile && !_subtitleSourceConflicts(source)))) {
       return;
     }
     // Not more than every couple of seconds: picking a stretch reads every
@@ -1154,7 +1223,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
     // Where the talking is, by this copy's lines — or, it not downloading,
     // another's (or none: then the first free stretch), so the language's
     // other copies are still tested.
-    final own = _subtitleCues[track.url];
+    final own = _subtitleCues[_cueKey(track)];
     if (own == null && !_cuesFailed.contains(track.url)) {
       unawaited(_cuesOf(track).then((_) {}, onError: (Object e) {
         print('[sync] subtitles not downloaded: $e');
@@ -1163,7 +1232,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
     }
     final cues = own ??
         _copiesToTest(track)
-            .map((c) => _subtitleCues[c.url])
+            .map((c) => _subtitleCues[_cueKey(c)])
             .nonNulls
             .firstOrNull ??
         const <SubtitleCue>[];
@@ -1325,7 +1394,11 @@ extension _PlayerSubtitles on _PlayerScreenState {
     _subtitleTimings[track.id] = timing;
     _autoSyncTries[track.id] =
         (tries: 0, next: _currentPosition + _autoSyncRecheckEvery);
-    unawaited(_rememberTiming(track, timing: timing));
+    // (Not for one shown retimed: the timing's on top of its retimed copy,
+    // which next time may not be.)
+    if (!_retimedPaths.containsKey((track.translatedFrom ?? track).id)) {
+      unawaited(_rememberTiming(track, timing: timing));
+    }
     if (_selectedSubtitle?.id == track.id) {
       _updateState(() {
         _subtitleDelaySeconds = timing.delay;
@@ -1436,6 +1509,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
     final shown = _selectedSubtitle;
     if (shown != null &&
         !_isTimed(shown) &&
+        _resyncing != shown.id &&
         _getLanguageName(shown.lang) == language &&
         _noFitLanguage != language) {
       // Every copy of the language tested against enough separate
@@ -1454,6 +1528,31 @@ extension _PlayerSubtitles on _PlayerScreenState {
             'listening on');
         _noFitLanguage = language;
       }
+    }
+    // A sync the viewer asked for: done once the subtitles shown are timed
+    // (theirs, or another copy switched to) — or, every copy heard enough
+    // and none fitting, the panel says so.
+    final asked = _resyncing;
+    if (asked != null && shown != null && shown.id == asked && !_isTimed(shown)) {
+      final own = [
+        for (final c in _copiesToTest(shown))
+          if (_getLanguageName(c.lang) == language) c,
+      ];
+      if (own.isEmpty ||
+          own.every((c) =>
+              _testedOn.where((k) => k.startsWith('${c.id}@')).length >=
+              _PlayerScreenState._noFitAfter)) {
+        if (_resyncKept != null) {
+          _keepTimingAfterResync(shown);
+        } else {
+          print('[sync] none of the $language subtitles fit so far');
+          _resyncing = null;
+          _noFitLanguage = language;
+        }
+      }
+    } else if (asked != null) {
+      _resyncing = null;
+      _resyncKept = null;
     }
     if (mounted) _updateState(() {});
   }
@@ -1656,7 +1755,9 @@ extension _PlayerSubtitles on _PlayerScreenState {
   _SubtitleTiming? get _subtitleTiming {
     final track = _selectedSubtitle;
     if (track == null) return null;
-    if (_isTimed(track)) return _SubtitleTiming.ready;
+    if (_isTimed(track) || _resyncing == track.id) {
+      return _SubtitleTiming.ready;
+    }
     return _noFitLanguage == _getLanguageName(track.lang)
         ? _SubtitleTiming.noFit
         : _SubtitleTiming.checking;
@@ -1677,9 +1778,9 @@ extension _PlayerSubtitles on _PlayerScreenState {
         : null;
   }
 
-  /// The subtitle panel's word on the timing, or null.
+  /// The subtitle panel's word on the timing, or null. (While it's being
+  /// checked, the subtitles' sync button turns instead.)
   String? get _subtitleSyncNote => switch (_subtitleTiming) {
-        _SubtitleTiming.checking => 'Checking the timing…',
         _SubtitleTiming.noFit =>
           'None of the ${_getLanguageName(_selectedSubtitle!.lang)} '
               'subtitles found match this video so far. Popcorn keeps '
@@ -1763,6 +1864,10 @@ extension _PlayerSubtitles on _PlayerScreenState {
         (timing?.speed ?? 1.0) != _subtitleSpeed;
     if (!mounted) return; // Closed while the saved timing was read.
     _updateState(() {
+      if (track?.id != _resyncing) {
+        _resyncing = null;
+        _resyncKept = null;
+      }
       _selectedSubtitle = track;
       _subtitleDelaySeconds = timing?.delay ?? 0.0;
       _subtitleSpeed = timing?.speed ?? 1.0;

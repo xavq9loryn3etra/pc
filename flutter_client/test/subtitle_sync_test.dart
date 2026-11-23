@@ -59,12 +59,22 @@ void main() {
     });
 
     test('two answers that are each "not sure" confirm when they agree', () {
-      // Street Fighter (tt27419420) on the S10: 11.44 s and 11.77 s.
-      const a = SubtitleSyncResult(delay: 11.44, speed: 1, score: .1, margin: .02);
-      const b = SubtitleSyncResult(delay: 11.77, speed: 1, score: .09, margin: .02);
+      // Street Fighter (tt27419420) on the S10: the copy that fits.
+      const a = SubtitleSyncResult(delay: -0.07, speed: 1, score: .207, margin: .073);
+      const b = SubtitleSyncResult(delay: 0.33, speed: 1, score: .202, margin: .063);
       final evidence = SubtitleTimingEvidence();
-      expect(evidence.confirms(a, 600, 720), isFalse);
-      expect(evidence.confirms(b, 900, 1020), isTrue);
+      expect(evidence.confirms(a, 3017, 3137), isFalse);
+      expect(evidence.confirms(b, 3137, 3257), isTrue);
+    });
+
+    test('a weak answer in a fight scene confirms nothing', () {
+      // Street Fighter on the S10: a copy that fits nowhere agreed with
+      // itself by chance (-10.95 s, then -10.56 s in a fight).
+      const a = SubtitleSyncResult(delay: -10.95, speed: 1, score: .182, margin: .033);
+      const b = SubtitleSyncResult(delay: -10.56, speed: 1, score: .141, margin: .019);
+      final evidence = SubtitleTimingEvidence();
+      expect(evidence.confirms(a, 3018, 3138), isFalse);
+      expect(evidence.confirms(b, 3348, 3468), isFalse);
     });
 
     test('answers that disagree never confirm', () {

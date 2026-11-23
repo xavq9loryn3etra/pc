@@ -384,6 +384,12 @@ extension _PlayerOverlays on _PlayerScreenState {
           isLoadingSubtitles: _isLoadingSubtitles,
           // A language, or off: which copy of it is the app's to pick
           // (the best timed one), and to swap if another fits better.
+          subtitleSyncing: _resyncing != null ||
+              _subtitleTiming == _SubtitleTiming.checking,
+          onResyncSubtitles:
+              _selectedSubtitle == null || _selectedSubtitle!.isEmbedded
+                  ? null
+                  : _resyncSubtitles,
           onSubtitleSelected: (track) {
             final copy = track == null
                 ? null

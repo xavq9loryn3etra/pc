@@ -35,6 +35,12 @@ class PlayerSettingsPanel extends StatefulWidget {
   final SubtitleTrackData? selectedSubtitle;
   final bool isLoadingSubtitles;
   final ValueChanged<SubtitleTrackData?> onSubtitleSelected;
+
+  /// The subtitles shown are being synced (their sync button turns), and
+  /// what pressing it does — check their timing again now — or null where
+  /// there's nothing to sync (built into the video).
+  final bool subtitleSyncing;
+  final VoidCallback? onResyncSubtitles;
   final String Function(String) getLanguageName;
 
   /// How far Sinhala made from English has got (0 to 1), and why it
@@ -103,6 +109,8 @@ class PlayerSettingsPanel extends StatefulWidget {
     required this.selectedSubtitle,
     required this.isLoadingSubtitles,
     required this.onSubtitleSelected,
+    this.subtitleSyncing = false,
+    this.onResyncSubtitles,
     required this.getLanguageName,
     this.sinhalaProgress,
     this.sinhalaProblem,
@@ -517,6 +525,7 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
     required String title,
     String? subtitle,
     Widget? trailing,
+    Widget? action,
     required VoidCallback onTap,
     bool enabled = true,
   }) {
@@ -564,6 +573,10 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
                 ],
               ),
             ),
+            if (action != null) ...[
+              const SizedBox(width: 8),
+              action,
+            ],
             if (trailing != null) ...[
               const SizedBox(width: 12),
               trailing,
@@ -620,6 +633,12 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
 
   Widget _subtitleRow(SubtitleTrackData track, String name) {
     final chosen = widget.selectedSubtitle?.id == track.id;
+    // The chosen subtitles' sync button: turning while they're synced, and
+    // pressed to sync them again, if they look out of time.
+    final resync = widget.onResyncSubtitles;
+    final Widget? sync = chosen && resync != null
+        ? _SubtitleSyncButton(syncing: widget.subtitleSyncing, onPressed: resync)
+        : null;
     // Sinhala made from English with the viewer's Gemini key: greyed out
     // until there's a key.
     if (track.translatedFrom != null) {
@@ -651,6 +670,7 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
       return _buildRow(
         title: name,
         subtitle: note,
+        action: sync,
         trailing: chosen ? _check : null,
         onTap: () => widget.onSubtitleSelected(track),
       );
@@ -662,6 +682,7 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
     return _buildRow(
       title: name,
       subtitle: note,
+      action: sync,
       trailing: chosen ? _check : null,
       onTap: () => widget.onSubtitleSelected(track),
     );
@@ -707,6 +728,72 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
           },
         ),
       ],
+    );
+  }
+}
+
+/// The chosen subtitles' sync button (see PlayerSettingsPanel's
+/// subtitleSyncing): its arrows turn while they're being synced.
+class _SubtitleSyncButton extends StatefulWidget {
+  final bool syncing;
+  final VoidCallback onPressed;
+
+  const _SubtitleSyncButton({required this.syncing, required this.onPressed});
+
+  @override
+  State<_SubtitleSyncButton> createState() => _SubtitleSyncButtonState();
+}
+
+class _SubtitleSyncButtonState extends State<_SubtitleSyncButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _turn = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _update();
+  }
+
+  @override
+  void didUpdateWidget(_SubtitleSyncButton old) {
+    super.didUpdateWidget(old);
+    _update();
+  }
+
+  void _update() {
+    if (widget.syncing) {
+      if (!_turn.isAnimating) _turn.repeat();
+    } else if (_turn.isAnimating) {
+      // Finishes the turn it's on, rather than stopping askew.
+      _turn.forward().then((_) {
+        if (mounted && !widget.syncing) _turn.value = 0;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _turn.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: widget.syncing ? 'Syncing subtitles' : 'Sync subtitles',
+      visualDensity: VisualDensity.compact,
+      onPressed: widget.syncing ? null : widget.onPressed,
+      icon: RotationTransition(
+        turns: _turn,
+        child: Icon(
+          Icons.sync_rounded,
+          size: 20,
+          color: widget.syncing ? Colors.white : Colors.white70,
+        ),
+      ),
     );
   }
 }

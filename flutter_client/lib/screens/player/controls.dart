@@ -85,7 +85,8 @@ extension _PlayerControls on _PlayerScreenState {
     // Where they'd got to, saved before stopping: stop() reports the
     // position as 0, which would otherwise be saved as the progress (the
     // position listener ignores it too, now _closing is set).
-    _saveProgress(force: true);
+    _finishedAtClose = !_switchingQuality && _finishedWatching;
+    _finalSave = _saveProgress(force: true);
     _progressFinal = true;
     // Whatever goes wrong below, the player still closes: the screen is
     // already black (_closing), so skipping the pop would leave it that way.

@@ -54,13 +54,15 @@ class SubtitleSyncResult {
 /// timing is confirmed when two separate stretches of the video agree on
 /// it (within 0.4 s, at the same speed) — sure or not on their own. Two
 /// stretches agreeing by chance is unlikely; one stretch alone can be
-/// confidently wrong (Ghosts S1E7's opening: 30 s out). Street Fighter's
-/// 11.44 s and 11.77 s, each "not sure", were right.
+/// confidently wrong (Ghosts S1E7's opening: 30 s out).
 class SubtitleTimingEvidence {
-  /// The least a stretch's answer needs to count at all: a real peak, not
-  /// noise (fights and music give near-zero scores and margins).
-  static const double minScore = 0.08;
-  static const double minMargin = 0.015;
+  /// The least a stretch's answer needs to count at all: a clear peak, not
+  /// noise. Street Fighter on the S10 (23 Nov 2026): the right copy's
+  /// answers had margins of 0.06–0.07; a copy that fits nowhere agreed with
+  /// itself by chance at 0.033 and 0.019 (a fight scene) and was switched
+  /// to — lower than 0.03 lets such chance agreements through.
+  static const double minScore = 0.12;
+  static const double minMargin = 0.03;
 
   /// How many answers are kept: the latest (more, and chance agreements
   /// between stray ones grow likelier).

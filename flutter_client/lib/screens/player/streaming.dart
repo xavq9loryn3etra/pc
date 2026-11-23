@@ -1112,6 +1112,16 @@ extension _PlayerStreaming on _PlayerScreenState {
   // it — otherwise the SharedPreferences write can lose the race against
   // _applyResolvedEpisode's addToHistory() call for the *new* episode,
   // which overwrites the same 'continue watching' entry.
+  /// Watched to the end: into the end credits (where Up Next shows: their
+  /// start when it's known, else 25 s from the end) — or 95% of the way,
+  /// as not every film's credits are known, and people stop when they
+  /// start. Not for anything under two minutes.
+  bool get _finishedWatching {
+    if (_duration <= const Duration(minutes: 2)) return false;
+    return _currentPosition >= _upNextStart() ||
+        _currentPosition.inMilliseconds >= _duration.inMilliseconds * 0.95;
+  }
+
   Future<void> _saveProgress({bool force = false}) async {
     // Mid-switch (quality, episode, stall recovery) the position and
     // duration can briefly belong to a different video than the one
@@ -1139,12 +1149,10 @@ extension _PlayerStreaming on _PlayerScreenState {
       }
       _lastSaveTime = now;
 
-      // Into the end credits (where Up Next shows: their start when it's
-      // known, else 25 s from the end), and it's watched: an anime's
-      // ending song and preview start at about 90%, short of the 95% that
-      // counts as watched, and an episode stopped there showed "2m left".
-      final atCredits = _duration > const Duration(minutes: 2) &&
-          _currentPosition >= _upNextStart();
+      // Watched (see _finishedWatching): an anime's ending song and preview
+      // start at about 90%, short of the 95% that counts as watched, and an
+      // episode stopped there showed "2m left".
+      final atCredits = _finishedWatching;
       final double progress = atCredits
           ? 1.0
           : _currentPosition.inSeconds / _duration.inSeconds;

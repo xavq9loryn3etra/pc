@@ -684,6 +684,23 @@ extension _PlayerEpisodes on _PlayerScreenState {
 
   Episode? get _nextEpisode => _nextUp?.episode;
 
+  /// Whether nothing comes after what's playing yet: a movie, or a series'
+  /// episode with no later one out (the last of its last season, or the
+  /// next not aired yet). Null when that isn't known — the next season not
+  /// looked up (yet, or it failed): a season's finale isn't taken for the
+  /// series' end.
+  bool? get _nothingNextOut {
+    if (widget.details.type != 'tv') return true;
+    if (_currentEpisode == null || _episodes.isEmpty) return null;
+    final i = _episodes.indexWhere((e) => e.episodeNumber == _currentEpisode);
+    if (i < 0) return null;
+    if (i < _episodes.length - 1) return _episodes[i + 1].isUnreleased;
+    final following = _followingSeason;
+    if (following == null) return true;
+    if (_nextSeasonNumber != following) return null;
+    return _nextSeasonEpisodes.isEmpty || _nextSeasonEpisodes.first.isUnreleased;
+  }
+
   /// On a season's last episode: the next season's episodes, for Next
   /// Episode. Once per season.
   Future<void> _loadNextSeason() async {

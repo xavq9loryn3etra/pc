@@ -336,6 +336,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   // Testing copies against the sound kept, at work; where watching may
   // listen again; the language none of whose copies fit, so far.
   bool _testingCopies = false;
+  // The viewer pressed sync (see _resyncSubtitles): the subtitles being
+  // checked again (shown meanwhile), and those whose timing they doubted —
+  // made for the file or retimed, they're listened to like the rest.
+  String? _resyncing;
+  final Set<String> _distrusted = {};
+  // The timing those subtitles had when sync was pressed, if they were
+  // timed: kept if checking again finds nothing clearer.
+  ({double delay, double speed})? _resyncKept;
   Duration _nextListenAt = Duration.zero;
   String? _noFitLanguage;
   // The stretches of this video watched here (downloaded, so listened to
@@ -501,6 +509,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   // The progress has had its last save (closing, or off to the web
   // player): nothing after may change it — stopping reports position 0.
   bool _progressFinal = false;
+  // Closing (see _close): that last save, and whether it was watched to the
+  // end (see _finishedWatching) — taken then, as a computer's stop() resets
+  // the position before dispose.
+  Future<void>? _finalSave;
+  bool? _finishedAtClose;
 
   /// Closes the settings popup, animated (PlayerSettingsPanel.
   /// closeRequests): bumped by its button pressed again, or Esc.
@@ -982,11 +995,26 @@ class _PlayerScreenState extends State<PlayerScreen>
     // (_progressFinal), and the position since is stop()'s 0.
     // History writes are batched to every 15 s, so flush right after: a
     // kill just after closing must not lose the position.
-    if (!_progressFinal) {
-      _saveProgress(force: true).whenComplete(SavedMoviesService().flush);
-    } else {
-      SavedMoviesService().flush();
-    }
+    // Watched to the end (see _finishedWatching), taken now (stop() resets
+    // the position) — and nothing after it out yet (a movie, or a series'
+    // latest episode): off Continue Watching once saved, as on Netflix,
+    // and its download goes (step 4). A watched episode with a next one
+    // out has already moved Continue Watching on to it (_saveProgress).
+    final finished = _finishedAtClose ??
+        (!_progressFinal && !_switchingQuality && _finishedWatching);
+    final allWatched = finished && _nothingNextOut == true;
+    final watchedHash = _currentStream.infoHash;
+    final saved = _finalSave ??
+        (_progressFinal ? Future<void>.value() : _saveProgress(force: true));
+    saved.whenComplete(() async {
+      if (allWatched) {
+        print('[history] ${widget.movie.title}: watched to the end, '
+            'off Continue Watching');
+        await SavedMoviesService()
+            .removeFromHistory(widget.movie.id, type: widget.movie.type);
+      }
+      await SavedMoviesService().flush();
+    });
 
     // Save final torrent download progress too — the periodic update in
     // _subscribeToTorrent is throttled to every 5s, so without this a
@@ -1048,21 +1076,37 @@ class _PlayerScreenState extends State<PlayerScreen>
         streamInfo != null && streamInfo.torrentId == torrentId
             ? streamInfo.fileIndex
             : -1;
+    // Watched to the end: none of this file kept (from its end on — just
+    // the heads and tails the engine keeps of every file), so a season
+    // pack's other episodes stay as they were.
     final keepFrom = streamInfo == null ||
             streamInfo.torrentId != torrentId ||
             _switchingQuality
         ? -1
-        : trimKeepFrom(
-            fileSize: streamInfo.fileSize,
-            position: _currentPosition,
-            duration: _duration,
-          );
+        : finished
+            ? streamInfo.fileSize
+            : trimKeepFrom(
+                fileSize: streamInfo.fileSize,
+                position: _currentPosition,
+                duration: _duration,
+              );
     player.stop().whenComplete(() => player.dispose()).whenComplete(() async {
       // A readied next episode not played: what it got ahead goes (one
       // that was played is now a download of its own, and stays).
       try {
         await _resolver.coolDown(headStart);
       } catch (_) {}
+      // All watched (a movie, or a series' latest episode): its download
+      // goes altogether.
+      if (allWatched && watchedHash.isNotEmpty) {
+        try {
+          await TorrentStorageService.deleteByInfoHash(watchedHash);
+          print('[storage] $watchedHash: watched to the end, deleted');
+          return;
+        } catch (e) {
+          print('[storage] deleting the watched download failed: $e');
+        }
+      }
       // Then the torrent is released and trimmed (or just paused, where
       // that isn't possible or the torrent is wanted elsewhere), and the
       // downloads are trimmed to their size limit, if this took them over.

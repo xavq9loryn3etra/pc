@@ -509,6 +509,8 @@ abstract final class SubtitleSync {
     String? audioTrack,
     Duration timeout = const Duration(minutes: 3),
     bool Function()? isCancelled,
+    bool gentle = false,
+    bool centreOnly = false,
   }) async {
     if (isCancelled?.call() ?? false) return null;
     final file = File('${Directory.systemTemp.path}${Platform.pathSeparator}'
@@ -517,6 +519,7 @@ abstract final class SubtitleSync {
     final cancelled = Completer<void>();
     var failed = false; // Nothing will read the file: delete it.
     Timer? cancelPoll;
+    Timer? duty;
     if (isCancelled != null) {
       cancelPoll = Timer.periodic(const Duration(milliseconds: 500), (t) {
         if (!isCancelled()) return;
@@ -536,7 +539,15 @@ abstract final class SubtitleSync {
         'audio-samplerate': '$sampleRate',
         'audio-channels': 'mono',
         'audio-format': 's16',
+        // Surround sound: the centre channel alone, where films put the
+        // dialogue — a mix of every channel buries it under the fights and
+        // music in the others.
+        if (centreOnly) 'af': 'lavfi=[pan=mono|c0=FC]',
         'untimed': 'yes',
+        // [gentle] (TVs, slow phones): the sound decoded on one core (and
+        // paused half the time: see below), so the video being watched
+        // keeps the processor it needs.
+        if (gentle) 'ad-lavc-threads': '1',
         // To the torrent engine, a background read: it never takes over
         // from the video being watched — cutting it off, moving its
         // download elsewhere — and gets the sound only as that download
@@ -553,6 +564,16 @@ abstract final class SubtitleSync {
       Duration at(double seconds) =>
           Duration(milliseconds: (seconds * 1000).round());
       await player.open(Media(url, start: at(start), end: at(end)));
+      if (gentle) {
+        // Every quarter second, paused then going again: half the
+        // processor at most (a listen takes twice as long). Not sped up —
+        // mpv would stretch the sound itself.
+        var paused = false;
+        duty = Timer.periodic(const Duration(milliseconds: 250), (_) {
+          paused = !paused;
+          mpv.setProperty('pause', paused ? 'yes' : 'no').ignore();
+        });
+      }
       try {
         await Future.any([done.timeout(timeout), cancelled.future]);
       } on TimeoutException {
@@ -569,6 +590,7 @@ abstract final class SubtitleSync {
       return null;
     } finally {
       cancelPoll?.cancel();
+      duty?.cancel();
       // Closing it finishes the file.
       await player.dispose();
       if (failed) file.delete().ignore();
@@ -576,6 +598,12 @@ abstract final class SubtitleSync {
     try {
       final bytes = await file.readAsBytes();
       final samples = bytes.lengthInBytes ~/ 2;
+      // Little-endian samples, as the devices are: the bytes read as they
+      // are, not converted one by one — two million of those held up the
+      // screen's thread (and so the video) for a moment on a TV.
+      if (Endian.host == Endian.little && bytes.offsetInBytes.isEven) {
+        return Int16List.sublistView(bytes, 0, samples * 2);
+      }
       final pcm = Int16List(samples);
       final data = ByteData.sublistView(bytes);
       for (var i = 0; i < samples; i++) {

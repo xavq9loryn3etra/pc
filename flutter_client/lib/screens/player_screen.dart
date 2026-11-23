@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import '../widgets/app_message.dart';
 import '../widgets/player_route.dart';
 import 'package:flutter/services.dart';
@@ -31,6 +32,7 @@ import '../services/torrent/torrent_storage_service.dart';
 import '../services/torrent/trim_point.dart';
 import '../services/tmdb_service.dart';
 import '../services/tv_device.dart';
+import '../services/visual_effects_service.dart';
 import '../services/landscape_side.dart';
 import '../widgets/tv_focus.dart';
 import '../models/movie.dart';
@@ -336,6 +338,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   // Testing copies against the sound kept, at work; where watching may
   // listen again; the language none of whose copies fit, so far.
   bool _testingCopies = false;
+  // Whether the copy playing's sound has a centre channel (see
+  // _soundHasCentre).
+  ({String url, bool centre})? _centreKnown;
   // The viewer pressed sync (see _resyncSubtitles): the subtitles being
   // checked again (shown meanwhile), and those whose timing they doubted —
   // made for the file or retimed, they're listened to like the rest.

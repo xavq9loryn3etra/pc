@@ -1056,7 +1056,9 @@ extension _PlayerSubtitles on _PlayerScreenState {
         final text = track.translatedFrom != null
             ? await _subtitleText(track)
             : await _englishFor(track);
-        final cues = SubtitleSync.parseCues(text);
+        // Off the screen's thread: a dozen files read at once held it up
+        // (and the video with it) on a TV.
+        final cues = await Isolate.run(() => SubtitleSync.parseCues(text));
         _subtitleCues[key] = cues;
         _cuesFailed.remove(track.url);
         return cues;
@@ -1246,6 +1248,34 @@ extension _PlayerSubtitles on _PlayerScreenState {
     _autoSync(track, from: stretch.start, to: stretch.end);
   }
 
+  /// Whether the sound being heard has a centre channel (5.1, 7.1): where
+  /// films put the dialogue, listened to alone (see SubtitleSync.
+  /// decodeSound). Asked of the player once per copy.
+  Future<bool> _soundHasCentre() async {
+    final url = _streamUrl;
+    final known = _centreKnown;
+    if (known != null && known.url == url) return known.centre;
+    var centre = false;
+    try {
+      final raw =
+          await (player.platform as NativePlayer).getProperty('track-list');
+      final list = jsonDecode(raw);
+      if (list is List) {
+        for (final t in list) {
+          if (t is Map && t['type'] == 'audio' && t['selected'] == true) {
+            final n = t['demux-channel-count'];
+            final layout = '${t['demux-channels'] ?? ''}';
+            centre = (n is num && n >= 6) ||
+                layout.contains('5.1') ||
+                layout.contains('7.1');
+          }
+        }
+      }
+    } catch (_) {}
+    _centreKnown = (url: url, centre: centre);
+    return centre;
+  }
+
   /// Watching moved on to [pos]: the stretch being watched grows, or (a
   /// jump) a new one starts.
   void _noteWatched(Duration pos) {
@@ -1309,12 +1339,28 @@ extension _PlayerSubtitles on _PlayerScreenState {
     final checking = !_autoSynced.contains(track.id);
     _autoSyncing = true;
     _listened.add((start: from, end: to));
+    // The screen's frames meanwhile: how long the screen's thread (which
+    // also shows the video) was held up, logged — a TV's video stuttered
+    // while subtitles were synced.
+    var frames = 0, late = 0;
+    var worst = Duration.zero;
+    void onFrames(List<FrameTiming> timings) {
+      for (final t in timings) {
+        frames++;
+        final busy = t.buildDuration;
+        if (busy > const Duration(milliseconds: 16)) late++;
+        if (busy > worst) worst = busy;
+      }
+    }
+    SchedulerBinding.instance.addTimingsCallback(onFrames);
     final took = Stopwatch()..start();
-    print('[sync] listening: ${from.round()}–${to.round()} s of the video, '
+    print('[sync] listening: ${from.round()}–${to.round()} s of the video'
+        '${await _soundHasCentre() ? ' (centre channel)' : ''}, '
         'for ${track.lang} subtitles (${track.id})'
         '${checking ? '' : ', checking again'}');
     try {
       final audio = player.state.track.audio.id;
+      final centre = await _soundHasCentre();
       final pcm = await SubtitleSync.decodeSound(
         url,
         start: from,
@@ -1322,6 +1368,9 @@ extension _PlayerSubtitles on _PlayerScreenState {
         audioTrack: audio == 'auto' || audio == 'no' ? null : audio,
         // Stop as soon as the player closes or the video changes.
         isCancelled: () => !mounted || _streamUrl != url,
+        // Gently on a TV or a slow phone, where it made the video stutter.
+        gentle: TvDevice.isTv || VisualEffectsService().isSlowDevice,
+        centreOnly: centre,
       );
       if (!mounted || _streamUrl != url) return;
       if (pcm == null || pcm.length < 60 * SubtitleSync.sampleRate) {
@@ -1354,6 +1403,9 @@ extension _PlayerSubtitles on _PlayerScreenState {
       }
     }
     if (checking && mounted && _streamUrl == url) await _testCopies();
+    SchedulerBinding.instance.removeTimingsCallback(onFrames);
+    print('[frames] while listening: $frames frames, $late over 16 ms, '
+        'the longest ${worst.inMilliseconds} ms');
   }
 
   /// [track], timed already, against another stretch of the sound: moved

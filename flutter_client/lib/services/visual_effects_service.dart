@@ -59,6 +59,10 @@ class VisualEffectsService {
   /// Whether the blur is yet to be measured on this phone, this launch
   /// (see GlassProbe).
   bool get needsProbe => _needsProbe;
+
+  /// A TV, or a phone found too slow for the glass: heavy background work
+  /// (listening for subtitle timing) goes gently there.
+  bool get isSlowDevice => _tooSlow;
   bool _needsProbe = false;
 
   Future<void> init() async {

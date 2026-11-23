@@ -28,7 +28,11 @@ class DesktopHomeScreen extends StatefulWidget {
   /// A hero title's Trailer button (only titles with a trailer have one).
   final void Function(Movie movie) onTrailerHero;
   final Function(Movie) onMovieTap;
-  final Function(Movie)? onRemoveHistory;
+  /// Opens a Continue Watching card's menu (see showCardMenu): the title,
+  /// its poster's rect on screen, and what More Info in it does (as a tap
+  /// on the card).
+  final void Function(Movie movie, Rect posterRect, VoidCallback onInfo)?
+      onHistoryMenu;
 
   /// What a hero title's place in [trendingMovies] is of, for its "#3
   /// Trending This Week" line ("Trending This Week", Ramen's "Popular
@@ -50,7 +54,7 @@ class DesktopHomeScreen extends StatefulWidget {
     required this.topRatedMovies,
     required this.onTrailerHero,
     required this.onMovieTap,
-    this.onRemoveHistory,
+    this.onHistoryMenu,
     this.rankLabel = 'Trending This Week',
     this.newSeries = const [],
     this.films = const [],
@@ -174,7 +178,10 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
                             title: "Continue Watching",
                             movies: widget.historyMovies,
                             heroPrefix: "desktop_history",
-                            onLongPress: widget.onRemoveHistory,
+                            onMenu: widget.onHistoryMenu == null
+                                ? null
+                                : (movie, rect) => widget.onHistoryMenu!(
+                                    movie, rect, () => _onMovieSelect(movie)),
                             posterHeight: 300,
                             posterWidth: 200,
                             onTap: _onMovieSelect,
@@ -608,7 +615,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     required String title,
     required List<Movie> movies,
     required String heroPrefix,
-    Function(Movie)? onLongPress,
+    void Function(Movie movie, Rect posterRect)? onMenu,
     Function(Movie)? onTap,
     Function(Movie)? onPlay,
     double posterHeight = 220,
@@ -618,7 +625,7 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
       title: title,
       movies: movies,
       heroPrefix: heroPrefix,
-      onLongPress: onLongPress,
+      onMenu: onMenu,
       onPlay: onPlay,
       onTap: onTap != null ? onTap : (movie) => widget.onMovieTap(movie),
       posterHeight: posterHeight,
@@ -631,7 +638,7 @@ class _DesktopSectionList extends StatefulWidget {
   final String title;
   final List<Movie> movies;
   final String heroPrefix;
-  final Function(Movie)? onLongPress;
+  final void Function(Movie movie, Rect posterRect)? onMenu;
   final Function(Movie) onTap;
   final Function(Movie)? onPlay;
   final double posterHeight;
@@ -641,7 +648,7 @@ class _DesktopSectionList extends StatefulWidget {
     required this.title,
     required this.movies,
     required this.heroPrefix,
-    this.onLongPress,
+    this.onMenu,
     this.onPlay,
     required this.onTap,
     required this.posterHeight,
@@ -703,8 +710,8 @@ class _DesktopSectionListState extends State<_DesktopSectionList> {
                       showTitle: true,
                       heroTag: '${widget.heroPrefix}_${movie.id}',
                       onTap: () => widget.onTap(movie),
-                      onLongPress: widget.onLongPress != null
-                          ? () => widget.onLongPress!(movie)
+                      onMenu: widget.onMenu != null
+                          ? (rect) => widget.onMenu!(movie, rect)
                           : null,
                       onPlay: widget.onPlay != null
                           ? () => widget.onPlay!(movie)

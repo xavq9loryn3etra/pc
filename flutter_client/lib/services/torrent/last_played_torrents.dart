@@ -88,6 +88,36 @@ class LastPlayedTorrents {
     }
   }
 
+  /// What [forgetTitle] would forget for [ids], as stored: kept to put
+  /// back with [restoreTitle] (Undo, after a title is taken off Continue
+  /// Watching).
+  static Future<Map<String, String>> snapshotTitle(Iterable<String> ids) async {
+    final prefs = await SharedPreferences.getInstance();
+    final out = <String, String>{};
+    for (final key in prefs.getKeys()) {
+      final prefix = key.startsWith(_prefix)
+          ? _prefix
+          : (key.startsWith(_languagePrefix) ? _languagePrefix : null);
+      if (prefix == null) continue;
+      final rest = key.substring(prefix.length);
+      if (ids.any((id) => rest == id || rest.startsWith('${id}_'))) {
+        if (prefs.get(key) case final String value) out[key] = value;
+      }
+    }
+    return out;
+  }
+
+  /// Puts back what [snapshotTitle] kept, as changed just now, so sync
+  /// spreads it again.
+  static Future<void> restoreTitle(Map<String, String> saved) async {
+    if (saved.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    for (final e in saved.entries) {
+      await prefs.setString(e.key, e.value);
+    }
+    SyncLedger().touchAll('settings', saved.keys);
+  }
+
   /// Forgets every title and episode that last played torrent [infoHash] —
   /// its download was deleted, so there's nothing left to resume from it.
   static Future<void> forgetTorrent(String infoHash) async {

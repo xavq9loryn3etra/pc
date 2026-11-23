@@ -15,10 +15,10 @@ import '../widgets/empty_state.dart';
 import 'package:shimmer/shimmer.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
 import '../widgets/glass_blur.dart';
+import '../widgets/glass_text_bar.dart';
 import '../services/movie_tab_service.dart';
 import '../services/search_history_service.dart';
 import '../services/tv_device.dart';
-import '../widgets/tv_focus.dart';
 
 class SearchScreen extends StatefulWidget {
   /// Whose search: Popcorn's, or Ramen's (anime only).
@@ -37,8 +37,6 @@ class _SearchScreenState extends State<SearchScreen> {
   // On a TV, the search bar round the field: what the remote selects (see
   // TvTextField).
   final FocusNode _barFocus = FocusNode(debugLabel: 'Search bar');
-  // On a TV, the whole bar as one item (see _searchBar).
-  final FocusNode _groupFocus = FocusNode(debugLabel: 'Search bar group');
   final TMDBService _tmdb = TMDBService();
 
   List<Movie> _results = [];
@@ -58,11 +56,9 @@ class _SearchScreenState extends State<SearchScreen> {
   void initState() {
     super.initState();
     // SearchScreen stays mounted (offscreen) for the whole movies-mode
-    // session as one of MovieTabShell's tabs. On a computer the field's
-    // focused on arriving at the tab, ready to type into, as Ask's is; on
-    // a phone or tablet only when it's tapped (focusing it there opened the
-    // keyboard over the page). Unfocused when they switch away.
-    MovieTabService().currentTab.addListener(_onActiveTabChanged);
+    // session as one of MovieTabShell's tabs. The field's selected on
+    // arriving at the tab, keyboard up, and let go of on leaving it: the
+    // bar's own doing (see GlassTextBar), as on Ask.
     SearchHistoryService().load();
     // A search carried over from the other mode, with a title from it to
     // open (see _openInOtherMode).
@@ -101,29 +97,12 @@ class _SearchScreenState extends State<SearchScreen> {
     if (TvDevice.isTv) _barFocus.requestFocus();
   }
 
-  void _onActiveTabChanged() {
-    if (MovieTabService().currentTab.value != BottomNavTab.search) {
-      _searchFocusNode.unfocus();
-    } else if (isComputer) {
-      _searchFocusNode.requestFocus();
-    } else if (TvDevice.isTv) {
-      // On a TV the remote starts on the search bar: searching is what the
-      // tab's for. After the frame, once the tab is no longer hidden from
-      // the remote (see MovieTabShell).
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _groupFocus.requestFocus();
-      });
-    }
-  }
-
   @override
   void dispose() {
-    MovieTabService().currentTab.removeListener(_onActiveTabChanged);
     _debounce?.cancel();
     _controller.dispose();
     _searchFocusNode.dispose();
     _barFocus.dispose();
-    _groupFocus.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -301,103 +280,59 @@ class _SearchScreenState extends State<SearchScreen> {
     );
   }
 
-  static const double _fieldHeight = 52;
+  static const double _fieldHeight = GlassTextBar.height;
 
-  /// The search box at the foot, as Ask's text bar: frosted glass, the
-  /// field, ✕ to clear once there's text, and a round white search button
-  /// at the right, where Ask's send is.
+  /// The search box, Ask's text bar (GlassTextBar): frosted glass, ✕ to
+  /// clear in Ask's new chat's place once there's text, the field, and a
+  /// round white search button at the right, where Ask's send is. On a TV,
+  /// as Ask's bar: one item for the remote first; OK goes in, to the field
+  /// with its keyboard open, and the arrows then reach ✕ and search too.
   Widget _searchBar() {
-    // On a TV, as Ask's bar: one item for the remote first (TvGroup); OK
-    // goes in, to the field with its keyboard open, and the arrows then
-    // reach ✕ and search too.
-    return TvGroup(
-      focusNode: _groupFocus,
-      borderRadius: _fieldHeight / 2,
-      enterOn: () => _searchFocusNode,
-      child: _searchBarContent(),
-    );
-  }
-
-  Widget _searchBarContent() {
-    return SizedBox(
-      height: _fieldHeight,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(_fieldHeight / 2),
-        child: GlassBlur(
-          grouped: true,
-          reducedTint: Colors.black,
-          child: DecoratedBox(
-            decoration: ShapeDecoration(
-              color: glassTint(context),
-              shape: StadiumBorder(side: BorderSide(color: kGlassEdge)),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 7, 7, 7),
-              child: Row(
-                children: [
-                  Expanded(
-                    // On a TV: the remote selects the field's bar and opens
-                    // the keyboard from it (see TvTextField).
-                    child: TvTextField(
-                    field: _searchFocusNode,
-                    barFocus: _barFocus,
-                    borderRadius: 19,
-                    child: TextField(
-                      controller: _controller,
-                      focusNode: _searchFocusNode,
-                      style: const TextStyle(color: Colors.white, fontSize: 16),
-                      decoration: InputDecoration(
-                        hintText: _isRamen ? 'Anime' : 'Movies & TV shows',
-                        hintStyle: const TextStyle(color: Colors.white38),
-                        border: InputBorder.none,
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 9),
-                      ),
-                      textInputAction: TextInputAction.search,
-                      onChanged: _onSearchChanged,
-                      onSubmitted: _searchNow,
-                    ),
-                    ),
-                  ),
-                  ValueListenableBuilder<TextEditingValue>(
-                    valueListenable: _controller,
-                    builder: (context, value, _) => value.text.isEmpty
-                        ? const SizedBox.shrink()
-                        : IconButton(
-                            icon: const Icon(Icons.close_rounded,
-                                color: Colors.white70, size: 18),
-                            tooltip: 'Clear',
-                            onPressed: () {
-                              _controller.clear();
-                              _onSearchChanged('');
-                              // On a TV, back to typing (the ✕ is gone).
-                              if (TvDevice.isTv) _barFocus.requestFocus();
-                            },
-                          ),
-                  ),
-                  const SizedBox(width: 4),
-                  ValueListenableBuilder<TextEditingValue>(
-                    valueListenable: _controller,
-                    builder: (context, value, _) => IconButton(
-                      tooltip: 'Search',
-                      onPressed: value.text.trim().isEmpty
-                          ? null
-                          : () => _searchNow(_controller.text),
-                      icon: const Icon(Icons.search_rounded, size: 20),
-                      style: IconButton.styleFrom(
-                        fixedSize: const Size(38, 38),
-                        minimumSize: const Size(38, 38),
-                        padding: EdgeInsets.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        backgroundColor: Colors.white,
-                        foregroundColor: Colors.black,
-                        disabledBackgroundColor: Colors.white24,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: _controller,
+      builder: (context, value, _) => GlassTextBar(
+        controller: _controller,
+        focusNode: _searchFocusNode,
+        barFocus: _barFocus,
+        hintText: _isRamen ? 'Anime' : 'Movies & TV shows',
+        textInputAction: TextInputAction.search,
+        onChanged: _onSearchChanged,
+        onSubmitted: _searchNow,
+        leadingIcon: Icons.close_rounded,
+        leadingTooltip: 'Clear',
+        showLeading: value.text.isNotEmpty,
+        onLeadingPressed: () {
+          _controller.clear();
+          _onSearchChanged('');
+          // Back to typing: the ✕ is gone. On a TV, to the bar, its
+          // keyboard closed.
+          TvDevice.isTv
+              ? _barFocus.requestFocus()
+              : _searchFocusNode.requestFocus();
+        },
+        // The line round it on Search's first opening: Search's purples
+        // (its glow's, TabGlow.search), the lightest at the head.
+        traceColors: [
+          TabGlow.search[2],
+          TabGlow.search[0],
+          TabGlow.search[1],
+        ],
+        tab: BottomNavTab.search,
+        mode: widget.mode,
+        trailing: IconButton(
+          tooltip: 'Search',
+          onPressed: value.text.trim().isEmpty
+              ? null
+              : () => _searchNow(_controller.text),
+          icon: const Icon(Icons.search_rounded, size: 20),
+          style: IconButton.styleFrom(
+            fixedSize: const Size(38, 38),
+            minimumSize: const Size(38, 38),
+            padding: EdgeInsets.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black,
+            disabledBackgroundColor: Colors.white24,
           ),
         ),
       ),

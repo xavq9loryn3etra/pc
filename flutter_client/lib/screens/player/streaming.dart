@@ -1,5 +1,13 @@
 part of '../player_screen.dart';
 
+/// Whether a TV smooths the colour banding in dark gradients (night skies,
+/// shadows) with mpv's `deband` filter. It costs GPU time every frame, and
+/// TVs are slow (a Panasonic TH-32MS670N: four Cortex-A53 cores, 1.5 GB):
+/// measure it on a slow device (the S10, frame times under ~16 ms) before
+/// it goes out in a release. Set to false to switch it off. Never on
+/// phones, tablets or Windows.
+const bool _debandOnTv = true;
+
 extension _PlayerStreaming on _PlayerScreenState {
   /// Sets the player up and opens the video. If any of that fails, the
   /// spinner stops and the viewer's told, rather than it spinning forever.
@@ -58,6 +66,8 @@ extension _PlayerStreaming on _PlayerScreenState {
       // (at the same spot) if the connection does drop.
       'network-timeout': '60',
       'stream-lavf-o': 'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5',
+      // TVs only: see _debandOnTv.
+      if (TvDevice.isTv && _debandOnTv) 'deband': 'yes',
     }.entries) {
       if (!mounted) return;
       await mpv.setProperty(p.key, p.value);

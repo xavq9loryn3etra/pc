@@ -57,6 +57,7 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 - Gemini key is added from a phone via QR code (PhoneKeyServer).
 - **Player remote:** controls appear ONLY when OK is pressed. OK shows them without pausing, with the play button selected (Netflix style). Left/right skip 10 s showing only the skip icon. Up/down do nothing while controls are hidden. A slow seek shows a centred spinner, not the controls. TV subtitles are 40% bigger.
 - Continue Watching cards on TV have an "i" (info) button before play.
+- **TV picture (23 Nov 2026):** TVs prefer a copy that isn't Dolby-Vision-only (name says DV/DoVi/Dolby Vision with no HDR, HDR10, HDR10+ or HLG), because such copies show purple/green colours there. It is only a preference within the same quality among well-shared copies (`StreamResolver.pictureRank`); a Dolby-Vision-only copy still plays when it's the only good one. Phones, iPad and Windows are unchanged. TVs also turn on mpv debanding (`_debandOnTv` in `player/streaming.dart`); it must be measured on the S10 before a release and switched off if it costs too much.
 
 ## Website (popcorn-organization/popcorn, `docs/`)
 
@@ -68,7 +69,6 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 
 ## Open items (waiting on the owner)
 
-- TV picture: prefer copies that aren't Dolby-Vision-only, and test debanding on the S10. Awaiting a go-ahead.
 - Google "Popcorn (Unverified)" verification: the owner will do it later (23 Nov 2026).
 - **To do after 23 Nov 2026 (owner approved): hide the source repo's name inside the app.**
   1. Wikidata User-Agent (`streaming_link_service.dart`): replace the xavq9loryn3etra/pc GitHub link with the public website address.

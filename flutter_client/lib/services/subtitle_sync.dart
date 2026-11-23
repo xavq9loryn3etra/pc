@@ -50,12 +50,31 @@ class SubtitleSyncResult {
       'margin ${margin.toStringAsFixed(3)}${sure ? '' : ', not sure'}';
 }
 
-/// Accumulates speech matches for one subtitle file on one video copy.
+/// What listening has found for one subtitle file on one video copy: a
+/// timing is confirmed when two separate stretches of the video agree on
+/// it (within 0.4 s, at the same speed) — sure or not on their own. Two
+/// stretches agreeing by chance is unlikely; one stretch alone can be
+/// confidently wrong (Ghosts S1E7's opening: 30 s out). Street Fighter's
+/// 11.44 s and 11.77 s, each "not sure", were right.
 class SubtitleTimingEvidence {
+  /// The least a stretch's answer needs to count at all: a real peak, not
+  /// noise (fights and music give near-zero scores and margins).
+  static const double minScore = 0.08;
+  static const double minMargin = 0.015;
+
+  /// How many answers are kept: the latest (more, and chance agreements
+  /// between stray ones grow likelier).
+  static const int _kept = 6;
+
   final _samples = <({double start, double end, SubtitleSyncResult result})>[];
 
+  /// How many stretches have given an answer that counts.
+  int get heard => _samples.length;
+
+  /// Records [result], heard from [start] to [end] seconds of the video;
+  /// true when another, separate stretch already agreed.
   bool confirms(SubtitleSyncResult result, double start, double end) {
-    if (result.score < 0.12 || result.margin < 0.03) return false;
+    if (result.score < minScore || result.margin < minMargin) return false;
     final agreed = _samples.any((sample) =>
         (start >= sample.end || end <= sample.start) &&
         (sample.result.delay - result.delay).abs() <= 0.4 &&
@@ -64,6 +83,7 @@ class SubtitleTimingEvidence {
       _samples.clear();
     } else {
       _samples.add((start: start, end: end, result: result));
+      if (_samples.length > _kept) _samples.removeAt(0);
     }
     return agreed;
   }
@@ -103,28 +123,101 @@ abstract final class SubtitleSync {
     required double windowStart,
     required List<SubtitleCue> cues,
     double maxDelay = 60,
+  }) =>
+      findAll(pcm,
+              windowStart: windowStart, cueSets: [cues], maxDelay: maxDelay)
+          .single;
+
+  /// [find] for several subtitle files at once against the same sound —
+  /// every copy in a language, tested against one listen: the sound is
+  /// measured once, and each copy then takes a fraction of a second.
+  static List<SubtitleSyncResult?> findAll(
+    Int16List pcm, {
+    required double windowStart,
+    required List<List<SubtitleCue>> cueSets,
+    double maxDelay = 60,
   }) {
-    final whole = align(speechScores(pcm),
-        windowStart: windowStart, cues: cues, maxDelay: maxDelay);
-    if (whole == null) return null;
-    if (whole.score < 0.12 || whole.margin < 0.05) return whole;
-    if (pcm.length < minSure.inMilliseconds * sampleRate ~/ 1000) {
-      return whole;
-    }
+    final scores = speechScores(pcm);
     final half = pcm.length ~/ 2 ~/ _frameSamples * _frameSamples;
-    bool agrees(SubtitleSyncResult? r) =>
-        r != null &&
-        r.margin >= 0.05 &&
-        r.speed == whole.speed &&
-        (r.delay - whole.delay).abs() <= 0.3;
-    final first = align(speechScores(pcm.sublist(0, half)),
-        windowStart: windowStart, cues: cues, maxDelay: maxDelay);
-    if (agrees(first)) return whole._withSure(true);
-    final second = align(speechScores(pcm.sublist(half)),
-        windowStart: windowStart + half / sampleRate,
-        cues: cues,
-        maxDelay: maxDelay);
-    return whole._withSure(agrees(second));
+    final longEnough = pcm.length >= minSure.inMilliseconds * sampleRate ~/ 1000;
+    // Each half on its own (for "sure"), measured only when needed.
+    Float64List? firstScores, secondScores;
+    return [
+      for (final cues in cueSets)
+        () {
+          final whole = align(scores,
+              windowStart: windowStart, cues: cues, maxDelay: maxDelay);
+          if (whole == null) return null;
+          if (whole.score < 0.12 || whole.margin < 0.05 || !longEnough) {
+            return whole;
+          }
+          bool agrees(SubtitleSyncResult? r) =>
+              r != null &&
+              r.margin >= 0.05 &&
+              r.speed == whole.speed &&
+              (r.delay - whole.delay).abs() <= 0.3;
+          firstScores ??= speechScores(pcm.sublist(0, half));
+          final first = align(firstScores!,
+              windowStart: windowStart, cues: cues, maxDelay: maxDelay);
+          if (agrees(first)) return whole._withSure(true);
+          secondScores ??= speechScores(pcm.sublist(half));
+          final second = align(secondScores!,
+              windowStart: windowStart + half / sampleRate,
+              cues: cues,
+              maxDelay: maxDelay);
+          return whole._withSure(agrees(second));
+        }(),
+    ];
+  }
+
+  /// Where to listen next: the [length]-second stretch inside [available]
+  /// (stretches of the video, in seconds, already downloaded — watched, or
+  /// buffered ahead) that overlaps none of [heard] and has the most talking
+  /// in [cues] (their own times: near enough, as a copy's subtitles are
+  /// seconds out at most). Fights and music tell nothing; dialogue does.
+  /// Null when no such stretch is long enough yet.
+  static ({double start, double end})? bestStretch({
+    required List<SubtitleCue> cues,
+    required List<({double start, double end})> available,
+    required double length,
+    List<({double start, double end})> heard = const [],
+  }) {
+    // What's free: the available stretches, less what's been heard.
+    var free = [
+      for (final a in available)
+        if (a.end > a.start) a,
+    ];
+    for (final h in heard) {
+      free = [
+        for (final f in free)
+          if (h.end <= f.start || h.start >= f.end)
+            f
+          else ...[
+            if (h.start > f.start) (start: f.start, end: h.start),
+            if (h.end < f.end) (start: h.end, end: f.end),
+          ],
+      ];
+    }
+    ({double start, double end})? best;
+    var bestTalk = -1.0;
+    for (final f in free) {
+      if (f.end - f.start < length) continue;
+      for (var s = f.start;; s += 10) {
+        if (s + length > f.end) s = f.end - length;
+        final e = s + length;
+        var talk = 0.0;
+        for (final c in cues) {
+          if (c.end <= s || c.start >= e) continue;
+          talk += math.min(c.end, e) - math.max(c.start, s);
+        }
+        if (talk > bestTalk) {
+          bestTalk = talk;
+          best = (start: s, end: e);
+        }
+        if (s + length >= f.end) break;
+      }
+    }
+    return best;
   }
 
   // ─── Subtitles ───

@@ -396,13 +396,16 @@ extension _PlayerOverlays on _PlayerScreenState {
           sinhalaProblem: _sinhala?.problem.value,
           onAddGeminiKey: _addGeminiKey,
           isLoadingSubtitles: _isLoadingSubtitles,
+          // A language, or off: which copy of it is the app's to pick
+          // (the best timed one), and to swap if another fits better.
           onSubtitleSelected: (track) {
-            if (track == null || track.id != _selectedSubtitle?.id) {
-              _selectSubtitle(track);
+            final copy = track == null
+                ? null
+                : _bestSubtitleIn(_getLanguageName(track.lang)) ?? track;
+            if (copy == null || copy.id != _selectedSubtitle?.id) {
+              _selectSubtitle(copy);
             }
           },
-          onTryAnotherSubtitle:
-              _anotherSubtitle == null ? null : _selectAnotherSubtitle,
           getLanguageName: _getLanguageName,
           availableStreams: _availableStreams,
           currentStream: _currentStream,

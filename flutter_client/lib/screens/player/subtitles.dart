@@ -1,6 +1,8 @@
 part of '../player_screen.dart';
 
-enum _SubtitleTiming { checking, ready, unconfirmed }
+/// The shown subtitles' timing: being checked (glowing blocks in their
+/// place), known to fit, or none of the language's copies fits so far.
+enum _SubtitleTiming { checking, ready, noFit }
 
 extension _PlayerSubtitles on _PlayerScreenState {
   /// Subtitles just above the seek bar while the controls are up (they
@@ -301,6 +303,29 @@ extension _PlayerSubtitles on _PlayerScreenState {
     _retimedPaths.clear();
   }
 
+  /// Everything learnt about subtitles' timing: it was for one file (another
+  /// copy, or episode, is timed afresh). Called inside setState.
+  void _forgetSubtitleTiming() {
+    _discardRetimedFiles();
+    _subtitleTimings.clear();
+    _autoSynced.clear();
+    _autoSyncTries.clear();
+    _autoSyncSeen.clear();
+    _heardStretches.clear();
+    _listened.clear();
+    _testedOn.clear();
+    _watchedRanges.clear();
+    _nextListenAt = Duration.zero;
+    _noFitLanguage = null;
+    _retimedWith.clear();
+    _referenceTimed.clear();
+    // Another video: subtitles that didn't fit the last may fit this one.
+    _rejectedSubtitles.clear();
+    _kindCache.clear();
+    _conflictCache.clear();
+    _cuesFailed.clear();
+  }
+
   /// Before opening another copy of the same video (a quality switch, a
   /// reconnect): the old file's built-in tracks, and one picked from them,
   /// don't belong to the new file — each file's tracks are numbered afresh,
@@ -309,23 +334,24 @@ extension _PlayerSubtitles on _PlayerScreenState {
   /// file's track in it is picked once its tracks are read; a downloaded
   /// track stays on meanwhile. Called inside setState.
   void _forgetFileSubtitles() {
-    _discardRetimedFiles();
     _stopSinhala();
-    _subtitleTimings.clear();
-    _subtitleTimingDeadline?.cancel();
-    _subtitleTimingDeadline = null;
-    _autoSyncDone.clear();
-    _autoSynced.clear();
-    _autoSyncTries.clear();
-    _heard = null;
-    _heardTried.clear();
-    _autoSyncSeen.clear();
-    _autoSyncFrom.clear();
-    _retimeTried.clear();
-    _referenceTimed.clear();
-    // Another video: subtitles that didn't fit the last may fit this one.
-    _rejectedSubtitles.clear();
-    _fitChecked.clear();
+    _forgetSubtitleTiming();
+    // Made for the old file isn't made for this one (its fingerprint is
+    // looked up again once it plays).
+    _externalSubtitles = [
+      for (final s in _externalSubtitles)
+        if (s.matchesFile)
+          SubtitleTrackData(
+            id: s.id,
+            url: s.url,
+            lang: s.lang,
+            label: s.label,
+            releaseName: s.releaseName,
+            releaseGroup: s.releaseGroup,
+          )
+        else
+          s,
+    ];
     _embeddedSubtitles = [];
     _userPickedSubtitleForThisVideo = false;
     if (_selectedSubtitle?.isEmbedded ?? false) _selectedSubtitle = null;
@@ -465,7 +491,18 @@ extension _PlayerSubtitles on _PlayerScreenState {
       subs = SubtitleService.rank(subs, '${stream.title}\n${stream.name}');
       print('[subtitles] ${subs.length} found');
 
-      _externalSubtitles = subs;
+      // Any found meanwhile by the file's fingerprint (see
+      // _fingerprintSubtitles) kept, first: this list knows nothing of it.
+      final exact = [
+        for (final s in _externalSubtitles)
+          if (s.matchesFile) s,
+      ];
+      final exactIds = {for (final s in exact) s.id};
+      _externalSubtitles = [
+        ...exact,
+        for (final s in subs)
+          if (!exactIds.contains(s.id)) s,
+      ];
       _updateState(() => _isLoadingSubtitles = false);
       await _rebuildAvailableSubtitles();
     } catch (e) {
@@ -496,17 +533,17 @@ extension _PlayerSubtitles on _PlayerScreenState {
 
   /// Subtitles made for this very file — found by its fingerprint (its size
   /// and first and last 64 KB) — added to the list, first: they're in time
-  /// with it from the start. Looked for a little after the video starts
-  /// playing, not before: on a torrent, reading the file's end has the
-  /// engine fetch it first, which slowed starting (the subtitle list
-  /// waited on it, and the reads ran on after giving up).
+  /// with it from the start, so one in the language being watched is
+  /// switched to at once (see _rebuildAvailableSubtitles). Looked for as
+  /// soon as the video plays, not before: on a torrent, reading the file's
+  /// end has the engine fetch it first, which slowed starting (the subtitle
+  /// list waited on it). Its two 64 KB reads never take over playback's
+  /// (the engine's serve_range).
   Future<void> _fingerprintSubtitles() async {
     final url = _streamUrl;
     final imdbId = widget.details.imdbId ?? widget.movie.imdbId;
     if (url.isEmpty || imdbId == null || _fingerprinted == url) return;
     _fingerprinted = url;
-    await Future<void>.delayed(const Duration(seconds: 15));
-    if (!mounted || _streamUrl != url) return;
     final fingerprint = await SubtitleService().videoFingerprint(url);
     if (!mounted || _streamUrl != url) return;
     if (fingerprint == null) {
@@ -533,8 +570,8 @@ extension _PlayerSubtitles on _PlayerScreenState {
       ...exact,
       ..._externalSubtitles.where((s) => !ids.contains(s.id)),
     ];
-    // Picked again (unless the viewer chose): one made for this file now
-    // comes first in its language.
+    // Picked again: one made for this file now comes first in its
+    // language, and is switched to.
     await _rebuildAvailableSubtitles();
   }
 
@@ -542,11 +579,11 @@ extension _PlayerSubtitles on _PlayerScreenState {
     // After this, whatever stays selected: retimed if it can be now.
     Future<void>.delayed(Duration.zero, _retimeSelected);
     final sinhala = _sinhalaTrack();
-    // Each language’s best first, including when trying another track.
+    // Each language's best first (the panel shows one per language).
     final ordered = [..._embeddedSubtitles, ..._externalSubtitles];
     final position = {for (var i = 0; i < ordered.length; i++) ordered[i].id: i};
     ordered.sort((a, b) {
-      final byRank = _subtitleRank(a).compareTo(_subtitleRank(b));
+      final byRank = _copyRank(a).compareTo(_copyRank(b));
       return byRank != 0 ? byRank : position[a.id]!.compareTo(position[b.id]!);
     });
     final combined = <SubtitleTrackData>[
@@ -556,39 +593,59 @@ extension _PlayerSubtitles on _PlayerScreenState {
     if (mounted) {
       _updateState(() {
         _availableSubtitles = combined;
+        // The one shown, as the list has it now: found again by the file's
+        // fingerprint, it's "made for this file" only in the new entry.
+        final shown = _selectedSubtitle;
+        final fresh = shown == null
+            ? null
+            : combined.where((s) => s.id == shown.id).firstOrNull;
+        if (fresh != null && !identical(fresh, shown)) {
+          _selectedSubtitle = fresh;
+        }
       });
     }
 
-    // If the viewer hasn't manually picked a track for this video yet,
-    // pick the best match for their preferred language — always preferring
-    // an embedded MKV track (which is muxed directly with this exact video
-    // stream and has zero framerate/cut drift) over an external SRT.
+    // The language: the viewer's choice for this video (or off), else
+    // their usual one. The copy in it is the app's to pick, and to swap
+    // as better ones turn up: built into the file, made for it, or timed
+    // (see _copyRank) — Netflix-style, one button per language.
+    final String language;
     if (_userPickedSubtitleForThisVideo) {
-      // Even if an external track was auto-selected moments before mpv
-      // finished parsing the MKV's embedded tracks, upgrade to the embedded
-      // track in the same language automatically.
-      return;
-    }
-
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted || _userPickedSubtitleForThisVideo) return;
-    final preferred = prefs.getString(_PlayerScreenState._subtitleLangPrefKey) ?? 'eng';
-    if (preferred.isEmpty) {
-      if (_selectedSubtitle != null) {
-        await _selectSubtitle(null, remember: false);
+      final chosen = _selectedSubtitle;
+      if (chosen == null) return; // Turned off.
+      language = _getLanguageName(chosen.lang);
+    } else {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted || _userPickedSubtitleForThisVideo) return;
+      final preferred =
+          prefs.getString(_PlayerScreenState._subtitleLangPrefKey) ?? 'eng';
+      if (preferred.isEmpty) {
+        if (_selectedSubtitle != null) {
+          await _selectSubtitle(null, remember: false);
+        }
+        return;
       }
-      return;
+      language = _getLanguageName(preferred);
     }
 
-    final targetLangName = _getLanguageName(preferred);
-    // Sinhala chosen before and none made by people: made from English,
-    // with the viewer's Gemini key.
-    final bestMatch = _bestSubtitleIn(targetLangName) ??
-        (targetLangName == 'Sinhala' && GeminiKeyService().hasKey
-            ? sinhala
-            : null);
-
+    // Sinhala chosen and none made by people: made from English, with the
+    // viewer's Gemini key.
+    final bestMatch = _bestSubtitleIn(language) ??
+        (language == 'Sinhala' && GeminiKeyService().hasKey ? sinhala : null);
+    // The language with nothing to show for it (yet, or every copy ruled
+    // out): left be — the panel says none fits — rather than turned off.
+    final shown = _selectedSubtitle;
+    if (bestMatch == null &&
+        (_userPickedSubtitleForThisVideo ||
+            (shown != null && _getLanguageName(shown.lang) == language))) {
+      return;
+    }
+    if (!mounted) return;
     if (bestMatch?.id != _selectedSubtitle?.id) {
+      if (bestMatch != null && _selectedSubtitle != null) {
+        print('[subtitles] switching to ${bestMatch.id} '
+            '(${_isTimed(bestMatch) ? 'timed' : 'better match'})');
+      }
       await _selectSubtitle(bestMatch, remember: false);
     }
   }
@@ -603,11 +660,11 @@ extension _PlayerSubtitles on _PlayerScreenState {
   /// How well [s] suits what's heard, best (0) first: written for what's
   /// heard (the dub's, when that's on; otherwise the original dialogue's)
   /// — built into this file or made for it first — then the rest that
-  /// follow the dialogue, then signs-only tracks. Ones found not to fit
-  /// (see _tryAnotherSubtitle) last.
+  /// follow the dialogue, then signs-only tracks. Ones whose length rules
+  /// them out (see _fitsLength) last.
   int _subtitleRank(SubtitleTrackData s) {
     if (_rejectedSubtitles.contains(s.id)) return 6;
-    final kind = SubtitleService.kindOf(s);
+    final kind = _kindOf(s);
     if (kind == SubtitleKind.signsOnly) return 5;
     if (_subtitleSourceConflicts(s)) return 4;
     final fitsWhatsHeard = _hearingDub ? _followsDub(s) : !_followsDub(s);
@@ -616,31 +673,41 @@ extension _PlayerSubtitles on _PlayerScreenState {
   }
 
   bool _subtitleSourceConflicts(SubtitleTrackData track) =>
-      !track.isEmbedded && SubtitleService.likeness(track,
-          '${_currentStream.title}\n${_currentStream.name}') < 0;
+      !track.isEmbedded &&
+      _conflictCache.putIfAbsent(
+          track.id,
+          () =>
+              SubtitleService.likeness(track,
+                  '${_currentStream.title}\n${_currentStream.name}') <
+              0);
 
-  SubtitleTrackData? get _anotherSubtitle {
-    final selected = _selectedSubtitle;
-    if (selected == null) return null;
-    final language = _getLanguageName(selected.lang);
-    final alternatives = _availableSubtitles.where((track) =>
-        track.url.isNotEmpty &&
-        !_rejectedSubtitles.contains(track.id) &&
-        _getLanguageName(track.lang) == language &&
-        (track.translatedFrom == null || GeminiKeyService().hasKey)).toList();
-    if (alternatives.isEmpty) return null;
-    final current = alternatives.indexWhere((track) => track.id == selected.id);
-    final next = alternatives[(current + 1) % alternatives.length];
-    return next.id == selected.id ? null : next;
+  /// SubtitleService.kindOf, worked out once per subtitle: it's asked for
+  /// every copy each time copies are ranked (its name read by patterns).
+  SubtitleKind _kindOf(SubtitleTrackData s) =>
+      _kindCache.putIfAbsent(s.id, () => SubtitleService.kindOf(s));
+
+  /// The copy picked in a language: one known to be in time with this
+  /// video before any that isn't (shown now, rather than glowing blocks for
+  /// minutes; a better one that's timed later takes over) — and among
+  /// those, by [_subtitleRank]. Signs-only and ruled-out ones last, timed
+  /// or not.
+  int _copyRank(SubtitleTrackData s) {
+    final rank = _subtitleRank(s);
+    if (rank >= 5) return 20 + rank;
+    return (_isTimed(s) ? 0 : 10) + rank;
   }
 
-  Future<void> _selectAnotherSubtitle() async {
-    final track = _anotherSubtitle;
-    if (track == null) return;
-    await _selectSubtitle(track);
-    if (mounted && !_closing && _selectedSubtitle?.id == track.id) {
-      showAppMessage(context, 'Switched subtitle');
-    }
+  /// Whether [s] is known to be in time with the video playing: built into
+  /// it, made for it, retimed against a subtitle that is, or confirmed by
+  /// listening (or, shown, when this copy played before: see
+  /// _selectSubtitle). Only these are shown; the rest wait behind glowing
+  /// blocks while they're checked.
+  bool _isTimed(SubtitleTrackData s) {
+    final source = s.translatedFrom ?? s;
+    return source.isEmbedded ||
+        _referenceTimed.contains(source.id) ||
+        (source.matchesFile && !_subtitleSourceConflicts(source)) ||
+        _autoSynced.contains(s.id);
   }
 
   /// Whether [s] follows the title's English dub: English captions, or
@@ -649,13 +716,13 @@ extension _PlayerSubtitles on _PlayerScreenState {
   /// anime, its Japanese voices.)
   bool _followsDub(SubtitleTrackData s) =>
       AudioLanguageService.appliesTo(widget.details) &&
-      SubtitleService.kindOf(s) == SubtitleKind.forDub &&
+      _kindOf(s) == SubtitleKind.forDub &&
       _getLanguageName(s.lang) == 'English';
 
   /// For the subtitle menu: what [s] follows, when its name says and it's
   /// worth telling — the English dub, or the original voices.
   String? _subtitleFollows(SubtitleTrackData s) {
-    if (SubtitleService.kindOf(s) != SubtitleKind.forDub) return null;
+    if (_kindOf(s) != SubtitleKind.forDub) return null;
     if (_followsDub(s)) return 'Follows the English dub';
     if (AudioLanguageService.appliesTo(widget.details) &&
         _getLanguageName(s.lang) ==
@@ -677,7 +744,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
     if (pool.isEmpty) return null;
     final position = {for (var i = 0; i < pool.length; i++) pool[i].id: i};
     pool.sort((a, b) {
-      final byRank = _subtitleRank(a).compareTo(_subtitleRank(b));
+      final byRank = _copyRank(a).compareTo(_copyRank(b));
       return byRank != 0 ? byRank : position[a.id]!.compareTo(position[b.id]!);
     });
     return pool.first;
@@ -931,321 +998,439 @@ extension _PlayerSubtitles on _PlayerScreenState {
     return sixth > _PlayerScreenState._autoSyncRecheck ? _PlayerScreenState._autoSyncRecheck : sixth;
   }
 
-  /// An external dialogue track may be replaced if its length rules it out.
-  bool _canTryAnother(SubtitleTrackData track) =>
-      !track.isEmbedded &&
-      (!track.matchesFile || _subtitleSourceConflicts(track)) &&
-      track.translatedFrom == null &&
-      SubtitleService.kindOf(track) != SubtitleKind.signsOnly &&
-      _selectedSubtitle?.id == track.id;
+  /// Whether subtitles whose lines are [cues] can be this video's at all,
+  /// by their length: their last line well past the end, or their lines
+  /// stopping before halfway, they're another film's or episode's. (Some
+  /// leeway: subtitles for a 25 fps copy run 4% long.)
+  bool _fitsLength(List<SubtitleCue> cues) {
+    if (_duration <= Duration.zero) return true;
+    final length = _duration.inMilliseconds / 1000;
+    final last = cues.fold<double>(0, (m, c) => c.end > m ? c.end : m);
+    return cues.isNotEmpty && last <= length * 1.08 + 60 && last >= length * 0.5;
+  }
 
-  /// Whether [track]'s length fits the video: its last line well past the
-  /// end, or its lines stopping before halfway, it's another film's or
-  /// episode's. (Some leeway: subtitles for a 25 fps copy run 4% long.)
-  Future<void> _checkSubtitleFits(SubtitleTrackData track) async {
-    final url = _streamUrl;
-    try {
-      var cues = _subtitleCues[track.url];
-      if (cues == null) {
-        cues = SubtitleSync.parseCues(await _subtitleText(track));
+  /// [track]'s lines (when each is on screen), downloaded and read once —
+  /// a download under way is shared.
+  Future<List<SubtitleCue>> _cuesOf(SubtitleTrackData track) {
+    final done = _subtitleCues[track.url];
+    if (done != null) return Future.value(done);
+    return _cuesLoading[track.url] ??= () async {
+      try {
+        final cues = SubtitleSync.parseCues(await _subtitleText(track));
         _subtitleCues[track.url] = cues;
+        _cuesFailed.remove(track.url);
+        return cues;
+      } catch (_) {
+        _cuesFailed.add(track.url);
+        rethrow;
+      } finally {
+        _cuesLoading.remove(track.url);
       }
-      if (!mounted || _streamUrl != url || _duration <= Duration.zero) return;
-      final length = _duration.inMilliseconds / 1000;
-      final last = cues.fold<double>(0, (m, c) => c.end > m ? c.end : m);
-      final fits = cues.isNotEmpty &&
-          last <= length * 1.08 + 60 &&
-          last >= length * 0.5;
-      if (!fits) {
-        await _tryAnotherSubtitle(
-            track,
-            'last line at ${last.round()} s, '
-            'video ${length.round()} s long');
+    }();
+  }
+
+  /// The copies tested against each listen while [selected] isn't timed:
+  /// the best few in its language (the app swaps to whichever fits) — and
+  /// the best English and original-language ones, whose timing, once
+  /// confirmed, the language's can borrow (see _retimeFromReferences).
+  /// Sinhala made from English: itself (its lines are the English's).
+  List<SubtitleTrackData> _copiesToTest(SubtitleTrackData selected) {
+    if (selected.isEmbedded) return const [];
+    if (selected.translatedFrom != null) return [selected];
+    final language = _getLanguageName(selected.lang);
+    // (Ones timed already — made for the file, retimed — need no listening;
+    // one timed by listening is checked again on its own.)
+    bool usable(SubtitleTrackData s) =>
+        s.url.isNotEmpty &&
+        !_rejectedSubtitles.contains(s.id) &&
+        _kindOf(s) != SubtitleKind.signsOnly &&
+        !_isTimed(s);
+    final position = {
+      for (var i = 0; i < _externalSubtitles.length; i++)
+        _externalSubtitles[i].id: i,
+    };
+    final own = [
+      for (final s in _externalSubtitles)
+        if (usable(s) && _getLanguageName(s.lang) == language) s,
+    ]..sort((a, b) {
+        final byRank = _copyRank(a).compareTo(_copyRank(b));
+        return byRank != 0 ? byRank : position[a.id]!.compareTo(position[b.id]!);
+      });
+    final copies = own.take(_PlayerScreenState._copiesTested).toList();
+    if (!copies.any((s) => s.id == selected.id) && usable(selected)) {
+      copies.add(selected);
+    }
+    for (final other in {'English', _titleLanguage}..remove(language)) {
+      final best = _bestSubtitleIn(other);
+      if (best != null && !best.isEmbedded && usable(best)) copies.add(best);
+    }
+    return copies;
+  }
+
+  /// Whether a copy of [copies] is yet to be tested against some sound
+  /// kept.
+  bool _untested(List<SubtitleTrackData> copies) {
+    for (final h in _heardStretches) {
+      if (h.url != _streamUrl) continue;
+      for (final c in copies) {
+        if (!_testedOn.contains('${c.id}@${h.start}')) return true;
       }
-    } catch (e) {
-      print('[subtitles] length check failed: $e');
     }
+    return false;
   }
 
-  /// [wrong] doesn't fit this video: the next best subtitles in its
-  /// language instead, saying so — up to three tried.
-  Future<void> _tryAnotherSubtitle(SubtitleTrackData wrong, String why) async {
-    if (!mounted || !_canTryAnother(wrong)) return;
-    _rejectedSubtitles.add(wrong.id);
-    final language = _getLanguageName(wrong.lang);
-    final triedHere = _externalSubtitles
-        .where((s) =>
-            _rejectedSubtitles.contains(s.id) &&
-            _getLanguageName(s.lang) == language)
-        .length;
-    final best = triedHere >= 3 ? null : _bestSubtitleIn(language);
-    final next = best == null || best.id == wrong.id ? null : best;
-    print("[subtitles] ${wrong.id} doesn't fit ($why): "
-        "${next == null ? 'kept, none other to try' : 'trying ${next.id}'}");
-    if (next == null) return;
-    showAppMessage(context, "Those subtitles didn't match. Trying another…");
-    await _selectSubtitle(next, remember: false);
-  }
-
-  bool _hasMatchingSubtitleSource(SubtitleTrackData track) {
-    final source = track.translatedFrom ?? track;
-    return source.isEmbedded ||
-        _referenceTimed.contains(source.id) ||
-        (source.matchesFile && !_subtitleSourceConflicts(source));
-  }
-
-  _SubtitleTiming? get _subtitleTiming {
-    final track = _selectedSubtitle;
-    if (track == null) return null;
-    if (_hasMatchingSubtitleSource(track) || _autoSynced.contains(track.id)) {
-      return _SubtitleTiming.ready;
-    }
-    return _autoSyncDone.contains(track.id)
-        ? _SubtitleTiming.unconfirmed
-        : _SubtitleTiming.checking;
-  }
-
-  String? _subtitleActivityLabel(_SubtitleTiming? timing) {
-    final source = _selectedSubtitle?.translatedFrom;
-    if (timing == _SubtitleTiming.unconfirmed) return null;
-    if (source != null && source.id == _sinhalaFrom &&
-        (_sinhala?.waitingForScene.value ?? _sinhalaStarting != null)) {
-      return 'Generating Sinhala subtitles';
-    }
-    return timing == _SubtitleTiming.checking
-        ? 'Checking subtitle timing'
-        : null;
-  }
-
-  void _startSubtitleTimingDeadline(SubtitleTrackData track) {
-    if (_subtitleTimingDeadline != null) return;
-    final url = _streamUrl;
-    // Some streams never buffer enough audio to check timing.
-    _subtitleTimingDeadline = Timer(const Duration(seconds: 90), () {
-      if (!mounted ||
-          _closing ||
-          _streamUrl != url ||
-          _selectedSubtitle?.id != track.id ||
-          _subtitleTiming != _SubtitleTiming.checking) {
-        return;
-      }
-      _updateState(() => _autoSyncDone.add(track.id));
-    });
-  }
-
-  /// Auto Sync, by itself: a downloaded subtitle's timing is set by when
-  /// people talk (see _autoSync) — from the sound already heard of this
-  /// video when there is some (another subtitle picked: lined up at once),
-  /// otherwise from the next few minutes from where the video began
-  /// playing here, soon after it starts; tried again a little later when
-  /// that wasn't clear, up to [_autoSyncMaxTries] times, and checked again
-  /// now and then once synced. Skipped for subtitles in the video file, which are
-  /// made for it.
+  /// The subtitles' timing, checked by listening while the video plays: a
+  /// second, silent player decodes a stretch of the sound already
+  /// downloaded (watched, or buffered ahead) — the one with the most
+  /// dialogue — and every copy in the language is tested against it (see
+  /// _testCopies). A copy is timed once two separate stretches agree; the
+  /// app switches to it. Never given up: while nothing fits, it listens on
+  /// through the film (less often once the panel says so), and once timed
+  /// it checks again now and then (a copy can drift). Not for subtitles
+  /// built into the file or made for it, which are in time already.
   void _maybeAutoSync(Duration pos) {
-    // Watching carried on from where it last jumped (a seek, a new video).
-    final step = pos - _autoSyncLastPos;
-    _autoSyncLastPos = pos;
-    if (_watchedFrom == null ||
-        step < Duration.zero ||
-        step > const Duration(seconds: 3)) {
-      _watchedFrom = pos;
-    }
+    _noteWatched(pos);
     final track = _selectedSubtitle;
     if (track == null ||
-        _hasMatchingSubtitleSource(track) ||
+        track.isEmbedded ||
         _autoSyncing ||
-        _autoSyncDone.contains(track.id) ||
+        _testingCopies ||
         _isMediaOpening ||
         _switchingQuality ||
         _duration <= Duration.zero) {
       return;
     }
-    if (_isPlaying && _subtitleTiming == _SubtitleTiming.checking) {
-      _startSubtitleTimingDeadline(track);
+    final source = track.translatedFrom ?? track;
+    if (_referenceTimed.contains(source.id) ||
+        (source.matchesFile && !_subtitleSourceConflicts(source))) {
+      return;
     }
-    // The right film or episode's at all? By its length (once).
-    if (_canTryAnother(track) && _fitChecked.add(track.id)) {
-      unawaited(_checkSubtitleFits(track));
-    }
-    // The sound's been heard already: this subtitle against it, now.
-    final heard = _heard;
-    if (heard != null &&
-        heard.url == _streamUrl &&
-        !_autoSynced.contains(track.id) &&
-        _heardTried.add(track.id)) {
-      _autoSync(track, heard: heard);
+    // Not more than every couple of seconds: picking a stretch reads every
+    // line, and a failed download isn't asked for again at once.
+    final now = DateTime.now();
+    if (now.isBefore(_nextSyncLook)) return;
+    _nextSyncLook = now.add(const Duration(seconds: 2));
+    final timed = _autoSynced.contains(track.id);
+    // Sound already heard: the copies (a language just picked) against it,
+    // at once.
+    if (!timed &&
+        _heardStretches.any((h) => h.url == _streamUrl) &&
+        _untested(_copiesToTest(track))) {
+      unawaited(_testCopies());
       return;
     }
     if (!_isPlaying || _isBuffering) return;
-    if (pos - _watchedFrom! < _PlayerScreenState._autoSyncFirst) return;
-    final tried = _autoSyncTries[track.id];
-    if (tried != null && pos < tried.next) return;
-    // From where watching began here: what's been watched, and enough of
-    // what's next (the player's fetching it anyway) to have a long enough
-    // stretch.
-    var from = _watchedFrom!;
-    var to = pos + const Duration(seconds: 10);
-    if (to - from < _PlayerScreenState._autoSyncShortest) to = from + _PlayerScreenState._autoSyncShortest;
-    if (to - from > _PlayerScreenState._autoSyncLongest) from = to - _PlayerScreenState._autoSyncLongest;
-    // Not clear yet: the next stretch after the last one heard.
-    final after = _autoSyncFrom[track.id];
-    if (after != null && after + _PlayerScreenState._autoSyncShortest <= _duration) {
-      from = after;
-      to = after + _PlayerScreenState._autoSyncShortest;
+    if (timed) {
+      final tried = _autoSyncTries[track.id];
+      if (tried != null && pos < tried.next) return;
+    } else if (pos < _nextListenAt) {
+      return;
     }
-    // Listening reads the stream as fast as it can: only once the player
-    // has a good lead on the video, so it never competes with playback
-    // for a slow stream. (Tried again on the next tick.)
-    if (player.state.buffer - pos < _PlayerScreenState._autoSyncMinLead) return;
-    _autoSyncFrom.remove(track.id);
-    _autoSync(track, from: from, to: to > _duration ? _duration : to);
+    // Where the talking is, by this copy's lines — or, it not downloading,
+    // another's (or none: then the first free stretch), so the language's
+    // other copies are still tested.
+    final own = _subtitleCues[track.url];
+    if (own == null && !_cuesFailed.contains(track.url)) {
+      unawaited(_cuesOf(track).then((_) {}, onError: (Object e) {
+        print('[sync] subtitles not downloaded: $e');
+      }));
+      return;
+    }
+    final cues = own ??
+        _copiesToTest(track)
+            .map((c) => _subtitleCues[c.url])
+            .nonNulls
+            .firstOrNull ??
+        const <SubtitleCue>[];
+    final stretch = SubtitleSync.bestStretch(
+      cues: cues,
+      available: _downloadedRanges(pos),
+      length: _PlayerScreenState._listenLength.inMilliseconds / 1000,
+      heard: _listened,
+    );
+    if (stretch == null) return;
+    _autoSync(track, from: stretch.start, to: stretch.end);
   }
 
-  /// Sets [track]'s timing by when people talk — in the sound from [from]
-  /// to [to], heard by a second, silent player, or the sound [heard]
-  /// already — matched against the subtitles' (SubtitleSync); any
-  /// language. Only when the match is clear; otherwise left as it is, to
-  /// try again.
+  /// Watching moved on to [pos]: the stretch being watched grows, or (a
+  /// jump) a new one starts.
+  void _noteWatched(Duration pos) {
+    final step = pos - _autoSyncLastPos;
+    final was = _autoSyncLastPos;
+    _autoSyncLastPos = pos;
+    // A jump: the waits till the next listen (by position in the video)
+    // carry on from the new spot — going back doesn't stop listening.
+    if (step < Duration.zero || step > const Duration(seconds: 3)) {
+      Duration moved(Duration next) =>
+          pos + (next > was ? next - was : Duration.zero);
+      _nextListenAt = moved(_nextListenAt);
+      _autoSyncTries.updateAll(
+          (_, t) => (tries: t.tries, next: moved(t.next)));
+    }
+    final at = pos.inMilliseconds / 1000;
+    final last = _watchedRanges.lastOrNull;
+    if (last != null &&
+        step >= Duration.zero &&
+        step <= const Duration(seconds: 3) &&
+        at >= last.end - 0.5) {
+      _watchedRanges.last = (start: last.start, end: at);
+    } else if (last == null || at != last.end) {
+      _watchedRanges.add((start: at, end: at));
+    }
+  }
+
+  /// The video downloaded here, in seconds: what's been watched, and what
+  /// the player has buffered ahead of [pos] — listening there never waits
+  /// for the download, nor competes with playback for it.
+  List<({double start, double end})> _downloadedRanges(Duration pos) {
+    final at = pos.inMilliseconds / 1000;
+    final ahead = player.state.buffer.inMilliseconds / 1000;
+    final ranges = [
+      ..._watchedRanges,
+      if (ahead > at) (start: at, end: ahead),
+    ]..sort((a, b) => a.start.compareTo(b.start));
+    final merged = <({double start, double end})>[];
+    for (final r in ranges) {
+      final last = merged.lastOrNull;
+      if (last != null && r.start <= last.end + 1) {
+        if (r.end > last.end) merged.last = (start: last.start, end: r.end);
+      } else {
+        merged.add(r);
+      }
+    }
+    return merged;
+  }
+
+  /// Listens to the sound from [from] to [to] seconds (a second, silent
+  /// player: SubtitleSync.decodeSound) — kept, and every copy tested
+  /// against it (_testCopies); or, [track] being timed already, checked
+  /// against it again, and moved if two separate stretches agree on
+  /// another timing.
   Future<void> _autoSync(
     SubtitleTrackData track, {
-    Duration? from,
-    Duration? to,
-    ({String url, double start, Int16List pcm})? heard,
+    required double from,
+    required double to,
   }) async {
     final url = _streamUrl;
+    final checking = !_autoSynced.contains(track.id);
     _autoSyncing = true;
+    _listened.add((start: from, end: to));
     final took = Stopwatch()..start();
-    var clear = false;
-    Duration? checkFrom;
-    print('[sync] ${heard != null ? 'matching what was heard' : 'listening'}'
-        ': ${track.lang} subtitles (${track.id})'
-        '${heard != null ? '' : ', ${from!.inSeconds}–${to!.inSeconds} s of the video'}'
-        ', try ${(_autoSyncTries[track.id]?.tries ?? 0) + 1}');
+    print('[sync] listening: ${from.round()}–${to.round()} s of the video, '
+        'for ${track.lang} subtitles (${track.id})'
+        '${checking ? '' : ', checking again'}');
     try {
-      var cues = _subtitleCues[track.url];
-      if (cues == null) {
-        cues = SubtitleSync.parseCues(await _subtitleText(track));
-        _subtitleCues[track.url] = cues;
-      }
-      final double start;
-      final Int16List? pcm;
-      if (heard != null) {
-        start = heard.start;
-        pcm = heard.pcm;
-      } else {
-        start = from!.inMilliseconds / 1000;
-        final audio = player.state.track.audio.id;
-        pcm = await SubtitleSync.decodeSound(
-          url,
-          start: start,
-          end: to!.inMilliseconds / 1000,
-          audioTrack: audio == 'auto' || audio == 'no' ? null : audio,
-          // The second player reads the same stream as fast as it can:
-          // stop it as soon as the player closes or the video changes.
-          isCancelled: () => !mounted ||
-              _streamUrl != url ||
-              _autoSyncDone.contains(track.id),
-        );
-      }
-      // Another episode or copy meanwhile: not this one's sound.
+      final audio = player.state.track.audio.id;
+      final pcm = await SubtitleSync.decodeSound(
+        url,
+        start: from,
+        end: to,
+        audioTrack: audio == 'auto' || audio == 'no' ? null : audio,
+        // Stop as soon as the player closes or the video changes.
+        isCancelled: () => !mounted || _streamUrl != url,
+      );
       if (!mounted || _streamUrl != url) return;
-      if (pcm == null ||
-          pcm.length <
-              SubtitleSync.minSure.inMilliseconds *
-                  SubtitleSync.sampleRate ~/
-                  1000) {
+      if (pcm == null || pcm.length < 60 * SubtitleSync.sampleRate) {
         print("[sync] couldn't get the sound "
             '(${took.elapsedMilliseconds} ms)');
         return;
       }
-      if (heard == null) {
-        // Kept for another subtitle picked meanwhile; one already tried
-        // against less sound is tried again with this.
-        _heard = (url: url, start: start, pcm: pcm);
-        _heardTried
-          ..clear()
-          ..add(track.id);
-      }
-      final result = await _findSubtitleTiming(pcm, start, cues);
-      final end = start + pcm.length / SubtitleSync.sampleRate;
-      print('[sync] ${track.lang} ${start.round()}–${end.round()} s: $result '
+      final end = from + pcm.length / SubtitleSync.sampleRate;
+      print('[sync] heard ${from.round()}–${end.round()} s '
           '(${took.elapsedMilliseconds} ms)');
-      // Checking stopped, references retimed it, or another
-      // copy's playing.
-      if (!mounted ||
-          _streamUrl != url ||
-          _autoSyncDone.contains(track.id) ||
-          _referenceTimed.contains(track.id)) {
-        return;
+      _heardStretches.add((url: url, start: from, end: end, pcm: pcm));
+      if (_heardStretches.length > _PlayerScreenState._stretchesKept) {
+        _heardStretches.removeAt(0);
       }
-      if (result == null) {
-        checkFrom = Duration(milliseconds: (end * 1000).ceil());
-        return;
-      }
-      final delay = (result.delay * 100).round() / 100;
-      final evidence = _autoSyncSeen.putIfAbsent(track.id, SubtitleTimingEvidence.new);
-      if (!evidence.confirms(result, start, end)) {
-        checkFrom = Duration(milliseconds: (end * 1000).ceil());
-        return;
-      }
-      final selected = _selectedSubtitle?.id == track.id;
-      final now = selected
-          ? (delay: _subtitleDelaySeconds, speed: _subtitleSpeed)
-          : _subtitleTimings[track.id];
-      if (_autoSynced.contains(track.id) &&
-          now != null &&
-          (now.delay - delay).abs() < _PlayerScreenState._autoSyncMinChange &&
-          (now.speed - result.speed).abs() < 0.001) {
-        clear = true;
-        print('[sync] still in time');
-        return;
-      }
-      print('[sync] applied: ${result.delay.toStringAsFixed(2)} s, '
-          'speed ${result.speed.toStringAsFixed(4)}');
-      if (selected) {
-        _updateState(() {
-          _subtitleDelaySeconds = delay;
-          _subtitleSpeed = result.speed;
-        });
-        await _applySubtitleTimingToMpv();
-      } else {
-        // Switched from meanwhile: for when it's back.
-        _subtitleTimings[track.id] = (delay: delay, speed: result.speed);
-      }
-      if (!mounted || _streamUrl != url) return;
-      clear = true;
-      _rememberTiming(track,
-          timing: (delay: delay, speed: result.speed));
+      if (!checking) await _recheckTiming(track, url, from, end, pcm);
     } catch (e) {
       print('[sync] failed: $e');
     } finally {
       _autoSyncing = false;
-      if (!mounted || _streamUrl != url || _autoSyncDone.contains(track.id)) {
-        // Discard results from obsolete or completed checks.
-      } else if (clear) {
-        // In time: checked again a while on.
-        _autoSynced.add(track.id);
-        _autoSyncTries[track.id] =
-            (tries: 0, next: _currentPosition + _autoSyncRecheckEvery);
-      } else {
-        final tries = (_autoSyncTries[track.id]?.tries ?? 0) + 1;
-        if (tries >= _PlayerScreenState._autoSyncMaxTries) {
-          print('[sync] not applied; giving up on these subtitles');
-          _autoSyncDone.add(track.id);
-        } else if (checkFrom != null) {
-          // More to go by: at once, the stretch after.
-          _autoSyncFrom[track.id] = checkFrom;
-          _autoSyncTries[track.id] = (tries: tries, next: _currentPosition);
+      if (mounted && _streamUrl == url) {
+        if (checking) {
+          _nextListenAt = _currentPosition +
+              (_subtitleTiming == _SubtitleTiming.noFit
+                  ? _PlayerScreenState._noFitGap
+                  : _PlayerScreenState._listenGap);
         } else {
-          print('[sync] not applied; trying again in '
-              '${_PlayerScreenState._autoSyncRetry.inSeconds} s of watching');
           _autoSyncTries[track.id] =
-              (tries: tries, next: _currentPosition + _PlayerScreenState._autoSyncRetry);
+              (tries: 0, next: _currentPosition + _autoSyncRecheckEvery);
         }
       }
-      // The subtitle menu's note (see _subtitleSyncNote).
-      if (mounted) _updateState(() {});
     }
+    if (checking && mounted && _streamUrl == url) await _testCopies();
+  }
+
+  /// [track], timed already, against another stretch of the sound: moved
+  /// only when two separate stretches agree on a timing [_autoSyncMinChange]
+  /// or more from the one it has.
+  Future<void> _recheckTiming(SubtitleTrackData track, String url,
+      double start, double end, Int16List pcm) async {
+    final cues = await _cuesOf(track);
+    final result = (await _findTimingsInBackground(pcm, start, [cues])).single;
+    _testedOn.add('${track.id}@$start');
+    print('[sync] ${track.lang} again ${start.round()}–${end.round()} s: '
+        '$result');
+    if (result == null || !mounted || _streamUrl != url) return;
+    final evidence =
+        _autoSyncSeen.putIfAbsent(track.id, SubtitleTimingEvidence.new);
+    if (!evidence.confirms(result, start, end)) return;
+    final delay = (result.delay * 100).round() / 100;
+    final selected = _selectedSubtitle?.id == track.id;
+    final now = selected
+        ? (delay: _subtitleDelaySeconds, speed: _subtitleSpeed)
+        : _subtitleTimings[track.id];
+    if (now != null &&
+        (now.delay - delay).abs() < _PlayerScreenState._autoSyncMinChange &&
+        (now.speed - result.speed).abs() < 0.001) {
+      print('[sync] still in time');
+      return;
+    }
+    print('[sync] moved: ${result.delay.toStringAsFixed(2)} s, '
+        'speed ${result.speed.toStringAsFixed(4)}');
+    await _applyConfirmedTiming(track, (delay: delay, speed: result.speed));
+  }
+
+  /// [track]'s timing confirmed: kept (for this copy, next time too), and
+  /// put on screen if it's the one shown.
+  Future<void> _applyConfirmedTiming(
+      SubtitleTrackData track, ({double delay, double speed}) timing) async {
+    _autoSynced.add(track.id);
+    _subtitleTimings[track.id] = timing;
+    _autoSyncTries[track.id] =
+        (tries: 0, next: _currentPosition + _autoSyncRecheckEvery);
+    unawaited(_rememberTiming(track, timing: timing));
+    if (_selectedSubtitle?.id == track.id) {
+      _updateState(() {
+        _subtitleDelaySeconds = timing.delay;
+        _subtitleSpeed = timing.speed;
+      });
+      await _applySubtitleTimingToMpv();
+    }
+  }
+
+  /// Every copy to test (_copiesToTest) against every stretch of sound kept
+  /// it hasn't been yet: a fraction of a second each, off the screen's
+  /// thread. Copies whose length rules them out are left out for good. A
+  /// copy two separate stretches agree on is timed — and switched to, if
+  /// it's in the language being watched; another language's lends its
+  /// timing (see _retimeFromReferences). After [_noFitAfter] stretches with
+  /// none of the language's fitting, the panel says so.
+  Future<void> _testCopies() async {
+    final track = _selectedSubtitle;
+    if (_testingCopies || track == null || _isTimed(track)) return;
+    final url = _streamUrl;
+    final copies = _copiesToTest(track);
+    if (copies.isEmpty) return;
+    _testingCopies = true;
+    final confirmed = <SubtitleTrackData>[];
+    var rejected = false;
+    try {
+      final cues = <String, List<SubtitleCue>>{};
+      await Future.wait(copies.map((c) async {
+        try {
+          cues[c.id] = await _cuesOf(c);
+        } catch (e) {
+          print('[sync] ${c.id} not downloaded: $e');
+        }
+      }));
+      if (!mounted || _streamUrl != url) return;
+      for (final c in copies) {
+        final lines = cues[c.id];
+        if (lines == null || c.translatedFrom != null || _fitsLength(lines)) {
+          continue;
+        }
+        final last = lines.fold<double>(0, (m, l) => l.end > m ? l.end : m);
+        print("[subtitles] ${c.id} doesn't fit: last line at ${last.round()} "
+            's, video ${_duration.inSeconds} s long');
+        _rejectedSubtitles.add(c.id);
+        cues.remove(c.id);
+        rejected = true;
+      }
+      for (final h in [..._heardStretches]) {
+        if (h.url != url) continue;
+        final batch = [
+          for (final c in copies)
+            if (!_testedOn.contains('${c.id}@${h.start}')) c,
+        ];
+        // Not downloadable, or ruled out: not tried again on this sound.
+        for (final c in batch) {
+          if (cues[c.id] == null) _testedOn.add('${c.id}@${h.start}');
+        }
+        batch.removeWhere((c) => cues[c.id] == null);
+        if (batch.isEmpty) continue;
+        final took = Stopwatch()..start();
+        final List<SubtitleSyncResult?> results;
+        try {
+          results = await _findTimingsInBackground(
+              h.pcm, h.start, [for (final c in batch) cues[c.id]!]);
+        } catch (e) {
+          // Not tried again on this sound (it would fail again).
+          print('[sync] testing failed: $e');
+          for (final c in batch) {
+            _testedOn.add('${c.id}@${h.start}');
+          }
+          continue;
+        }
+        if (!mounted || _streamUrl != url) return;
+        print('[sync] ${batch.length} subtitles against '
+            '${h.start.round()}–${h.end.round()} s '
+            '(${took.elapsedMilliseconds} ms):');
+        for (var i = 0; i < batch.length; i++) {
+          final c = batch[i];
+          final r = results[i];
+          _testedOn.add('${c.id}@${h.start}');
+          print('[sync]   ${c.lang} ${c.id}: $r');
+          if (r == null || _autoSynced.contains(c.id)) continue;
+          final evidence =
+              _autoSyncSeen.putIfAbsent(c.id, SubtitleTimingEvidence.new);
+          if (!evidence.confirms(r, h.start, h.end)) continue;
+          print('[sync] ${c.lang} ${c.id} timed: two stretches agree on '
+              '${r.delay.toStringAsFixed(2)} s');
+          await _applyConfirmedTiming(
+              c, (delay: (r.delay * 100).round() / 100, speed: r.speed));
+          confirmed.add(c);
+          if (!mounted || _streamUrl != url) return;
+        }
+      }
+    } catch (e) {
+      print('[sync] testing failed: $e');
+    } finally {
+      _testingCopies = false;
+    }
+    if (!mounted || _streamUrl != url) return;
+    final language = _getLanguageName(track.lang);
+    if (confirmed.isNotEmpty || rejected) {
+      // A timed copy of the language now comes first: switched to. One of
+      // another language: the language's retimed against it.
+      if (confirmed.isNotEmpty) _noFitLanguage = null;
+      await _rebuildAvailableSubtitles();
+      _retimeSelected();
+    }
+    final shown = _selectedSubtitle;
+    if (shown != null &&
+        !_isTimed(shown) &&
+        _getLanguageName(shown.lang) == language &&
+        _noFitLanguage != language) {
+      // Every copy of the language tested against enough separate
+      // stretches (or ruled out by its length), and none fits: said so
+      // (listening goes on).
+      final own = [
+        for (final c in _copiesToTest(shown))
+          if (_getLanguageName(c.lang) == language) c,
+      ];
+      final heardEnough = own.isEmpty ||
+          own.every((c) =>
+              _testedOn.where((k) => k.startsWith('${c.id}@')).length >=
+              _PlayerScreenState._noFitAfter);
+      if (heardEnough) {
+        print('[sync] none of the $language subtitles fit so far; '
+            'listening on');
+        _noFitLanguage = language;
+      }
+    }
+    if (mounted) _updateState(() {});
   }
 
   /// [track]'s text (an SRT, VTT or ASS file), downloaded once.
@@ -1261,16 +1446,19 @@ extension _PlayerSubtitles on _PlayerScreenState {
     return _subtitleTexts[track.url] = response.data ?? '';
   }
 
-  /// [track] retimed against reference subtitles — others in the list made
-  /// for a copy like the one playing (its kind of source: Blu-ray, web,
-  /// TV), in any language, as when lines are on screen is what's compared
-  /// — piece by piece along the video (SubtitleRetime). Two references
-  /// from different release groups have to agree (or one made for this
-  /// very file). Instant beside listening (Auto Sync), which needs minutes
+  /// [track] retimed against reference subtitles, in any language — what's
+  /// compared is when lines are on screen — piece by piece along the video
+  /// (SubtitleRetime). One known to fit this very copy is enough on its
+  /// own: made for this file, or timed by listening (two stretches agreed;
+  /// its timing applied first). Otherwise two made for a copy like this
+  /// one (its kind of source: Blu-ray, web, TV), from different release
+  /// groups, have to agree. Instant beside listening, which needs minutes
   /// of sound — and right where a subtitle drifts from the copy: Ghosts
   /// S1E8's web-rip English one is 2.6 s off its Blu-ray copy at the start
   /// and 5.6 s by the end, in steps at the ad breaks, which no one delay
-  /// fits. Without references, Auto Sync's listening goes on.
+  /// fits. Tried again whenever the references change (a subtitle made for
+  /// the file found late, another timed by listening); meanwhile listening
+  /// goes on.
   Future<void> _retimeFromReferences(SubtitleTrackData track) async {
     if (!mounted || _closing) return;
     // Sinhala made from English: the English is retimed, and the Sinhala
@@ -1278,32 +1466,53 @@ extension _PlayerSubtitles on _PlayerScreenState {
     if (track.translatedFrom != null) {
       return _retimeFromReferences(track.translatedFrom!);
     }
+    // (Timed by listening: kept — its own sound's say beats another
+    // subtitle's.)
     if (track.isEmbedded ||
         _retimedPaths.containsKey(track.id) ||
-        _autoSyncDone.contains(track.id) ||
-        _retimeTried.contains(track.id)) {
+        _referenceTimed.contains(track.id) ||
+        _autoSynced.contains(track.id) ||
+        (track.matchesFile && !_subtitleSourceConflicts(track))) {
       return;
     }
     final stream = _currentStream;
     final video = '${stream.title}\n${stream.name}';
-    if (SubtitleService.sourceOf(video) == null) return;
-    // Made for this release (its group's, or this file): in time already.
-    if (SubtitleService.likeness(track, video) >= 4) return;
-    final refs = [
+    bool usable(SubtitleTrackData s) =>
+        s.id != track.id &&
+        s.url.isNotEmpty &&
+        !_rejectedSubtitles.contains(s.id) &&
+        _kindOf(s) != SubtitleKind.signsOnly;
+    // Known to fit this copy: made for the file, or timed by listening.
+    final fitting = [
       for (final s in _externalSubtitles)
-        if (s.id != track.id &&
-            s.url.isNotEmpty &&
-            SubtitleService.likeness(s, video) >= 2)
+        if (usable(s) &&
+            ((s.matchesFile && !_subtitleSourceConflicts(s)) ||
+                (_autoSynced.contains(s.id) &&
+                    _subtitleTimings[s.id] != null)))
           s,
-    ]..sort((a, b) => SubtitleService.likeness(b, video)
-        .compareTo(SubtitleService.likeness(a, video)));
-    // (Not yet, maybe: tried again when the list grows.)
-    if (refs.length < 2 && !refs.any((r) => r.matchesFile)) return;
-    _retimeTried.add(track.id);
+    ];
+    // Made for a copy like it: two that agree. (Not for one made for this
+    // release, as in time as they are.)
+    final alike = SubtitleService.sourceOf(video) == null ||
+            SubtitleService.likeness(track, video) >= 4
+        ? <SubtitleTrackData>[]
+        : ([
+            for (final s in _externalSubtitles)
+              if (usable(s) &&
+                  !fitting.contains(s) &&
+                  SubtitleService.likeness(s, video) >= 2)
+                s,
+          ]..sort((a, b) => SubtitleService.likeness(b, video)
+              .compareTo(SubtitleService.likeness(a, video))));
+    if (fitting.isEmpty && alike.length < 2) return;
+    final picked = [...fitting.take(2), ...alike.take(4)];
+    // The same references as last time: no use trying again.
+    final signature = picked.map((r) => r.id).join(',');
+    if (_retimedWith[track.id] == signature) return;
+    _retimedWith[track.id] = signature;
     final url = _streamUrl;
     final took = Stopwatch()..start();
     try {
-      final picked = refs.take(4).toList();
       final text = await _subtitleText(track);
       final refTexts = await Future.wait(picked.map(_subtitleText));
       final map = await _retimeMapInBackground(
@@ -1313,12 +1522,16 @@ extension _PlayerSubtitles on _PlayerScreenState {
           for (final r in picked)
             (r.releaseGroup ?? r.releaseName ?? r.id).toLowerCase(),
         ],
-        [for (final r in picked) r.matchesFile],
+        [for (final r in picked) fitting.contains(r)],
+        [
+          for (final r in picked)
+            r.matchesFile ? null : _subtitleTimings[r.id],
+        ],
       );
       if (!mounted || _streamUrl != url) return;
       if (map == null) {
         print('[sync] references (${picked.map((r) => r.lang).join(', ')}) '
-            "don't agree; listening instead");
+            "don't line up; listening on");
         return;
       }
       final ext = text.contains('[Events]')
@@ -1340,16 +1553,15 @@ extension _PlayerSubtitles on _PlayerScreenState {
       // Sinhala made from it: its lines move with it.
       if (_sinhalaFrom == track.id) await _sinhala?.retime(retimed);
       if (!mounted || _streamUrl != url) return;
+      // A timing kept from listening was for the file as it came.
       final key = _timingKey(track);
-      SharedPreferences.getInstance().then((prefs) {
-        if (prefs.getString(key)?.endsWith('|confirmed') == true) {
-          return prefs.remove(key);
-        }
-        return false;
-      });
+      SharedPreferences.getInstance().then((prefs) => prefs.remove(key));
+      _autoSynced.remove(track.id);
       print('[sync] retimed by references '
-          '(${picked.map((r) => r.lang).join(', ')}) in '
+          '(${picked.map((r) => '${r.lang}${fitting.contains(r) ? ', fits' : ''}').join('; ')}) in '
           '${took.elapsedMilliseconds} ms: $map');
+      _subtitleTimings[track.id] = (delay: 0.0, speed: 1.0);
+      _updateState(() => _referenceTimed.add(track.id));
       final shown = _selectedSubtitle;
       if (shown != null &&
           (shown.id == track.id || shown.translatedFrom?.id == track.id)) {
@@ -1360,10 +1572,8 @@ extension _PlayerSubtitles on _PlayerScreenState {
         await _applySubtitleTimingToMpv();
         await _applySubtitleTrackToPlayer(shown);
       } else {
-        _subtitleTimings[track.id] = (delay: 0.0, speed: 1.0);
-      }
-      if (mounted && _streamUrl == url) {
-        _updateState(() => _referenceTimed.add(track.id));
+        // Timed now: the language's pick, if it's the language watched.
+        await _rebuildAvailableSubtitles();
       }
     } catch (e) {
       print('[sync] retiming failed: $e');
@@ -1376,42 +1586,79 @@ extension _PlayerSubtitles on _PlayerScreenState {
     String text,
     List<String> refTexts,
     List<String> groups,
-    List<bool> exact,
+    List<bool> fits,
+    List<({double delay, double speed})?> timings,
   ) =>
-      Isolate.run(() => _retimeMap(text, refTexts, groups, exact));
+      Isolate.run(() => _retimeMap(text, refTexts, groups, fits, timings));
 
-  /// [text]'s timing map against the references [refTexts]: one made for
-  /// this very file ([exact]) alone, otherwise two from different release
-  /// [groups] that agree, averaged. Null if none do.
+  /// [text]'s timing map against the references [refTexts] (each shown at
+  /// its [timings], if any): one known to fit this copy ([fits]) alone,
+  /// otherwise two from different release [groups] that agree, averaged.
+  /// Null if none do.
   static TimingMap? _retimeMap(
     String text,
     List<String> refTexts,
     List<String> groups,
-    List<bool> exact,
+    List<bool> fits,
+    List<({double delay, double speed})?> timings,
   ) {
     final cues = SubtitleSync.parseCues(text);
     final maps = [
-      for (final t in refTexts)
-        SubtitleRetime.mapAgainst(cues, SubtitleSync.parseCues(t)),
+      for (var i = 0; i < refTexts.length; i++)
+        SubtitleRetime.mapAgainst(cues, [
+          for (final c in SubtitleSync.parseCues(refTexts[i]))
+            if (timings[i] case final t?)
+              SubtitleCue(c.start * t.speed + t.delay, c.end * t.speed + t.delay)
+            else
+              c,
+        ]),
     ];
     for (var i = 0; i < maps.length; i++) {
-      if (exact[i] && maps[i] != null) return maps[i];
+      if (fits[i] && maps[i] != null) return maps[i];
     }
     for (var i = 0; i < maps.length; i++) {
       for (var j = i + 1; j < maps.length; j++) {
         final a = maps[i], b = maps[j];
-        if (a == null || b == null || groups[i] == groups[j]) continue;
+        if (a == null || b == null || fits[i] || fits[j]) continue;
+        if (groups[i] == groups[j]) continue;
         if (a.agreesWith(b)) return a.averagedWith(b);
       }
     }
     return null;
   }
 
+  /// The shown subtitles' timing (see _SubtitleTiming).
+  _SubtitleTiming? get _subtitleTiming {
+    final track = _selectedSubtitle;
+    if (track == null) return null;
+    if (_isTimed(track)) return _SubtitleTiming.ready;
+    return _noFitLanguage == _getLanguageName(track.lang)
+        ? _SubtitleTiming.noFit
+        : _SubtitleTiming.checking;
+  }
+
+  /// What the glowing blocks in the subtitles' place stand for (read out
+  /// to screen readers), or null when there are none: Sinhala being made
+  /// for the scene, or the timing being checked.
+  String? _subtitleActivityLabel(_SubtitleTiming? timing) {
+    final source = _selectedSubtitle?.translatedFrom;
+    if (timing == _SubtitleTiming.noFit) return null;
+    if (source != null && source.id == _sinhalaFrom &&
+        (_sinhala?.waitingForScene.value ?? _sinhalaStarting != null)) {
+      return 'Generating Sinhala subtitles';
+    }
+    return timing == _SubtitleTiming.checking
+        ? 'Checking subtitle timing'
+        : null;
+  }
+
+  /// The subtitle panel's word on the timing, or null.
   String? get _subtitleSyncNote => switch (_subtitleTiming) {
-        _SubtitleTiming.checking => 'Checking timing…',
-        _SubtitleTiming.unconfirmed => 'Couldn’t confirm timing',
-        _SubtitleTiming.ready when _autoSynced.contains(_selectedSubtitle?.id) =>
-          'Timing adjusted',
+        _SubtitleTiming.checking => 'Checking the timing…',
+        _SubtitleTiming.noFit =>
+          'None of the ${_getLanguageName(_selectedSubtitle!.lang)} '
+              'subtitles found match this video so far. Popcorn keeps '
+              'checking.',
         _ => null,
       };
 
@@ -1449,15 +1696,16 @@ extension _PlayerSubtitles on _PlayerScreenState {
     return (delay: delay, speed: speed);
   }
 
-  /// SubtitleSync.find, off the screen's thread: a few hundred
-  /// milliseconds' sums on a phone. (Static: nothing of the screen goes
-  /// with it.)
-  static Future<SubtitleSyncResult?> _findSubtitleTiming(
+  /// SubtitleSync.findAll, off the screen's thread: a few hundred
+  /// milliseconds' sums on a phone for the sound, a fraction of a second
+  /// for each copy. (Static: nothing of the screen goes with it.)
+  static Future<List<SubtitleSyncResult?>> _findTimingsInBackground(
     Int16List pcm,
     double start,
-    List<SubtitleCue> cues,
+    List<List<SubtitleCue>> cueSets,
   ) =>
-      Isolate.run(() => SubtitleSync.find(pcm, windowStart: start, cues: cues));
+      Isolate.run(() =>
+          SubtitleSync.findAll(pcm, windowStart: start, cueSets: cueSets));
 
   /// Shows [track] (null = subtitles off). A choice the viewer made
   /// ([remember]) becomes their preference for every video after this
@@ -1489,10 +1737,6 @@ extension _PlayerSubtitles on _PlayerScreenState {
     final retime = (timing?.delay ?? 0.0) != _subtitleDelaySeconds ||
         (timing?.speed ?? 1.0) != _subtitleSpeed;
     if (!mounted) return; // Closed while the saved timing was read.
-    if (old?.id != track?.id) {
-      _subtitleTimingDeadline?.cancel();
-      _subtitleTimingDeadline = null;
-    }
     _updateState(() {
       _selectedSubtitle = track;
       _subtitleDelaySeconds = timing?.delay ?? 0.0;

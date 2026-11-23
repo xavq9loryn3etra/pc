@@ -46,15 +46,78 @@ List<SubtitleCue> _talk(double until, {int seed = 7}) {
 }
 
 void main() {
-  test('a shift requires two independent, credible matches', () {
-    const strong = SubtitleSyncResult(delay: 2, speed: 1, score: .4, margin: .1, sure: true);
-    const weak = SubtitleSyncResult(delay: 2, speed: 1, score: .4, margin: .01);
-    final evidence = SubtitleTimingEvidence();
-    expect(evidence.confirms(strong, 0, 160), isFalse);
-    expect(evidence.confirms(strong, 15, 175), isFalse);
-    expect(evidence.confirms(weak, 180, 340), isFalse);
-    expect(evidence.confirms(strong, 180, 340), isTrue);
-    expect(evidence.confirms(strong, 400, 560), isFalse);
+  group('timing evidence', () {
+    test('a shift requires two separate stretches that agree', () {
+      const strong = SubtitleSyncResult(delay: 2, speed: 1, score: .4, margin: .1, sure: true);
+      const noise = SubtitleSyncResult(delay: 2, speed: 1, score: .4, margin: .005);
+      final evidence = SubtitleTimingEvidence();
+      expect(evidence.confirms(strong, 0, 160), isFalse);
+      expect(evidence.confirms(strong, 15, 175), isFalse); // overlaps
+      expect(evidence.confirms(noise, 180, 340), isFalse); // no real peak
+      expect(evidence.confirms(strong, 180, 340), isTrue);
+      expect(evidence.confirms(strong, 400, 560), isFalse); // starts afresh
+    });
+
+    test('two answers that are each "not sure" confirm when they agree', () {
+      // Street Fighter (tt27419420) on the S10: 11.44 s and 11.77 s.
+      const a = SubtitleSyncResult(delay: 11.44, speed: 1, score: .1, margin: .02);
+      const b = SubtitleSyncResult(delay: 11.77, speed: 1, score: .09, margin: .02);
+      final evidence = SubtitleTimingEvidence();
+      expect(evidence.confirms(a, 600, 720), isFalse);
+      expect(evidence.confirms(b, 900, 1020), isTrue);
+    });
+
+    test('answers that disagree never confirm', () {
+      final evidence = SubtitleTimingEvidence();
+      for (final (i, d) in [4.8, 15.9, -7.2, 9.1].indexed) {
+        expect(
+            evidence.confirms(
+                SubtitleSyncResult(delay: d, speed: 1, score: .2, margin: .05),
+                i * 200.0,
+                i * 200.0 + 120),
+            isFalse);
+      }
+    });
+  });
+
+  group('bestStretch', () {
+    final cues = [
+      // Little said in the first 4 minutes, a lot from 300 s to 420 s.
+      for (var t = 10.0; t < 240; t += 30) SubtitleCue(t, t + 1),
+      for (var t = 300.0; t < 420; t += 3) SubtitleCue(t, t + 2.5),
+    ];
+
+    test('picks the most talking inside what is downloaded', () {
+      final s = SubtitleSync.bestStretch(
+        cues: cues,
+        available: [(start: 0, end: 500)],
+        length: 120,
+      )!;
+      expect(s.start, greaterThanOrEqualTo(290));
+      expect(s.end, lessThanOrEqualTo(430));
+    });
+
+    test('never past what is downloaded, nor over what was heard', () {
+      final s = SubtitleSync.bestStretch(
+        cues: cues,
+        available: [(start: 0, end: 500)],
+        length: 120,
+        heard: [(start: 280, end: 400)],
+      )!;
+      expect(s.start >= 400 || s.end <= 280, isTrue);
+      expect(s.end, lessThanOrEqualTo(500));
+    });
+
+    test('nothing when no free stretch is long enough', () {
+      expect(
+        SubtitleSync.bestStretch(
+          cues: cues,
+          available: [(start: 0, end: 100), (start: 200, end: 250)],
+          length: 120,
+        ),
+        isNull,
+      );
+    });
   });
 
   group('parseCues', () {
@@ -128,6 +191,53 @@ void main() {
       final other = _talk(seconds, seed: 99);
       final r = SubtitleSync.find(pcm, windowStart: 0, cues: other);
       expect(r == null || !r.sure, isTrue);
+    });
+
+    test('every copy at once: each gets its own answer', () {
+      final early = [
+        for (final c in talk) SubtitleCue(c.start - 2.75, c.end - 2.75),
+      ];
+      final late = [for (final c in talk) SubtitleCue(c.start + 12, c.end + 12)];
+      final other = _talk(seconds, seed: 99);
+      final r = SubtitleSync.findAll(pcm,
+          windowStart: 0, cueSets: [early, other, late]);
+      expect(r[0]!.delay, closeTo(2.75, 0.1));
+      expect(r[0]!.sure, isTrue);
+      expect(r[1] == null || !r[1]!.sure, isTrue);
+      expect(r[2]!.delay, closeTo(-12, 0.1));
+    });
+
+    test('a copy for something else rarely confirms over many stretches', () {
+      // Six 120 s listens of a long talky video, against a dozen unrelated
+      // subtitle files: two stretches agreeing by chance must stay rare.
+      const long = 720.0;
+      final longTalk = _talk(long, seed: 3);
+      final longPcm = _sound(long, longTalk, seed: 4);
+      var confirmed = 0;
+      for (var seed = 100; seed < 112; seed++) {
+        final wrong = _talk(long, seed: seed);
+        final evidence = SubtitleTimingEvidence();
+        for (var s = 0.0; s + 120 <= long; s += 120) {
+          final part = longPcm.sublist((s * SubtitleSync.sampleRate).round(),
+              ((s + 120) * SubtitleSync.sampleRate).round());
+          final r = SubtitleSync.find(part, windowStart: s, cues: wrong);
+          if (r != null && evidence.confirms(r, s, s + 120)) confirmed++;
+        }
+      }
+      expect(confirmed, lessThanOrEqualTo(1));
+
+      // The right copy, 5 s late: confirmed by the second stretch.
+      final right = [for (final c in longTalk) SubtitleCue(c.start + 5, c.end + 5)];
+      final evidence = SubtitleTimingEvidence();
+      var at = -1;
+      for (var i = 0; i < 6 && at < 0; i++) {
+        final s = i * 120.0;
+        final part = longPcm.sublist((s * SubtitleSync.sampleRate).round(),
+            ((s + 120) * SubtitleSync.sampleRate).round());
+        final r = SubtitleSync.find(part, windowStart: s, cues: right);
+        if (r != null && evidence.confirms(r, s, s + 120)) at = i;
+      }
+      expect(at, 1);
     });
 
     test('too few subtitles around: no answer', () {

@@ -35,7 +35,6 @@ class PlayerSettingsPanel extends StatefulWidget {
   final SubtitleTrackData? selectedSubtitle;
   final bool isLoadingSubtitles;
   final ValueChanged<SubtitleTrackData?> onSubtitleSelected;
-  final VoidCallback? onTryAnotherSubtitle;
   final String Function(String) getLanguageName;
 
   /// How far Sinhala made from English has got (0 to 1), and why it
@@ -66,8 +65,8 @@ class PlayerSettingsPanel extends StatefulWidget {
   /// as on the details page's picker (it never plays in another).
   final Set<AudioLanguage> unavailableAudio;
 
-  /// A quiet word under the timing on Auto Sync ("Synced"), or null — see
-  /// PlayerScreen._subtitleSyncNote.
+  /// A quiet word under the subtitles on their timing ("Checking the
+  /// timing…"), or null — see PlayerScreen._subtitleSyncNote.
   final String? subtitleSyncNote;
 
   /// Under the subtitles: why those shown may not match what's heard (a
@@ -104,7 +103,6 @@ class PlayerSettingsPanel extends StatefulWidget {
     required this.selectedSubtitle,
     required this.isLoadingSubtitles,
     required this.onSubtitleSelected,
-    this.onTryAnotherSubtitle,
     required this.getLanguageName,
     this.sinhalaProgress,
     this.sinhalaProblem,
@@ -596,15 +594,8 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel>
         trailing: selected == null ? _check : null,
         onTap: () => widget.onSubtitleSelected(null),
       ),
-      for (final entry in languages.entries) ...[
+      for (final entry in languages.entries)
         _subtitleRow(entry.value, entry.key),
-        if (entry.value.id == selected?.id &&
-            widget.onTryAnotherSubtitle != null)
-          _buildRow(
-            title: 'Try another subtitle',
-            onTap: widget.onTryAnotherSubtitle!,
-          ),
-      ],
     ];
     return ListView(
       key: const ValueKey('subtitles'),

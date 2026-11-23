@@ -301,37 +301,51 @@ class _PlayerScreenState extends State<PlayerScreen>
   double _subtitleDelaySeconds = 0.0;
   double _subtitleSpeed = 1.0;
 
-  // Auto Sync (see _maybeAutoSync): at work; the subtitles' cues already
-  // downloaded, by their url; the subtitles done with (synced, given up
-  // on, or timed by the viewer) and those tried, by id; where watching
-  // carried on from without a jump, and the position last seen.
+  // Subtitle timing (see _maybeAutoSync): a listen at work; each subtitle
+  // file's cues, by url.
   bool _autoSyncing = false;
-  Timer? _subtitleTimingDeadline;
   final Map<String, List<SubtitleCue>> _subtitleCues = {};
 
-  /// Subtitles (ids) found not to fit this video — their length, or no
-  /// match with the speech (see _tryAnotherSubtitle) — and those whose
-  /// length has been checked (see _checkSubtitleFits).
+  /// Subtitles (ids) found not to fit this video by their length (see
+  /// _fitsLength).
   final Set<String> _rejectedSubtitles = {};
-  final Set<String> _fitChecked = {};
+  // Subtitle files being downloaded (see _cuesOf); when the timing may next
+  // be looked at (see _maybeAutoSync).
+  final Map<String, Future<List<SubtitleCue>>> _cuesLoading = {};
+  final Set<String> _cuesFailed = {};
+  DateTime _nextSyncLook = DateTime(0);
+  // What each subtitle is (SubtitleService.kindOf) and whether its release
+  // conflicts with the copy playing, worked out once (see _kindOf).
+  final Map<String, SubtitleKind> _kindCache = {};
+  final Map<String, bool> _conflictCache = {};
   int _subtitleSelectionRequest = 0;
-  final Set<String> _autoSyncDone = {};
-  // Subtitles synced at least once: checked again now and then (see
-  // _autoSyncRecheck).
+  // Subtitles whose timing listening confirmed (or kept from an earlier
+  // visit): shown, and checked again now and then (see _autoSyncRecheck).
   final Set<String> _autoSynced = {};
-  // The sound Auto Sync last heard of this video, kept so another subtitle
-  // picked meanwhile is lined up at once (see _maybeAutoSync), and the
-  // subtitles already tried against it.
-  ({String url, double start, Int16List pcm})? _heard;
-  final Set<String> _heardTried = {};
-  // What each listen found, for each subtitle (see _autoSync: two
-  // stretches agreeing is enough), and where the next listen starts.
+  // What listening found for each subtitle (two separate stretches
+  // agreeing confirms its timing).
   final _autoSyncSeen = <String, SubtitleTimingEvidence>{};
-  final Map<String, Duration> _autoSyncFrom = {};
+  // The sound of the latest listens, kept (a few) so every copy — and a
+  // language picked later — is tested against it at once; every stretch
+  // listened to, so the next is another; and which copies have been
+  // tested against which stretch ("id@start").
+  final List<({String url, double start, double end, Int16List pcm})>
+      _heardStretches = [];
+  final List<({double start, double end})> _listened = [];
+  final Set<String> _testedOn = {};
+  // Testing copies against the sound kept, at work; where watching may
+  // listen again; the language none of whose copies fit, so far.
+  bool _testingCopies = false;
+  Duration _nextListenAt = Duration.zero;
+  String? _noFitLanguage;
+  // The stretches of this video watched here (downloaded, so listened to
+  // at once), the latest last.
+  final List<({double start, double end})> _watchedRanges = [];
 
   // Retiming against reference subtitles (see _retimeFromReferences): each
-  // subtitle's corrected file; those tried, and those timed so (Auto Sync's
-  // listening leaves them be); subtitles' downloaded text, by url.
+  // subtitle's corrected file; the references each was last tried with
+  // (tried again when there are others); those timed so; subtitles'
+  // downloaded text, by url.
   final Map<String, String> _retimedPaths = {};
 
   // Sinhala subtitles being made from English ones (SubtitleTranslator),
@@ -339,11 +353,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   SinhalaSubtitles? _sinhala;
   String? _sinhalaFrom;
   Future<SinhalaSubtitles?>? _sinhalaStarting;
-  final Set<String> _retimeTried = {};
+  final Map<String, String> _retimedWith = {};
   final Set<String> _referenceTimed = {};
   final Map<String, String> _subtitleTexts = {};
   final Map<String, ({int tries, Duration next})> _autoSyncTries = {};
-  Duration? _watchedFrom;
   Duration _autoSyncLastPos = Duration.zero;
 
   // Each subtitle's own timing, by its id, for going back to it: one
@@ -657,16 +670,21 @@ class _PlayerScreenState extends State<PlayerScreen>
     'Vietnamese',
   ];
 
-  // How long the video plays (without a jump) before Auto Sync listens;
-  // how much sound it takes, at least — less can be confidently wrong
-  // where talk hardly stops (Ghosts S1E7's first 75 s: 30 s out; see
-  // SubtitleSync.find) — and at most; how long it waits to try again when
-  // it couldn't tell, and how many times it tries.
-  static const _autoSyncFirst = Duration(seconds: 15);
-  static const _autoSyncShortest = Duration(seconds: 160);
-  static const _autoSyncLongest = Duration(minutes: 6);
-  static const _autoSyncRetry = Duration(seconds: 45);
-  static const _autoSyncMaxTries = 6;
+  // Listening for the subtitles' timing: how much sound each listen takes
+  // (two separate listens have to agree, so a shorter one than the 160 s
+  // a single answer needed: less can be confidently wrong where talk
+  // hardly stops — Ghosts S1E7's first 75 s: 30 s out — but two wrong
+  // answers agreeing is rare); how long watching goes on between listens
+  // while the timing's unknown; after how many listens with no copy
+  // fitting the panel says so, and how often it listens on after that;
+  // how many copies of a language are tested; how many listens' sound is
+  // kept.
+  static const _listenLength = Duration(seconds: 120);
+  static const _listenGap = Duration(seconds: 20);
+  static const _noFitAfter = 3;
+  static const _noFitGap = Duration(minutes: 3);
+  static const _copiesTested = 8;
+  static const _stretchesKept = 3;
 
   // Once synced, how often (in watching) it's checked again — with more
   // sound, and a copy can drift from the subtitles' partway (His Girl
@@ -675,10 +693,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   // taken.
   static const _autoSyncRecheck = Duration(minutes: 8);
   static const _autoSyncMinChange = 0.4;
-
-  /// The buffered video ahead of the position that auto sync waits for
-  /// before starting its second player (see _maybeAutoSync).
-  static const Duration _autoSyncMinLead = Duration(seconds: 30);
 
   // One client for every subtitle download, with timeouts: a new one per
   // call had none, so a dead server hung the sync.
@@ -1062,7 +1076,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     });
 
     // 5. Dispose seek bar / stats notifiers
-    _subtitleTimingDeadline?.cancel();
     _subtitleBottom.dispose();
     _positionNotifier.dispose();
     _durationNotifier.dispose();

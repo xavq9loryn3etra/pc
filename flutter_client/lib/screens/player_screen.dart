@@ -21,6 +21,7 @@ import 'package:sensors_plus/sensors_plus.dart';
 import '../services/audio_language_service.dart';
 import '../services/torrent/last_played_torrents.dart';
 import '../services/background_download_service.dart';
+import '../services/new_episode_watch.dart';
 import '../services/saved_movies_service.dart';
 import '../services/torrent/torrent_index_service.dart';
 import '../services/torrent/torrent_engine_service.dart';
@@ -1004,14 +1005,25 @@ class _PlayerScreenState extends State<PlayerScreen>
         (!_progressFinal && !_switchingQuality && _finishedWatching);
     final allWatched = finished && _nothingNextOut == true;
     final watchedHash = _currentStream.infoHash;
+    // The episode finished, taken now: a series waits for the one after it
+    // (NewEpisodeWatch), and comes back to Continue Watching when it's out.
+    final finishedSeason = _currentSeason ?? 1;
+    final finishedEpisode = _currentEpisode;
     final saved = _finalSave ??
         (_progressFinal ? Future<void>.value() : _saveProgress(force: true));
     saved.whenComplete(() async {
       if (allWatched) {
         print('[history] ${widget.movie.title}: watched to the end, '
             'off Continue Watching');
-        await SavedMoviesService()
-            .removeFromHistory(widget.movie.id, type: widget.movie.type);
+        final history = SavedMoviesService();
+        // The show as history keeps it (with its anime mark), before it goes.
+        final show =
+            history.getMovieFromHistory(widget.movie.id, type: widget.movie.type);
+        await history.removeFromHistory(widget.movie.id, type: widget.movie.type);
+        if (widget.movie.type == 'tv' && finishedEpisode != null) {
+          await NewEpisodeWatch().remember(show ?? widget.movie,
+              season: finishedSeason, episode: finishedEpisode);
+        }
       }
       await SavedMoviesService().flush();
     });

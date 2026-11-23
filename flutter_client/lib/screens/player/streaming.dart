@@ -6,7 +6,7 @@ part of '../player_screen.dart';
 /// measure it on a slow device (the S10, frame times under ~16 ms) before
 /// it goes out in a release. Set to false to switch it off. Never on
 /// phones, tablets or Windows.
-const bool _debandOnTv = true;
+const bool _debandOnTv = false;
 
 extension _PlayerStreaming on _PlayerScreenState {
   /// Sets the player up and opens the video. If any of that fails, the

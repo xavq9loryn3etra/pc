@@ -58,7 +58,7 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 - Gemini key is added from a phone via QR code (PhoneKeyServer).
 - **Player remote:** controls appear ONLY when OK is pressed. OK shows them without pausing, with the play button selected (Netflix style). Left/right skip 10 s showing only the skip icon. Up/down do nothing while controls are hidden. A slow seek shows a centred spinner, not the controls. TV subtitles are 40% bigger.
 - Continue Watching cards on TV have an "i" (info) button before play.
-- **TV picture (23 Nov 2026):** TVs prefer a copy that isn't Dolby-Vision-only (name says DV/DoVi/Dolby Vision with no HDR, HDR10, HDR10+ or HLG), because such copies show purple/green colours there. It is only a preference within the same quality among well-shared copies (`StreamResolver.pictureRank`); a Dolby-Vision-only copy still plays when it's the only good one. Phones, iPad and Windows are unchanged. TVs also turn on mpv debanding (`_debandOnTv` in `player/streaming.dart`); it must be measured on the S10 before a release and switched off if it costs too much.
+- **TV picture (23 Nov 2026):** TVs prefer a copy that isn't Dolby-Vision-only (name says DV/DoVi/Dolby Vision with no HDR, HDR10, HDR10+ or HLG), because such copies show purple/green colours there. It is only a preference within the same quality among well-shared copies (`StreamResolver.pictureRank`); a Dolby-Vision-only copy still plays when it's the only good one. Phones, iPad and Windows are unchanged. Debanding for TVs (`_debandOnTv` in `player/streaming.dart`) is built but OFF: on the S10 it cost nothing (0 dropped frames, 23 Nov 2026), but cheap TVs (e.g. Panasonic TH-32MS670N: 4× Cortex-A53 1.5 GHz, 1.5 GB) are far slower. Turn it on only after a tester tries a build with it on a real TV.
 
 ## Website (popcorn-organization/popcorn, `docs/`)
 
@@ -71,11 +71,7 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 ## Open items (waiting on the owner)
 
 - Google "Popcorn (Unverified)" verification: the owner will do it later (23 Nov 2026).
-- **To do (owner approved 23 Nov 2026): video stutters on TV while subtitles sync.** A tester saw it on the TV app (4.4.1). Likely causes: each listen converts ~2 million sound samples (`decodeSound`) and parses subtitle files (`_cuesOf`) on the screen's thread, which also draws the video; and the silent second player decodes the sound flat out on weak TV processors (surround formats are costly).
-  1. First measure on the S10 how long those steps hold the screen's thread during a listen.
-  2. Move that work off the screen's thread (as the matching already is).
-  3. If still needed: on TVs and slow devices, decode on one core, in small paced chunks, and test fewer copies at a time.
-  Ask the tester which TV/stick, and whether surround sound was on.
+- **Subtitle sync on TVs (23 Nov 2026):** a tester saw the video stutter on a TV (4.4.1) while subtitles synced. Fixed: decoded sound is read without per-sample conversion, subtitle files are parsed in an isolate, and on TVs and slow phones (`VisualEffectsService().isSlowDevice`) the listening player decodes on one core, paused half the time. Each listen logs `[frames]` (late screen frames, dropped video frames). On the S10 with TV settings: 0 late frames, 0 dropped. Not yet confirmed on a real TV: ask the tester.
 - **To do after 23 Nov 2026 (owner approved): hear dialogue better when syncing subtitles.**
   1. First: on surround copies (5.1/7.1), listen to the centre (dialogue) channel only, not a mono mix of everything (`subtitle_sync.dart` sets `audio-channels: mono`; speech is detected by loudness in the 300–3400 Hz band, which fights and music also fill).
   2. Only if action films still fail after that: build a quick test of a small on-device speech detector (e.g. Silero VAD). Measure speed and battery on the S10 and report before adding it. Expected: a few seconds of one core per listen; the runtime adds maybe 5–15 MB to the app; cheap TV sticks are slower.

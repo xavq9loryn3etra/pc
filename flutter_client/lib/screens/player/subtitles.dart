@@ -2108,6 +2108,25 @@ extension _PlayerSubtitles on _PlayerScreenState {
         _autoSynced.add(track.id);
       }
     }
+    // Sinhala made from English: the English's lines at the very same
+    // times — so the English's timing, once that's known (by listening, or
+    // kept from an earlier visit), is the Sinhala's too, at once. It was
+    // listened for afresh: "Syncing subtitles…" for minutes over English
+    // already in time.
+    final source = track?.translatedFrom;
+    if (track != null &&
+        source != null &&
+        !_autoSynced.contains(track.id) &&
+        _autoSynced.contains(source.id)) {
+      final known =
+          _subtitleTimings['drift:${source.id}'] ?? _subtitleTimings[source.id];
+      if (known != null) {
+        timing = known;
+        _autoSynced.add(track.id);
+        print('[sync] Sinhala takes the English timing '
+            '(${known.delay} s, speed ${known.speed})');
+      }
+    }
     final retime = (timing?.delay ?? 0.0) != _subtitleDelaySeconds ||
         (timing?.speed ?? 1.0) != _subtitleSpeed;
     if (!mounted) return; // Closed while the saved timing was read.

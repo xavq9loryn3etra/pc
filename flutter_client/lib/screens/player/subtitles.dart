@@ -1353,6 +1353,16 @@ extension _PlayerSubtitles on _PlayerScreenState {
       }
     }
     SchedulerBinding.instance.addTimingsCallback(onFrames);
+    // And the video's own dropped frames (what a viewer sees as stutter).
+    Future<int> dropped() async {
+      try {
+        final mpv = player.platform as NativePlayer;
+        return int.tryParse(await mpv.getProperty('frame-drop-count')) ?? 0;
+      } catch (_) {
+        return 0;
+      }
+    }
+    final droppedBefore = await dropped();
     final took = Stopwatch()..start();
     print('[sync] listening: ${from.round()}–${to.round()} s of the video'
         '${await _soundHasCentre() ? ' (centre channel)' : ''}, '
@@ -1404,8 +1414,10 @@ extension _PlayerSubtitles on _PlayerScreenState {
     }
     if (checking && mounted && _streamUrl == url) await _testCopies();
     SchedulerBinding.instance.removeTimingsCallback(onFrames);
+    final droppedNow = mounted ? await dropped() - droppedBefore : 0;
     print('[frames] while listening: $frames frames, $late over 16 ms, '
-        'the longest ${worst.inMilliseconds} ms');
+        'the longest ${worst.inMilliseconds} ms; '
+        '$droppedNow video frames dropped');
   }
 
   /// [track], timed already, against another stretch of the sound: moved

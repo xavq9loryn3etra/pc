@@ -349,7 +349,8 @@ class SyncService {
 
   /// Deletes the account's synced data — My List, Continue Watching,
   /// episode progress, language choices, the Gemini key, the copies last
-  /// played — from it and from every device signed in to it, this one
+  /// played, subtitle timings — from it and from every device signed in
+  /// to it, this one
   /// included. Nobody is signed out: the lists just start again, empty.
   ///
   /// Every page but this device's is deleted, and this one's holds a

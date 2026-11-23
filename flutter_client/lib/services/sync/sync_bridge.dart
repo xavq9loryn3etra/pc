@@ -4,6 +4,7 @@ import '../audio_language_service.dart';
 import '../gemini_key_service.dart';
 import '../new_episode_watch.dart';
 import '../saved_movies_service.dart';
+import '../subtitle_timing_store.dart';
 import '../torrent/last_played_torrents.dart';
 import 'sync_data.dart';
 import 'sync_ledger.dart';
@@ -50,6 +51,7 @@ class SyncBridge {
       lengths: saved.lengths,
       settings: settings,
       waiting: NewEpisodeWatch().exportForSync(),
+      timings: await SubtitleTimingStore().exportForSync(),
       ledger: SyncLedger(),
     );
   }
@@ -62,6 +64,7 @@ class SyncBridge {
     required Map<String, dynamic> lengths,
     required Map<String, String> settings,
     Map<String, dynamic> waiting = const {},
+    Map<String, Map<String, dynamic>> timings = const {},
     required SyncLedger ledger,
   }) {
     final data = SyncData();
@@ -117,6 +120,17 @@ class SyncBridge {
         't': ledger.changedAt(NewEpisodeWatch.section, e.key) ??
             (since is num ? since.toInt() : 1),
         'v': e.value,
+      };
+    }
+
+    // Each kept with its own time (near 1970 for one kept before sync).
+    for (final e in timings.entries) {
+      final t = e.value['t'];
+      if (e.value['v'] is! Map) continue;
+      data[SubtitleTimingStore.section][e.key] = {
+        't': ledger.changedAt(SubtitleTimingStore.section, e.key) ??
+            (t is num ? t.toInt() : 1),
+        'v': e.value['v'],
       };
     }
 
@@ -210,8 +224,13 @@ class SyncBridge {
       for (final e in live[NewEpisodeWatch.section]!)
         if (e.value['v'] is Map) e.key: e.value['v'],
     });
+    // And this.
+    final savingTimings = SubtitleTimingStore().replaceFromSync({
+      for (final e in live[SubtitleTimingStore.section]!) e.key: e.value,
+    });
     await saving;
     await savingWaiting;
+    await savingTimings;
 
     await _applySettings(merged, replace: replace);
   }
@@ -267,7 +286,8 @@ class SyncBridge {
 
   /// Takes away everything synced from this device — My List, Continue
   /// Watching, episode progress, language choices, the Gemini key, the
-  /// copies last played — and what it recorded of them (signing out).
+  /// copies last played, the subtitle timings confirmed — and what it
+  /// recorded of them (signing out).
   static Future<void> clearLocal() async {
     await apply(SyncData(), replace: true);
     SyncLedger().clear();

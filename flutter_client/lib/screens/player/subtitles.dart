@@ -585,7 +585,8 @@ extension _PlayerSubtitles on _PlayerScreenState {
   /// not checked afresh behind another.
   Future<void> _loadSavedTimings() async {
     final url = _streamUrl;
-    final prefs = await SharedPreferences.getInstance();
+    final store = SubtitleTimingStore();
+    await store.init();
     if (!mounted || _streamUrl != url) return;
     for (final s in _externalSubtitles) {
       if (_autoSynced.contains(s.id) ||
@@ -593,15 +594,10 @@ extension _PlayerSubtitles on _PlayerScreenState {
           _distrusted.contains(s.id)) {
         continue;
       }
-      final parts = prefs.getString(_timingKey(s))?.split('|');
-      if (parts == null || parts.length < 3 || parts[2] != 'confirmed') {
-        continue;
-      }
-      final delay = double.tryParse(parts[0]);
-      final speed = double.tryParse(parts[1]);
-      if (delay == null || speed == null) continue;
+      final saved = store.kept(_timingKey(s));
+      if (saved == null) continue;
       _autoSynced.add(s.id);
-      _subtitleTimings[s.id] = (delay: delay, speed: speed);
+      _subtitleTimings[s.id] = (delay: saved.delay, speed: saved.speed);
     }
   }
 
@@ -1938,7 +1934,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
       if (!mounted || _streamUrl != url) return;
       // A timing kept from listening was for the file as it came.
       final key = _timingKey(track);
-      SharedPreferences.getInstance().then((prefs) => prefs.remove(key));
+      unawaited(SubtitleTimingStore().forget(key));
       _autoSynced.remove(track.id);
       print('[sync] retimed by references '
           '(${picked.map((r) => '${r.lang}${fitting.contains(r) ? ', fits' : ''}').join('; ')}) in '
@@ -2058,28 +2054,14 @@ extension _PlayerSubtitles on _PlayerScreenState {
     ({double delay, double speed})? timing,
   }) async {
     final t = timing ?? (delay: _subtitleDelaySeconds, speed: _subtitleSpeed);
-    final key = _timingKey(track);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-        key, '${t.delay}|${t.speed}|confirmed');
+    await SubtitleTimingStore().remember(_timingKey(track), t);
   }
 
   /// [track]'s timing kept from an earlier visit (see _rememberTiming).
   Future<({double delay, double speed})?> _savedTiming(
     SubtitleTrackData track,
-  ) async {
-    final key = _timingKey(track);
-    final prefs = await SharedPreferences.getInstance();
-    final parts = prefs.getString(key)?.split('|');
-    if (parts == null || parts.length < 3 ||
-        parts[2] != 'confirmed') {
-      return null;
-    }
-    final delay = double.tryParse(parts[0]);
-    final speed = double.tryParse(parts[1]);
-    if (delay == null || speed == null) return null;
-    return (delay: delay, speed: speed);
-  }
+  ) =>
+      SubtitleTimingStore().timingOf(_timingKey(track));
 
   /// SubtitleSync.parseCues, off the screen's thread. (Static: a closure
   /// made in the screen's methods would carry the screen along, which an

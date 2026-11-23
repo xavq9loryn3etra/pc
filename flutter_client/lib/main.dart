@@ -31,6 +31,7 @@ import 'enums/app_mode.dart';
 import 'services/background_download_service.dart';
 import 'services/new_episode_watch.dart';
 import 'services/saved_movies_service.dart';
+import 'services/subtitle_timing_store.dart';
 import 'services/sync/sync_ledger.dart';
 import 'services/sync/sync_service.dart';
 import 'services/movie_tab_service.dart';
@@ -144,6 +145,8 @@ void main() async {
   await _initStep('SavedMoviesService', SavedMoviesService().init);
   // Series waiting for a new episode (synced, so before SyncService).
   await _initStep('NewEpisodeWatch', NewEpisodeWatch().init);
+  // Confirmed subtitle timings (synced, so before SyncService).
+  await _initStep('SubtitleTimingStore', SubtitleTimingStore().init);
   await _initStep('AppModeService', AppModeService().init);
   await _initStep('FeatureFlagsService', FeatureFlagsService().init);
   await _initStep('VisualEffectsService', VisualEffectsService().init);

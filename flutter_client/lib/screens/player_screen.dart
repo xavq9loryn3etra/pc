@@ -49,6 +49,7 @@ import 'web_player/web_player.dart';
 import '../services/scraper_service.dart';
 import '../services/skip_segments_service.dart';
 import '../services/subtitle_service.dart';
+import '../services/subtitle_timing_store.dart';
 import '../services/subtitle_translator.dart';
 import '../services/episode_numbering.dart';
 import '../services/gemini_key_service.dart';

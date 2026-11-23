@@ -33,12 +33,17 @@ class SyncData {
   ///   next to come out (NewEpisodeWatch) — key `tv_id`, value
   ///   `{movie, season, episode, since}`. App versions before it carry it
   ///   in [extra] when they read a page and leave it out of their own.
+  /// - `subtitle_timings`: subtitle timings that listening confirmed, per
+  ///   copy (SubtitleTimingStore) — key `<infohash>_<subtitle id>`, value
+  ///   `{d: delay, s: speed}` (mpv's sub-delay in seconds and sub-speed).
+  ///   Older app versions carry it in [extra] the same way.
   static const List<String> sections = [
     'list',
     'history',
     'episodes',
     'settings',
     'waiting',
+    'subtitle_timings',
   ];
 
   /// How long a removal is remembered. A device away longer than this may

@@ -241,13 +241,13 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
           // -----------------------------
           // 3. Top Bar (Fixed)
           // -----------------------------
-          // Scrolled: a soft dark shade from the top behind the logo
-          // (TopShade), as the phone's home — not an island round it.
+          // Scrolled: a soft dark shade in the top-left corner behind the
+          // logo (TopShade), as the phone's home — not an island round it.
           Positioned(
             top: 0,
             left: 0,
-            right: 0,
-            height: 120,
+            width: 480,
+            height: 260,
             child: ScrollShade(scroll: _scrollController),
           ),
           Positioned(top: 0, left: 0, right: 0, child: _buildTopBar(context)),

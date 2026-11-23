@@ -235,10 +235,11 @@ class LogoIsland extends StatelessWidget {
   Widget build(BuildContext context) => TitleIsland(shown: false, child: child);
 }
 
-/// A soft dark shade from the top edge, there while [shown] (the page
-/// scrolled), as the Apple TV app's and Netflix's: the logo or a page's
-/// title — and the clock above it — stay readable over what scrolls under,
-/// with no island round them. No blur, so the same on plain glass and TVs.
+/// A soft dark shade in the top-left corner, round the logo or a page's
+/// title (and the clock above it), there while [shown] (the page
+/// scrolled): it keeps them readable over what scrolls under, with no
+/// island round them and the rest of the top left clear. No blur, so the
+/// same on plain glass and TVs.
 class TopShade extends StatelessWidget {
   final bool shown;
 
@@ -246,24 +247,37 @@ class TopShade extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final wide = windowIsWide(context);
+    // Room round the logo/title: more on a wide window's bigger one.
+    final width = wide ? 460.0 : 340.0;
+    final height = wide ? 240.0 : 200.0;
     return IgnorePointer(
       child: AnimatedOpacity(
         opacity: shown ? 1 : 0,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
-        // Filling the space it's given (a bare box would size to nothing).
-        child: const SizedBox.expand(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color(0xB3000000),
-                  Color(0x73000000),
-                  Color(0x00000000)
-                ],
-                stops: [0, 0.55, 1],
+        child: Align(
+          alignment: Alignment.topLeft,
+          // Below the bar too, its fade's tail past it.
+          child: OverflowBox(
+            alignment: Alignment.topLeft,
+            minWidth: width,
+            maxWidth: width,
+            minHeight: height,
+            maxHeight: height,
+            child: const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment(-0.75, -0.55),
+                  radius: 0.95,
+                  colors: [
+                    Color(0xE6000000), // 90%
+                    Color(0xA6000000), // 65%
+                    Color(0x4D000000), // 30%
+                    Color(0x00000000),
+                  ],
+                  stops: [0, 0.4, 0.7, 1],
+                ),
               ),
             ),
           ),

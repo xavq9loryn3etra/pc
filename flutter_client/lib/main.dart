@@ -39,6 +39,7 @@ import 'services/tmdb_service.dart';
 import 'services/deep_link_service.dart';
 import 'services/feature_flags_service.dart';
 import 'services/gemini_key_service.dart';
+import 'services/torrent/built_in_subtitles.dart';
 import 'services/torrent/download_ahead_settings.dart';
 import 'services/torrent/torrent_engine_service.dart';
 import 'services/torrent/torrent_storage_service.dart';
@@ -149,6 +150,9 @@ void main() async {
   await _initStep('VisualEffectsService', VisualEffectsService().init);
   await _initStep('DownloadAheadSettings', DownloadAheadSettings().init);
   await _initStep('GeminiKeyService', GeminiKeyService().init);
+  // Which copies have subtitles built in, and the subtitle language, for
+  // ranking copies (StreamResolver).
+  await _initStep('BuiltInSubtitles', BuiltInSubtitles.init);
   // Syncing with Google Drive, if it's on — after everything it syncs has
   // loaded. Its first sync starts at once, in the background, while the
   // splash plays, so Home usually opens with the lists up to date.

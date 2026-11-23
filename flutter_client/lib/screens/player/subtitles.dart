@@ -431,6 +431,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
 
     embedded.sort((a, b) => trackRank(a).compareTo(trackRank(b)));
     _embeddedSubtitles = embedded;
+    BuiltInSubtitles.noteTracks(_currentStream.infoHash, embedded);
     _rebuildAvailableSubtitles();
   }
 

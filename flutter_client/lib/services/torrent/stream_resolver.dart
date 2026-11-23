@@ -9,6 +9,7 @@ import '../audio_language_service.dart';
 import '../episode_numbering.dart';
 import '../tmdb_service.dart';
 import '../tv_device.dart';
+import 'built_in_subtitles.dart';
 import 'free_space.dart';
 import 'torrent_download_registry.dart';
 import 'torrent_engine_service.dart';
@@ -148,6 +149,8 @@ class StreamResolver {
     streams = streams.where((s) => languageRank(s) < 2).toList();
     // Nor one heard, once played, to have no soundtrack in it.
     await _loadHeardCopies();
+    // Which copies have subtitles built in, for ranking (see _bestFirst).
+    await BuiltInSubtitles.init();
     streams = streams.where((s) {
       final heard = heardIn(imdbId, s.infoHash);
       final wanted = s.wantedAudio?.language;
@@ -948,8 +951,10 @@ class StreamResolver {
 
   /// Groups [streams] (as sorted by [getAvailableStreams]) into one option
   /// per quality, highest quality first. Within a quality, torrents with a
-  /// healthy number of sharers come first — single episodes before season
-  /// packs, then smallest first, the same picture for less to download —
+  /// healthy number of sharers come first — with subtitles on, those with
+  /// them built in, in the viewer's language (see BuiltInSubtitles.rank);
+  /// single episodes before season packs, then smallest first, the same
+  /// picture for less to download —
   /// then the rest by sharers.
   /// [preferHash] (the last-played torrent) is put first in its quality
   /// regardless, so resuming reuses what's already downloaded.
@@ -1098,6 +1103,12 @@ class StreamResolver {
     final maxSeeds = group.fold<int>(0, (m, s) => math.max(m, s.seeders ?? 0));
     final floor = math.max(_minHealthySeeders, (maxSeeds * 0.2).round());
     bool healthy(TorrentStream s) => (s.seeders ?? 0) >= floor;
+    // The subtitle language wanted (none: subtitles off), and each copy's
+    // BuiltInSubtitles.rank for it, worked out once.
+    final wantedSubtitles = BuiltInSubtitles.wantedLanguage;
+    final subtitleRanks = <int, int>{};
+    int subtitles(int i) => subtitleRanks[i] ??=
+        BuiltInSubtitles.rank(group[i], wantedSubtitles);
 
     // Index tie-break keeps the incoming (score) order between equals —
     // List.sort isn't stable.
@@ -1127,6 +1138,12 @@ class StreamResolver {
         // start.
         final pa = pictureRank(sa), pb = pictureRank(sb);
         if (pa != pb) return pa.compareTo(pb);
+        // With subtitles on, a copy with them built in, in the viewer's
+        // language, before one without (see BuiltInSubtitles.rank): they
+        // are always in time with the video. Seen to have them before
+        // named as having them.
+        final ba = subtitles(a.key), bb = subtitles(b.key);
+        if (ba != bb) return ba.compareTo(bb);
         // A torrent of just this episode before a season pack: it starts
         // sooner, as there's only one file's metadata to fetch.
         if (sa.isPack != sb.isPack) return sa.isPack ? 1 : -1;

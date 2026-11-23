@@ -73,6 +73,17 @@ class SubtitleTimingEvidence {
   /// How many stretches have given an answer that counts.
   int get heard => _samples.length;
 
+  /// A timing known from elsewhere — the series' previous episode, with
+  /// the same video and subtitle releases (Attack on Titan S2E5 and E6:
+  /// both +50 s): it counts as one stretch, so one listen agreeing confirms
+  /// it.
+  void seed(double delay, double speed) => _samples.add((
+        start: -1e9,
+        end: -1e9 + 1,
+        result: SubtitleSyncResult(
+            delay: delay, speed: speed, score: 1, margin: 1),
+      ));
+
   /// Records [result], heard from [start] to [end] seconds of the video;
   /// true when another, separate stretch already agreed.
   bool confirms(SubtitleSyncResult result, double start, double end) {

@@ -297,10 +297,12 @@ extension _PlayerSubtitles on _PlayerScreenState {
   /// Deletes the retimed subtitle files written to the temp folder (see
   /// _retimeFromReferences) and forgets them: they were for one file.
   void _discardRetimedFiles() {
-    for (final path in _retimedPaths.values) {
+    for (final path in [..._retimedPaths.values, ..._driftPaths.values]) {
       File(path).delete().ignore();
     }
     _retimedPaths.clear();
+    _driftPaths.clear();
+    _driftPoints.clear();
   }
 
   /// Everything learnt about subtitles' timing: it was for one file (another
@@ -607,6 +609,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
     // After this, whatever stays selected: retimed if it can be now.
     Future<void>.delayed(Duration.zero, _retimeSelected);
     await _loadSavedTimings();
+    await _loadSeriesTimings();
     if (!mounted) return;
     final sinhala = _sinhalaTrack();
     // Each language's best first (the panel shows one per language).
@@ -828,7 +831,9 @@ extension _PlayerSubtitles on _PlayerScreenState {
       }
     } else {
       // Its retimed copy, when there is one (see _retimeFromReferences).
-      await _showSubtitleFile(_retimedPaths[track.id] ?? track.url, track.lang);
+      await _showSubtitleFile(
+          _retimedPaths[track.id] ?? _driftPaths[track.id] ?? track.url,
+          track.lang);
     }
   }
 
@@ -1431,6 +1436,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
     print('[sync] ${track.lang} again ${start.round()}–${end.round()} s: '
         '$result');
     if (result == null || !mounted || _streamUrl != url) return;
+    if (await _followDrift(track, result, (start + end) / 2)) return;
     final evidence =
         _autoSyncSeen.putIfAbsent(track.id, SubtitleTimingEvidence.new);
     if (!evidence.confirms(result, start, end)) return;
@@ -1447,15 +1453,203 @@ extension _PlayerSubtitles on _PlayerScreenState {
     }
     print('[sync] moved: ${result.delay.toStringAsFixed(2)} s, '
         'speed ${result.speed.toStringAsFixed(4)}');
-    await _applyConfirmedTiming(track, (delay: delay, speed: result.speed));
+    await _applyConfirmedTiming(track, (delay: delay, speed: result.speed),
+        at: (start + end) / 2);
+  }
+
+  /// A clear answer for [track] (timed already) at [at] seconds of the
+  /// video, a little off from its timing there: the subtitles drift from
+  /// this copy (made for a slightly different cut — Street Fighter's DONNY
+  /// subtitle was 42.3 s early at 52 min, 47.1 s at 57 min), so they're
+  /// retimed piece by piece (SubtitleRetime) to the delays found along
+  /// the way, rather than one delay for the whole film. Only for a strong
+  /// answer within [_driftReach] of the timing there; a bigger jump needs
+  /// two stretches agreeing, as before. Whether it was taken.
+  Future<bool> _followDrift(
+      SubtitleTrackData track, SubtitleSyncResult result, double at) async {
+    final points = _driftPoints[track.id];
+    // Its overall timing (while drifting, the file carries the timing and
+    // the player none: see below).
+    final timing =
+        _subtitleTimings['drift:${track.id}'] ?? _subtitleTimings[track.id];
+    if (points == null || points.isEmpty || timing == null) return false;
+    // Not for Sinhala (made from English as it comes), nor one retimed
+    // against references already.
+    if (track.translatedFrom != null || _retimedPaths.containsKey(track.id)) {
+      return false;
+    }
+    final strong = result.score >= 0.15 && result.margin >= 0.05;
+    if (!strong || (result.speed - timing.speed).abs() > 0.001) return false;
+    var here = points.first;
+    for (final p in points) {
+      if ((p.at - at).abs() < (here.at - at).abs()) here = p;
+    }
+    final off = (result.delay - here.delay).abs();
+    if (off > _PlayerScreenState._driftReach) return false;
+    points
+      ..add((at: at, delay: (result.delay * 100).round() / 100))
+      ..sort((a, b) => a.at.compareTo(b.at));
+    if (points.length > 40) points.removeAt(0);
+    if (off < _PlayerScreenState._autoSyncMinChange) {
+      print('[sync] still in time here');
+      return true;
+    }
+    final delays = points.map((p) => p.delay);
+    final spread = delays.reduce(math.max) - delays.reduce(math.min);
+    if (spread < _PlayerScreenState._autoSyncMinChange) return true;
+    print('[sync] drifting: ${result.delay.toStringAsFixed(2)} s at '
+        '${(at / 60).toStringAsFixed(1)} min (was ${here.delay} s there); '
+        'retimed piece by piece');
+    final url = _streamUrl;
+    try {
+      final text = await _subtitleText(track);
+      final map = TimingMap(timing.speed, [
+        for (final p in points) (at: p.at, delay: p.delay),
+      ]);
+      final retimed = SubtitleRetime.retime(text, map);
+      final ext = text.contains('[Events]')
+          ? 'ass'
+          : text.trimLeft().startsWith('WEBVTT')
+              ? 'vtt'
+              : 'srt';
+      final temp = await getTemporaryDirectory();
+      final file = File('${temp.path}${Platform.pathSeparator}'
+          'popcorn_drift_${track.id}_${DateTime.now().millisecondsSinceEpoch}.$ext');
+      await file.writeAsString(retimed);
+      if (!mounted || _streamUrl != url) {
+        await file.delete();
+        return true;
+      }
+      final old = _driftPaths[track.id];
+      _driftPaths[track.id] = file.path;
+      if (old != null) File(old).delete().ignore();
+      if (_selectedSubtitle?.id == track.id) {
+        _updateState(() {
+          _subtitleDelaySeconds = 0;
+          _subtitleSpeed = 1;
+        });
+        await _applySubtitleTimingToMpv();
+        await _applySubtitleTrackToPlayer(track);
+      }
+      // The file carries the timing now; [timing] stays as its overall one
+      // (kept for next time, and for going back to it).
+      _subtitleTimings[track.id] = (delay: 0.0, speed: 1.0);
+      _subtitleTimings['drift:${track.id}'] = timing;
+    } catch (e) {
+      print('[sync] retiming for drift failed: $e');
+    }
+    return true;
+  }
+
+  /// Series: where [s]'s timing carries over between episodes — the show,
+  /// the video's release (group and kind of source) and the subtitle's.
+  /// Null when either release is too vague to tell.
+  String? _seriesTimingKey(SubtitleTrackData s) {
+    if (widget.details.type != 'tv') return null;
+    final videoName = _currentStream.title.split('\n').first;
+    final videoGroup = _releaseGroupOf(videoName);
+    final subGroup =
+        s.releaseGroup?.toLowerCase() ?? _releaseGroupOf(s.releaseName ?? '');
+    if (videoGroup == null || subGroup == null) return null;
+    return '${widget.details.id}|$videoGroup|'
+        '${SubtitleService.sourceOf(videoName)}|$subGroup|'
+        '${SubtitleService.sourceOf(s.releaseName ?? '')}';
+  }
+
+  static final _releaseGroupPattern = RegExp(
+      r'-([A-Za-z0-9]+)(?:\[[^\]]*\])?(?:\.(?:mkv|mp4|avi|srt|ass))?\s*$');
+
+  /// The release group at the end of a release name ("…H264-NTb" → "ntb").
+  static String? _releaseGroupOf(String name) => _releaseGroupPattern
+      .firstMatch(name.trim())
+      ?.group(1)
+      ?.toLowerCase();
+
+  static const _seriesTimingsKey = 'subtitle_series_timings';
+
+  /// The series timings (see _seriesTimingKey), read once.
+  Future<void> _loadSeriesTimings() async {
+    if (_seriesTimings != null) return;
+    final prefs = await SharedPreferences.getInstance();
+    final found = <String, ({double delay, double speed})>{};
+    try {
+      final raw = jsonDecode(prefs.getString(_seriesTimingsKey) ?? '{}');
+      if (raw is Map) {
+        for (final e in raw.entries) {
+          final v = e.value;
+          if (v is Map && v['d'] is num && v['s'] is num) {
+            found['${e.key}'] = (
+              delay: (v['d'] as num).toDouble(),
+              speed: (v['s'] as num).toDouble(),
+            );
+          }
+        }
+      }
+    } catch (_) {}
+    _seriesTimings = found;
+  }
+
+  /// [s]'s timing confirmed: kept for the series' next episodes.
+  Future<void> _rememberSeriesTiming(
+      SubtitleTrackData s, ({double delay, double speed}) timing) async {
+    final key = _seriesTimingKey(s);
+    if (key == null) return;
+    (_seriesTimings ??= {})[key] = timing;
+    final prefs = await SharedPreferences.getInstance();
+    Map<String, dynamic> stored;
+    try {
+      stored = Map<String, dynamic>.from(
+          jsonDecode(prefs.getString(_seriesTimingsKey) ?? '{}') as Map);
+    } catch (_) {
+      stored = {};
+    }
+    stored[key] = {
+      'd': timing.delay,
+      's': timing.speed,
+      't': DateTime.now().millisecondsSinceEpoch,
+    };
+    // The 200 latest.
+    if (stored.length > 200) {
+      final byAge = stored.entries.toList()
+        ..sort((a, b) => ((a.value as Map)['t'] as num? ?? 0)
+            .compareTo((b.value as Map)['t'] as num? ?? 0));
+      for (final e in byAge.take(stored.length - 200)) {
+        stored.remove(e.key);
+      }
+    }
+    await prefs.setString(_seriesTimingsKey, jsonEncode(stored));
+  }
+
+  /// What listening's found for [c] so far — on a series, starting from
+  /// the timing its releases had in an earlier episode (see
+  /// _seriesTimingKey), so one listen agreeing confirms it.
+  SubtitleTimingEvidence _evidenceFor(SubtitleTrackData c) {
+    final evidence = SubtitleTimingEvidence();
+    final key = _seriesTimingKey(c);
+    final known = key == null ? null : _seriesTimings?[key];
+    if (known != null) {
+      evidence.seed(known.delay, known.speed);
+      print('[sync] ${c.id}: starting from the earlier episode\'s timing '
+          '(${known.delay} s)');
+    }
+    return evidence;
   }
 
   /// [track]'s timing confirmed: kept (for this copy, next time too), and
   /// put on screen if it's the one shown.
   Future<void> _applyConfirmedTiming(
-      SubtitleTrackData track, ({double delay, double speed}) timing) async {
+      SubtitleTrackData track, ({double delay, double speed}) timing,
+      {double? at}) async {
     _autoSynced.add(track.id);
     _subtitleTimings[track.id] = timing;
+    _subtitleTimings.remove('drift:${track.id}');
+    // One timing for the film again: points along it start afresh.
+    _driftPoints[track.id] = [
+      if (at != null) (at: at, delay: timing.delay),
+    ];
+    final drifted = _driftPaths.remove(track.id);
+    if (drifted != null) File(drifted).delete().ignore();
+    unawaited(_rememberSeriesTiming(track, timing));
     _autoSyncTries[track.id] =
         (tries: 0, next: _currentPosition + _autoSyncRecheckEvery);
     // (Not for one shown retimed: the timing's on top of its retimed copy,
@@ -1469,6 +1663,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
         _subtitleSpeed = timing.speed;
       });
       await _applySubtitleTimingToMpv();
+      if (drifted != null) await _applySubtitleTrackToPlayer(track);
     }
   }
 
@@ -1545,13 +1740,13 @@ extension _PlayerSubtitles on _PlayerScreenState {
           _testedOn.add('${c.id}@${h.start}');
           print('[sync]   ${c.lang} ${c.id}: $r');
           if (r == null || _autoSynced.contains(c.id)) continue;
-          final evidence =
-              _autoSyncSeen.putIfAbsent(c.id, SubtitleTimingEvidence.new);
+          final evidence = _autoSyncSeen.putIfAbsent(c.id, () => _evidenceFor(c));
           if (!evidence.confirms(r, h.start, h.end)) continue;
           print('[sync] ${c.lang} ${c.id} timed: two stretches agree on '
               '${r.delay.toStringAsFixed(2)} s');
           await _applyConfirmedTiming(
-              c, (delay: (r.delay * 100).round() / 100, speed: r.speed));
+              c, (delay: (r.delay * 100).round() / 100, speed: r.speed),
+              at: (h.start + h.end) / 2);
           confirmed.add(c);
           if (!mounted || _streamUrl != url) return;
         }

@@ -361,6 +361,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   // (tried again when there are others); those timed so; subtitles'
   // downloaded text, by url.
   final Map<String, String> _retimedPaths = {};
+  // A timed copy that drifts from the video (made for a slightly different
+  // cut): its delay at points along the video, and its file retimed piece
+  // by piece to them (see _followDrift).
+  final Map<String, List<({double at, double delay})>> _driftPoints = {};
+  final Map<String, String> _driftPaths = {};
+  // Series: subtitle timings confirmed for earlier episodes, by show and
+  // the video's and subtitle's releases (see _seriesTimingKey).
+  Map<String, ({double delay, double speed})>? _seriesTimings;
 
   // Sinhala subtitles being made from English ones (SubtitleTranslator),
   // and the English track's id they're made from.
@@ -712,6 +720,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   // taken.
   static const _autoSyncRecheck = Duration(minutes: 8);
   static const _autoSyncMinChange = 0.4;
+  // How far a strong answer may be from a timed copy's delay there and
+  // still be followed as drift (see _followDrift), not a jump.
+  static const _driftReach = 8.0;
 
   // One client for every subtitle download, with timeouts: a new one per
   // call had none, so a dead server hung the sync.

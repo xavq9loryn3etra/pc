@@ -77,6 +77,15 @@ void main() {
       expect(evidence.confirms(b, 3348, 3468), isFalse);
     });
 
+    test("a series' earlier episode's timing: one listen agreeing confirms", () {
+      // Attack on Titan S2E5 and E6, same releases: both +50 s.
+      final evidence = SubtitleTimingEvidence()..seed(50.0, 1);
+      const near = SubtitleSyncResult(delay: 50.2, speed: 1, score: .2, margin: .05);
+      const far = SubtitleSyncResult(delay: 12.0, speed: 1, score: .2, margin: .05);
+      expect(evidence.confirms(far, 0, 120), isFalse);
+      expect(evidence.confirms(near, 200, 320), isTrue);
+    });
+
     test('answers that disagree never confirm', () {
       final evidence = SubtitleTimingEvidence();
       for (final (i, d) in [4.8, 15.9, -7.2, 9.1].indexed) {

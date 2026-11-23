@@ -92,107 +92,142 @@ class _GlassBubbleBarState extends State<GlassBubbleBar> {
           width: trailing == null
               ? d + _gap + pillWidth
               : trailingLeft + trailingWidth,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Positioned.fill(
-                child: ClipPath(
-                  clipper: _BubbleClipper(
-                    diameter: d,
-                    gap: _gap,
-                    pillWidth: pillWidth,
-                    trailingWidth: trailing == null ? null : trailingWidth,
-                    grow: grow,
-                    mirror: mirror,
-                  ),
-                  child: GlassBlur(
-                    child: ColoredBox(color: glassTint(context)),
-                  ),
-                ),
-              ),
-              Positioned(
-                left: mirror ? total - d : 0,
-                top: 0,
-                width: d,
-                height: d,
-                child: widget.leading,
-              ),
-              Positioned(
-                left: mirror ? 0 : d + _gap,
-                top: 0,
-                width: pillWidth,
-                height: d,
-                // Scaled from the bubble's edge by the circle, matching how
-                // the clipper grows the glass, so the content rides with it.
-                child: Transform.scale(
-                  scale: grow,
-                  alignment:
-                      mirror ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Opacity(
-                    opacity: widget.reveal.clamp(0.0, 1.0),
-                    // OverflowBox lets the title take its natural width
-                    // (capped to the bar) regardless of the bubble's current
-                    // size, so it can be measured — including on the first
-                    // frame, before the bubble has been sized to it.
-                    //
-                    // Height is loosened too: OverflowBox otherwise passes
-                    // the bubble's tight 40px height straight through, which
-                    // stretched a plain-text title's box and left the text
-                    // drawn at its top instead of vertically centred.
-                    child: OverflowBox(
-                      minWidth: 0,
-                      maxWidth: maxTitle,
-                      minHeight: 0,
-                      maxHeight: d,
-                      child: _SizeReporter(
-                        onWidth: (w) {
-                          if ((w - _titleWidth).abs() > 0.5) {
-                            setState(() => _titleWidth = w);
-                          }
-                        },
-                        child: widget.title,
-                      ),
+          child: Builder(builder: (context) {
+            final shape = _BubbleClipper(
+              diameter: d,
+              gap: _gap,
+              pillWidth: pillWidth,
+              trailingWidth: trailing == null ? null : trailingWidth,
+              grow: grow,
+              mirror: mirror,
+            );
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(
+                  child: ClipPath(
+                    clipper: shape,
+                    child: GlassBlur(
+                      child: ColoredBox(color: glassTint(context)),
                     ),
                   ),
                 ),
-              ),
-              if (trailing != null)
+                // The hairline edge round the whole shape — the circle, the
+                // neck and the pill — as the app's other glass has: where the
+                // glass is plain (black on black), it alone shows the shape.
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(painter: _BubbleEdge(shape, kGlassEdge)),
+                  ),
+                ),
                 Positioned(
-                  // Rides with the title's bubble as it grows (see
-                  // _BubbleClipper), then its own grows from its left.
-                  left: d + _gap + pillWidth * grow + _gap,
+                  left: mirror ? total - d : 0,
                   top: 0,
-                  width: trailingWidth,
+                  width: d,
                   height: d,
+                  child: widget.leading,
+                ),
+                Positioned(
+                  left: mirror ? 0 : d + _gap,
+                  top: 0,
+                  width: pillWidth,
+                  height: d,
+                  // Scaled from the bubble's edge by the circle, matching how
+                  // the clipper grows the glass, so the content rides with it.
                   child: Transform.scale(
                     scale: grow,
-                    alignment: Alignment.centerLeft,
+                    alignment:
+                        mirror ? Alignment.centerRight : Alignment.centerLeft,
                     child: Opacity(
                       opacity: widget.reveal.clamp(0.0, 1.0),
+                      // OverflowBox lets the title take its natural width
+                      // (capped to the bar) regardless of the bubble's current
+                      // size, so it can be measured — including on the first
+                      // frame, before the bubble has been sized to it.
+                      //
+                      // Height is loosened too: OverflowBox otherwise passes
+                      // the bubble's tight 40px height straight through, which
+                      // stretched a plain-text title's box and left the text
+                      // drawn at its top instead of vertically centred.
                       child: OverflowBox(
-                        alignment: Alignment.centerLeft,
                         minWidth: 0,
-                        maxWidth: constraints.maxWidth,
-                        minHeight: d,
+                        maxWidth: maxTitle,
+                        minHeight: 0,
                         maxHeight: d,
                         child: _SizeReporter(
                           onWidth: (w) {
-                            if ((w - _trailingWidth).abs() > 0.5) {
-                              setState(() => _trailingWidth = w);
+                            if ((w - _titleWidth).abs() > 0.5) {
+                              setState(() => _titleWidth = w);
                             }
                           },
-                          child: trailing,
+                          child: widget.title,
                         ),
                       ),
                     ),
                   ),
                 ),
-            ],
-          ),
+                if (trailing != null)
+                  Positioned(
+                    // Rides with the title's bubble as it grows (see
+                    // _BubbleClipper), then its own grows from its left.
+                    left: d + _gap + pillWidth * grow + _gap,
+                    top: 0,
+                    width: trailingWidth,
+                    height: d,
+                    child: Transform.scale(
+                      scale: grow,
+                      alignment: Alignment.centerLeft,
+                      child: Opacity(
+                        opacity: widget.reveal.clamp(0.0, 1.0),
+                        child: OverflowBox(
+                          alignment: Alignment.centerLeft,
+                          minWidth: 0,
+                          maxWidth: constraints.maxWidth,
+                          minHeight: d,
+                          maxHeight: d,
+                          child: _SizeReporter(
+                            onWidth: (w) {
+                              if ((w - _trailingWidth).abs() > 0.5) {
+                                setState(() => _trailingWidth = w);
+                              }
+                            },
+                            child: trailing,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          }),
         );
       },
     );
   }
+}
+
+/// [GlassBubbleBar]'s edge: its shape ([clipper]'s), stroked with a
+/// hairline of [color] (kGlassEdge).
+class _BubbleEdge extends CustomPainter {
+  final CustomClipper<Path> clipper;
+  final Color color;
+
+  const _BubbleEdge(this.clipper, this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawPath(
+      clipper.getClip(size),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = color
+        ..isAntiAlias = true,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_BubbleEdge old) => true;
 }
 
 /// Circle ∪ bubble ∪ a thin concave neck between them — and, with

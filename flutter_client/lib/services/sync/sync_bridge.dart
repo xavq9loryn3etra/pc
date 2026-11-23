@@ -2,6 +2,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../audio_language_service.dart';
 import '../gemini_key_service.dart';
+import '../new_episode_watch.dart';
 import '../saved_movies_service.dart';
 import '../torrent/last_played_torrents.dart';
 import 'sync_data.dart';
@@ -48,6 +49,7 @@ class SyncBridge {
       episodes: saved.episodes,
       lengths: saved.lengths,
       settings: settings,
+      waiting: NewEpisodeWatch().exportForSync(),
       ledger: SyncLedger(),
     );
   }
@@ -59,6 +61,7 @@ class SyncBridge {
     required Map<String, dynamic> episodes,
     required Map<String, dynamic> lengths,
     required Map<String, String> settings,
+    Map<String, dynamic> waiting = const {},
     required SyncLedger ledger,
   }) {
     final data = SyncData();
@@ -103,6 +106,16 @@ class SyncBridge {
     for (final e in settings.entries) {
       data['settings'][e.key] = {
         't': ledger.changedAt('settings', e.key) ?? 1,
+        'v': e.value,
+      };
+    }
+
+    for (final e in waiting.entries) {
+      if (e.value is! Map) continue;
+      final since = (e.value as Map)['since'];
+      data[NewEpisodeWatch.section][e.key] = {
+        't': ledger.changedAt(NewEpisodeWatch.section, e.key) ??
+            (since is num ? since.toInt() : 1),
         'v': e.value,
       };
     }
@@ -192,7 +205,13 @@ class SyncBridge {
       },
       lengths: {...merged.lengths},
     );
+    // Swapped before the first pause too.
+    final savingWaiting = NewEpisodeWatch().replaceFromSync({
+      for (final e in live[NewEpisodeWatch.section]!)
+        if (e.value['v'] is Map) e.key: e.value['v'],
+    });
     await saving;
+    await savingWaiting;
 
     await _applySettings(merged, replace: replace);
   }

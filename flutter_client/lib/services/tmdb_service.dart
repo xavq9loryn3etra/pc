@@ -1761,6 +1761,40 @@ class TMDBService {
     ];
   }
 
+  /// A show's seasons by number (not the specials, season 0) as the player
+  /// numbers them — TMDB's "Seasons" split where it has one (see
+  /// [_splitSeasons]) — and whether TMDB says it has ended or was
+  /// cancelled. A light look-up (no credits, pictures or ratings), for
+  /// NewEpisodeWatch. Null when TMDB couldn't be asked.
+  Future<({List<int> seasons, bool ended})?> showSeasons(String tvId) async {
+    try {
+      final response = await _dio.get(
+        '$_baseUrl/tv/$tvId',
+        queryParameters: {'api_key': _apiKey},
+      );
+      final data = response.data as Map;
+      final raw = data['seasons'] as List? ?? const [];
+      final split = await _splitSeasons(tvId, raw);
+      final seasons = split != null
+          ? (split.keys.toList()..sort())
+          : ([
+              for (final s in raw)
+                if (s is Map &&
+                    s['season_number'] is int &&
+                    (s['season_number'] as int) > 0)
+                  s['season_number'] as int,
+            ]..sort());
+      final status = '${data['status'] ?? ''}'.toLowerCase();
+      return (
+        seasons: seasons,
+        ended: status == 'ended' || status == 'canceled' || status == 'cancelled',
+      );
+    } catch (e) {
+      print('TMDB show seasons error: $e');
+      return null;
+    }
+  }
+
   Future<List<Episode>> _seasonEpisodes(String tvId, int seasonNumber) async {
     final key = 'season_${tvId}_$seasonNumber';
     if (_cache.containsKey(key) && _cache[key]!.isValid(30)) {

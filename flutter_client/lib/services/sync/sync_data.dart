@@ -29,11 +29,16 @@ class SyncData {
   ///   fraction.
   /// - `settings`: language choices — key the stored setting's name, value
   ///   its text.
+  /// - `waiting`: series whose latest episode was watched, waiting for the
+  ///   next to come out (NewEpisodeWatch) — key `tv_id`, value
+  ///   `{movie, season, episode, since}`. App versions before it carry it
+  ///   in [extra] when they read a page and leave it out of their own.
   static const List<String> sections = [
     'list',
     'history',
     'episodes',
     'settings',
+    'waiting',
   ];
 
   /// How long a removal is remembered. A device away longer than this may

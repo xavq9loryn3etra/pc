@@ -29,6 +29,7 @@ import 'widgets/tv_screen_scale.dart';
 import 'services/app_mode_service.dart';
 import 'enums/app_mode.dart';
 import 'services/background_download_service.dart';
+import 'services/new_episode_watch.dart';
 import 'services/saved_movies_service.dart';
 import 'services/sync/sync_ledger.dart';
 import 'services/sync/sync_service.dart';
@@ -141,6 +142,8 @@ void main() async {
   // When each synced item last changed: read before anything can change.
   await _initStep('SyncLedger', SyncLedger().init);
   await _initStep('SavedMoviesService', SavedMoviesService().init);
+  // Series waiting for a new episode (synced, so before SyncService).
+  await _initStep('NewEpisodeWatch', NewEpisodeWatch().init);
   await _initStep('AppModeService', AppModeService().init);
   await _initStep('FeatureFlagsService', FeatureFlagsService().init);
   await _initStep('VisualEffectsService', VisualEffectsService().init);
@@ -284,6 +287,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     // Image precaching needs a context below MaterialApp (MediaQuery), so
     // start once the first frame is up.
     WidgetsBinding.instance.addPostFrameCallback((_) => _warmUpSelector());
+    // Series waiting for a new episode: looked up in the background, well
+    // after the first frame (see NewEpisodeWatch.start).
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => NewEpisodeWatch().start());
     _initConnectivity();
     DeepLinkService().init(_navigatorKey);
     // What sync has to say as it happens (another device removed many
@@ -340,7 +347,11 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         state == AppLifecycleState.detached) {
       SyncService().onPause();
     }
-    if (state == AppLifecycleState.resumed) SyncService().onResume();
+    if (state == AppLifecycleState.resumed) {
+      SyncService().onResume();
+      // At most once a day per show (NewEpisodeWatch.checkEvery).
+      NewEpisodeWatch().checkSoon();
+    }
     // Picks up flag edits (hide_playback, maintenance) without a cold
     // restart. (A forced update waits for the next start: _recheckConfig.)
     if (state == AppLifecycleState.resumed) {

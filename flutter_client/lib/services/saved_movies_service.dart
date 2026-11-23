@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/movie.dart';
+import 'new_episode_watch.dart';
 import 'sync/sync_ledger.dart';
 import 'torrent/last_played_torrents.dart';
 
@@ -474,6 +475,8 @@ class SavedMoviesService with ChangeNotifier {
       SyncLedger().touch('episodes', key);
     }
     _evictOldest();
+    // Watching a series again: it isn't waiting for a new episode any more.
+    if (movie.type == 'tv') NewEpisodeWatch().forget(movie.id);
 
     _markDirty();
     notifyListeners();

@@ -21,6 +21,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import '../services/audio_language_service.dart';
 import '../services/torrent/last_played_torrents.dart';
+import '../services/torrent/built_in_subtitles.dart';
 import '../services/background_download_service.dart';
 import '../services/new_episode_watch.dart';
 import '../services/saved_movies_service.dart';

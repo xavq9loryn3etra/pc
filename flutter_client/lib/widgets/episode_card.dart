@@ -717,7 +717,7 @@ class EpisodeSheetFrame extends StatefulWidget {
   });
 
   static const _radius = BorderRadius.vertical(top: Radius.circular(24));
-  static final _edge = BorderSide(color: kGlassEdge);
+  static BorderSide get _edge => BorderSide(color: kGlassEdge);
 
   @override
   State<EpisodeSheetFrame> createState() => _EpisodeSheetFrameState();

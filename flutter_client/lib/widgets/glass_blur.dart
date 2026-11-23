@@ -212,7 +212,16 @@ class _GlassBlurState extends State<GlassBlur> {
 // against black. Glass reads it through [glassTint], which is black when
 // the glass is plain.
 const kGlassTint = Color(0x8C2C2C2E); // #2C2C2E, 55%
-final kGlassEdge = Colors.white.withValues(alpha: 0.06);
+
+/// The hairline edge round glass: faint on frosted glass, where the
+/// blurred grey already shows its shape — stronger where the glass is
+/// plain (solid black on black, see [glassTint]): there the edge alone
+/// marks it, and 6% white barely showed.
+Color get kGlassEdge => VisualEffectsService().reduceGlass.value
+    ? _plainGlassEdge
+    : _frostedGlassEdge;
+final _frostedGlassEdge = Colors.white.withValues(alpha: 0.06);
+final _plainGlassEdge = Colors.white.withValues(alpha: 0.16);
 
 // The thicker glass of big surfaces holding text — dialogs, sheets, side
 // panels — like Apple's thick material: the same grey, darker, so text

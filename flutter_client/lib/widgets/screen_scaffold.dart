@@ -5,6 +5,7 @@ import '../models/movie.dart';
 import 'desktop_details_panel.dart';
 import '../widgets/custom_app_bar.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
+import 'glass_blur.dart';
 import '../services/movie_tab_service.dart';
 
 typedef BodyBuilder = Widget Function(
@@ -168,9 +169,6 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
                       // floating bottom nav bar now — mode-switching lives in
                       // Settings instead of a header icon.
                       showModeSwitch: false,
-                      // Scrolled: a soft dark shade from the top behind the
-                      // title (TopShade), not an island round it.
-                      scrolledShade: widget.titleIsLabel ? _scrolled : null,
                     ),
               body: NotificationListener<ScrollNotification>(
                 onNotification: _onScroll,
@@ -235,10 +233,13 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
   }
 }
 
-/// A page's title (or the home's logo) at the top, where its island was:
-/// no island round it any more — the page's top shade (TopShade) comes in
-/// behind it once the page is scrolled instead. [shown] is kept for its
-/// callers; the title stays put either way.
+/// A page's title, on an island of the app's frosted glass while [shown]
+/// (the page is scrolled), as the details page's title is. The island
+/// opens out from its middle and folds back into it, its tint fading
+/// with it: the blur itself can't be faded (it popped off at the end),
+/// only cut smaller. The title stays put, always room enough round it.
+/// The glass is only there while showing, so it costs nothing at the top
+/// of the page.
 class TitleIsland extends StatelessWidget {
   final bool shown;
   final Widget child;
@@ -251,15 +252,55 @@ class TitleIsland extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final height = windowIsWide(context) ? kNavButtonHeight : _height;
-    return ConstrainedBox(
-      constraints: BoxConstraints(minHeight: height),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        widthFactor: 1,
-        heightFactor: 1,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(_padding, 0, _padding, 2),
-          child: child,
+    return TweenAnimationBuilder<double>(
+      tween: Tween(end: shown ? 1 : 0),
+      duration: const Duration(milliseconds: 380),
+      curve: Curves.easeInOutCubic,
+      child: child,
+      // At least the island's height, and more for a taller title (Search's
+      // field), which it no longer squeezes.
+      builder: (context, t, child) => ConstrainedBox(
+        constraints: BoxConstraints(minHeight: height),
+        child: Stack(
+          alignment: Alignment.centerLeft,
+          children: [
+            if (t > 0)
+              Positioned.fill(
+                child: Center(
+                  child: FractionallySizedBox(
+                    widthFactor: 0.7 + 0.3 * t,
+                    heightFactor: t,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.all(
+                        Radius.circular(height / 2),
+                      ),
+                      // Not grouped with the nav bar's glass: sharing its
+                      // backdrop changed how the nav bar's frost looked the
+                      // moment the island came in (as a page was scrolled).
+                      child: GlassBlur(
+                        reducedTint: Colors.black,
+                        child: Opacity(
+                          opacity: t,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: glassTint(context),
+                              borderRadius: BorderRadius.all(
+                                Radius.circular(height / 2),
+                              ),
+                              border: Border.all(color: kGlassEdge),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(_padding, 0, _padding, 2),
+              child: child,
+            ),
+          ],
         ),
       ),
     );

@@ -16,7 +16,7 @@ import '../services/tv_device.dart';
 import '../widgets/artwork_glow.dart';
 import '../widgets/hero_carousel.dart';
 import '../widgets/smooth_scroll_controller.dart';
-import '../widgets/custom_app_bar.dart' show LogoIsland, ScrollShade;
+import '../widgets/custom_app_bar.dart' show LogoIsland;
 
 class DesktopHomeScreen extends StatefulWidget {
   /// The hero slideshow's titles (see HeroCarousel), in order; the first's
@@ -241,15 +241,6 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
           // -----------------------------
           // 3. Top Bar (Fixed)
           // -----------------------------
-          // Scrolled: a soft dark shade from the top behind the logo
-          // (TopShade), as the phone's home — not an island round it.
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 120,
-            child: ScrollShade(scroll: _scrollController),
-          ),
           Positioned(top: 0, left: 0, right: 0, child: _buildTopBar(context)),
 
           // -----------------------------
@@ -419,8 +410,8 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     );
   }
 
-  // Just the logo over the page: once scrolled, a soft dark shade comes
-  // down behind it (see the ScrollShade above it in build).
+  // Just the logo over the page, no bar or fade behind it: once scrolled,
+  // on a frosted island of its own, as the phone's home (LogoIsland).
   Widget _buildTopBar(BuildContext context) {
     return Container(
       // The island (TitleIsland: 44 tall, as the tab buttons, 14 in) puts

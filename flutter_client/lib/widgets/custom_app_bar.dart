@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'glass_blur.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -35,10 +34,6 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   /// instead of a glass bar or a dark fade across the top.
   final ScrollController? logoIslandScroll;
 
-  /// Whether the page under is scrolled, for a page's header (ScreenScaffold):
-  /// the top shade's in then (TopShade).
-  final ValueListenable<bool>? scrolledShade;
-
   const CustomAppBar({
     super.key,
     this.title,
@@ -57,7 +52,6 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.titleSpacing,
     this.leadingWidth,
     this.logoIslandScroll,
-    this.scrolledShade,
   });
 
   @override
@@ -147,35 +141,28 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
                     scroll: logoIslandScroll!, child: _buildDefaultLogo())),
       ),
       backgroundColor: Colors.transparent,
-      flexibleSpace: logoIslandScroll != null
-          ? ScrollShade(scroll: logoIslandScroll!)
-          : scrolledShade != null
-              ? ValueListenableBuilder<bool>(
-                  valueListenable: scrolledShade!,
-                  builder: (context, scrolled, _) => TopShade(shown: scrolled),
-                )
-              : opacity > 0.01
-                  ? ClipRect(
-                      child: GlassBlur(
-                        // Lower peak sigma than the original 20 — this blur is live
-                        // while scrolling (recomputed every frame), the single
-                        // highest-frequency backdrop blur in the app, so its cost
-                        // matters most. See mode_switcher_dialog.dart's comment.
-                        // Grouped with the floating nav bar's glass (they never
-                        // overlap). Its own tint is all it needs: 90% black, and
-                        // solid black where the glass is plain — nothing shows
-                        // through it then.
-                        sigma: 10 * opacity,
-                        grouped: true,
-                        reducedTint: Colors.transparent,
-                        child: Container(
-                          color: Colors.black.withValues(
-                              alpha: opacity *
-                                  (PlainGlassScope.of(context) ? 1.0 : 0.9)),
-                        ),
-                      ),
-                    )
-                  : const SizedBox.shrink(),
+      flexibleSpace: opacity > 0.01
+          ? ClipRect(
+              child: GlassBlur(
+                // Lower peak sigma than the original 20 — this blur is live
+                // while scrolling (recomputed every frame), the single
+                // highest-frequency backdrop blur in the app, so its cost
+                // matters most. See mode_switcher_dialog.dart's comment.
+                // Grouped with the floating nav bar's glass (they never
+                // overlap). Its own tint is all it needs: 90% black, and
+                // solid black where the glass is plain — nothing shows
+                // through it then.
+                sigma: 10 * opacity,
+                grouped: true,
+                reducedTint: Colors.transparent,
+                child: Container(
+                  color: Colors.black.withValues(
+                      alpha: opacity *
+                          (PlainGlassScope.of(context) ? 1.0 : 0.9)),
+                ),
+              ),
+            )
+          : const SizedBox.shrink(),
       actions: [
         ..._actions(context),
         // Room for the tab buttons, which sit here on a wide window.
@@ -222,69 +209,21 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
-/// The home's logo, as it is — no island round it once the page is
-/// scrolled any more (it looked heavy): a soft dark shade comes down from
-/// the top behind it instead (see TopShade, ScrollShade).
-class LogoIsland extends StatelessWidget {
+/// The home's logo on a frosted island once the page is scrolled: the
+/// very island a page's header gets (TitleIsland), coming in the same way
+/// — on a phone and on a wide window alike. It faded in with the scroll
+/// position before, which looked sudden beside the headers'.
+class LogoIsland extends StatefulWidget {
   final ScrollController scroll;
   final Widget child;
 
   const LogoIsland({super.key, required this.scroll, required this.child});
 
   @override
-  Widget build(BuildContext context) => TitleIsland(shown: false, child: child);
+  State<LogoIsland> createState() => _LogoIslandState();
 }
 
-/// A soft dark shade from the top edge, there while [shown] (the page
-/// scrolled), as the Apple TV app's and Netflix's: the logo or a page's
-/// title — and the clock above it — stay readable over what scrolls under,
-/// with no island round them. No blur, so the same on plain glass and TVs.
-class TopShade extends StatelessWidget {
-  final bool shown;
-
-  const TopShade({super.key, required this.shown});
-
-  @override
-  Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: AnimatedOpacity(
-        opacity: shown ? 1 : 0,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-        // Filling the space it's given (a bare box would size to nothing).
-        child: const SizedBox.expand(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color(0xB3000000),
-                  Color(0x73000000),
-                  Color(0x00000000)
-                ],
-                stops: [0, 0.55, 1],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// [TopShade], in once [scroll] has left the top of the page — only the
-/// change rebuilds, not every pixel of the scroll.
-class ScrollShade extends StatefulWidget {
-  final ScrollController scroll;
-
-  const ScrollShade({super.key, required this.scroll});
-
-  @override
-  State<ScrollShade> createState() => _ScrollShadeState();
-}
-
-class _ScrollShadeState extends State<ScrollShade> {
+class _LogoIslandState extends State<LogoIsland> {
   bool _shown = false;
 
   @override
@@ -294,7 +233,7 @@ class _ScrollShadeState extends State<ScrollShade> {
   }
 
   @override
-  void didUpdateWidget(ScrollShade old) {
+  void didUpdateWidget(LogoIsland old) {
     super.didUpdateWidget(old);
     if (old.scroll != widget.scroll) {
       old.scroll.removeListener(_onScroll);
@@ -308,11 +247,14 @@ class _ScrollShadeState extends State<ScrollShade> {
     super.dispose();
   }
 
+  // Scrolled from the top, as a page's header (ScreenScaffold): only the
+  // change rebuilds, not every pixel of the scroll.
   void _onScroll() {
     final shown = widget.scroll.hasClients && widget.scroll.offset > 4;
     if (shown != _shown) setState(() => _shown = shown);
   }
 
   @override
-  Widget build(BuildContext context) => TopShade(shown: _shown);
+  Widget build(BuildContext context) =>
+      TitleIsland(shown: _shown, child: widget.child);
 }

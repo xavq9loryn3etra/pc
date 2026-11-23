@@ -1039,9 +1039,52 @@ class StreamResolver {
   /// How hard [stream]'s video is to decode — lower is easier. For now only
   /// AV1 is marked down (1): many phones, the S10 among them, have no AV1
   /// decoder in hardware, and software decoding stutters. Others may follow
-  /// once tested on a device (x265 10-bit, Dolby Vision without HDR).
+  /// once tested on a device (x265 10-bit). Dolby Vision without HDR is
+  /// [pictureRank]'s: it decodes fine, but its colours come out wrong.
   static int codecRank(TorrentStream stream) =>
       _av1Pattern.hasMatch(stream.name) ? 1 : 0;
+
+  // Dolby Vision in a release name: "DV", "DoVi", "Dolby Vision" /
+  // "Dolby.Vision" / "DolbyVision". "DV" only as a word of its own: never
+  // inside another ("DVD", "DVDRip", "HDV", "DV5").
+  static final _dolbyVisionPattern = RegExp(
+      r'(?<![A-Za-z0-9])(dv|dovi|dolby[ ._-]?vision)(?![A-Za-z0-9])',
+      caseSensitive: false);
+
+  // An HDR picture beside it: "HDR", "HDR10", "HDR10+", "HDR10Plus" — and
+  // "HLG", the other picture a Dolby Vision copy can carry underneath. Not
+  // "HDRip" (an HD rip, no HDR about it).
+  static final _hdrPattern = RegExp(
+      r'(?<![A-Za-z0-9])(hdr(10(\+|plus|p)?)?|hlg)(?![A-Za-z0-9])',
+      caseSensitive: false);
+
+  /// Whether [stream] is Dolby Vision with no ordinary HDR picture
+  /// underneath (Dolby Vision "profile 5"): its name says DV / DoVi /
+  /// Dolby Vision and no HDR, HDR10, HDR10+ (or HLG). Without Dolby Vision
+  /// support — mpv on Android TV boxes — such a copy plays purple and
+  /// green. "DV HDR", "DV HDR10" and "HDR10+ DV" copies carry an HDR10
+  /// picture too, which plays right, so they aren't. For a season pack the
+  /// episode's file name (the title's lines before the sharers line) counts
+  /// as well as the release name.
+  static bool isDolbyVisionOnly(TorrentStream stream) {
+    final lines = stream.title.split('\n');
+    final stats = lines.indexWhere((l) => l.contains('👤') || l.contains('💾'));
+    final names = [
+      stream.name,
+      if (stats > 1) ...lines.sublist(1, stats),
+    ].join(' ');
+    return _dolbyVisionPattern.hasMatch(names) && !_hdrPattern.hasMatch(names);
+  }
+
+  /// How likely [stream]'s picture is to look wrong here — lower is better.
+  /// On a TV a Dolby-Vision-only copy ([isDolbyVisionOnly]) is marked down
+  /// (1), so a healthy copy of the same quality without it goes first; it's
+  /// still played when it's the only one, or the only healthy one. Phones,
+  /// tablets and Windows aren't marked (0): nothing yet shows they play
+  /// such copies wrong (untested). [onTv] is for tests (TvDevice.isTv
+  /// otherwise).
+  static int pictureRank(TorrentStream stream, {bool? onTv}) =>
+      (onTv ?? TvDevice.isTv) && isDolbyVisionOnly(stream) ? 1 : 0;
 
   /// "Healthy" means at least this many sharers, or a fifth of the
   /// best-shared torrent of the same quality if that's more — seed counts
@@ -1078,6 +1121,12 @@ class StreamResolver {
       if (ha != hb) return ha ? -1 : 1;
       if (la != lb) return la.compareTo(lb);
       if (ha) {
+        // On a TV, a copy whose picture plays right before a Dolby-Vision-
+        // only one (see pictureRank) — ahead of the episode-or-pack choice
+        // below: wrong colours all episode long are worse than a slower
+        // start.
+        final pa = pictureRank(sa), pb = pictureRank(sb);
+        if (pa != pb) return pa.compareTo(pb);
         // A torrent of just this episode before a season pack: it starts
         // sooner, as there's only one file's metadata to fetch.
         if (sa.isPack != sb.isPack) return sa.isPack ? 1 : -1;

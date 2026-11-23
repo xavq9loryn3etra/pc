@@ -5,9 +5,9 @@ name: Publish release
 # app's version in pubspec.yaml changes on main (e.g. 3.0.0 -> 3.0.1). A
 # version already published is skipped. The new release is marked Latest;
 # earlier ones stay listed below it as the archive. Once it's out, the app
-# requires that version (docs/flags.json), so older copies ask to update,
-# and this repo is tagged "v<version>", which starts the iPhone build on
-# Codemagic (codemagic.yaml).
+# requires that version (docs/flags.json, here and on the public website),
+# so older copies ask to update, and this repo is tagged "v<version>",
+# which starts the iPhone build on Codemagic (codemagic.yaml).
 #
 # Secrets (on this repo):
 #   RELEASES_TOKEN   fine-grained token with Contents: read and write on
@@ -266,6 +266,30 @@ jobs:
           done
           # Publish the changed flags on GitHub Pages straight away.
           gh api -X POST "repos/$GITHUB_REPOSITORY/pages/builds" > /dev/null || true
+
+      # The app reads its flags from the public website; older versions still
+      # read this repo's copy above. Keep the two identical: copy this repo's
+      # docs/flags.json, as it now stands, to the public repo.
+      - name: Same flags on the public website
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          cd pc
+          sha=""
+          if remote="$(gh api "repos/$RELEASE_REPO/contents/docs/flags.json" 2> /dev/null)"; then
+            sha="$(echo "$remote" | jq -r .sha)"
+            echo "$remote" | jq -r .content | base64 -d > "$RUNNER_TEMP/flags.public"
+            if cmp -s docs/flags.json "$RUNNER_TEMP/flags.public"; then
+              echo "The public flags are already the same."
+              exit 0
+            fi
+          fi
+          args=(-f message="flags: require Popcorn $VERSION (published)"
+                -f content="$(base64 -w0 docs/flags.json)")
+          if [ -n "$sha" ]; then args+=(-f sha="$sha"); fi
+          gh api -X PUT "repos/$RELEASE_REPO/contents/docs/flags.json" "${args[@]}" > /dev/null
+          echo "The public flags now match this repo's."
 
       # The iPhone build: Codemagic's iOS workflow starts on a "v…" tag (see
       # codemagic.yaml) and sends it to TestFlight.

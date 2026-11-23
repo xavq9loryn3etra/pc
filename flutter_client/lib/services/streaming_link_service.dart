@@ -131,7 +131,7 @@ class StreamingLinkService {
     connectTimeout: const Duration(seconds: 5),
     receiveTimeout: const Duration(seconds: 5),
     headers: {
-      'User-Agent': 'PopcornApp/2.0 (https://github.com/xavq9loryn3etra/pc)',
+      'User-Agent': 'PopcornApp/2.0 (https://popcorn-organization.github.io/popcorn/)',
     },
   ));
 

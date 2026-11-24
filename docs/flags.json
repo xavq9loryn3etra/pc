@@ -1,5 +1,5 @@
 {
-  "min_required_version": "4.5.2",
+  "min_required_version": "4.6.0",
   "update_url": "https://popcorn-organization.github.io/popcorn/",
   "update_required_message": "A new version of Popcorn is available. Update now to keep watching.",
   "maintenance_mode_enabled": false,
@@ -7,5 +7,50 @@
   "hide_playback": false,
   "ios": {
     "min_required_version": "4.3.7"
-  }
+  },
+  "latest_version": "4.6.0",
+  "release_notes": [
+    {
+      "version": "4.6.0",
+      "notes": [
+        "Small updates no longer interrupt you: Settings shows when one is ready, with what's new, and you update when you like.",
+        "The update screen now shows what's new.",
+        "Sinhala subtitles get in time much sooner, using the English subtitles built into the video when it has them.",
+        "When two people speak in one Sinhala subtitle, each gets their own line again.",
+        "Subtitles stay on screen when you pause.",
+        "The \"Syncing subtitles…\" note is now the same size as the subtitles.",
+        "The Home slideshow is cleaner, with the title's logo a little lower.",
+        "Moving between tabs is calmer: the background glow stays still.",
+        "On Windows, the side panel is tidier and the Ask button shows the Ask logo."
+      ]
+    },
+    {
+      "version": "4.5.3",
+      "notes": [
+        "When something goes wrong, Popcorn sends a short crash report so it can be fixed. It never includes your Google account or keys."
+      ]
+    },
+    {
+      "version": "4.5.2",
+      "notes": [
+        "Sinhala subtitles are in time straight away when the English ones already are."
+      ]
+    },
+    {
+      "version": "4.5.1",
+      "notes": [
+        "Page titles get their frosted backing back as you scroll.",
+        "Logos in the Home slideshow no longer appear late."
+      ]
+    },
+    {
+      "version": "4.5.0",
+      "notes": [
+        "Subtitles get in time with the film by themselves, and Popcorn picks the copy that fits.",
+        "Finished films leave Continue Watching. A finished series comes back when a new episode is out.",
+        "Press and hold a Continue Watching card for More Info, or to remove it, with Undo.",
+        "Smoother playback on TVs while subtitles sync."
+      ]
+    }
+  ]
 }

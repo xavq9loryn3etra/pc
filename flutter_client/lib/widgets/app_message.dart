@@ -32,8 +32,12 @@ ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? showAppMessage(
   // landscape player, and the transparent rest of a full-width bar still
   // took the taps meant for the controls under it.
   final side = math.max(16.0, (screenWidth - _maxWidth) / 2);
-  final bottom =
-      aboveNavBar ? 110 + MediaQuery.paddingOf(context).bottom : 16.0;
+  // Above the nav bar: its buttons' top (16 from the foot, 52 high: see
+  // FloatingBottomNavBar) and 12 more, the gap between them. The phone's
+  // own bottom bar isn't added: the Scaffold already keeps a floating
+  // message above it — added again, the message sat some 60 above the
+  // buttons on a Galaxy S25 (owner, 24 Nov 2026: "too high").
+  final bottom = aboveNavBar ? 16.0 + 52 + 12 : 16.0;
   messenger.hideCurrentSnackBar();
   final hasAction = actionLabel != null && onAction != null;
   return messenger.showSnackBar(SnackBar(

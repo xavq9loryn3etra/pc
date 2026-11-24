@@ -13,6 +13,10 @@ will notice. Keep each line short and free of technical words.
 - A new **middle or first** number (4.5.x → 4.6.0) is a big update: everyone
   older sees the full-screen update when they open the app.
 
+## 4.7.1
+- The keyboard no longer pops up over the film when you play something you found in Search.
+- Messages at the bottom of the screen now sit just above the buttons, instead of floating too high.
+
 ## 4.7.0
 - On TVs with little memory, Popcorn now uses much less of it while you browse, so it runs more steadily there.
 - On the Home screen, the Popcorn logo now scrolls away smoothly instead of being cut off at the top.

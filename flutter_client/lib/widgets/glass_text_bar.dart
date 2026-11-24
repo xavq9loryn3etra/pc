@@ -166,9 +166,17 @@ class _GlassTextBarState extends State<GlassTextBar>
     }
     if (!_modeShown) return;
     // After the frame: until then the tab is still out of focus's reach
-    // while hidden (see MovieTabShell).
+    // while hidden (see MovieTabShell). Only while its page is the one on
+    // screen: built afresh under a title page and the player (a Galaxy
+    // S25 turned sideways for a film is over 800 wide, so the tabs move
+    // into the wide layout's column, Search with them), it raised the
+    // keyboard over the film (owner, 24 Nov 2026).
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && MovieTabService().currentTab.value == tab) _select();
+      if (mounted &&
+          MovieTabService().currentTab.value == tab &&
+          _onTop(context)) {
+        _select();
+      }
     });
     if (GlassTextBar.takeFirstOpen(tab)) {
       _traceTimer?.cancel();
@@ -178,6 +186,21 @@ class _GlassTextBarState extends State<GlassTextBar>
         _trace.forward(from: 0);
       });
     }
+  }
+
+  /// Whether nothing is over [context]'s page: its route the top one in
+  /// its navigator, and so on out — the wide layout's column has a
+  /// navigator of its own, inside the app's, where a title page and the
+  /// player go.
+  static bool _onTop(BuildContext context) {
+    BuildContext? at = context;
+    while (at != null && at.mounted) {
+      final route = ModalRoute.of(at);
+      if (route == null) return true;
+      if (!route.isCurrent) return false;
+      at = route.navigator?.context;
+    }
+    return true;
   }
 
   /// Selects the field, its keyboard up. On a TV, into the bar (see

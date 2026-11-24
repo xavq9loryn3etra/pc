@@ -10,6 +10,7 @@ import '../services/sync/sync_service.dart';
 import '../services/torrent/download_ahead_settings.dart';
 import '../services/tv_device.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
+import '../widgets/glass_blur.dart' show GlassSwitch;
 import '../widgets/mode_switch_row.dart';
 import '../widgets/screen_scaffold.dart';
 import '../widgets/screen_shade.dart';
@@ -100,6 +101,13 @@ class SettingsScreen extends StatelessWidget {
                         const _GeminiKeyRow(),
                       ],
                     ),
+                    const SettingsSectionLabel('PRIVACY'),
+                    const SettingsGroup(
+                      footnote: 'When something goes wrong, Popcorn sends a '
+                          'short report so it can be fixed. It never includes '
+                          'your Google account or keys.',
+                      children: [_CrashReportsRow()],
+                    ),
                   ]),
                 ),
                 SliverPadding(
@@ -185,6 +193,21 @@ class _GeminiKeyRow extends StatelessWidget {
         onTap: () => openSettingsPage(context, const GeminiKeyScreen()),
         trailing: SettingsChevron(value: key == null ? 'Add' : 'Added'),
       ),
+    );
+  }
+}
+
+/// "Send crash reports": always on (CrashReports), so the switch shows on,
+/// greyed out, and can't be flipped (owner, 24 Nov 2026).
+class _CrashReportsRow extends StatelessWidget {
+  const _CrashReportsRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SettingsRow(
+      icon: Icons.bug_report_outlined,
+      title: 'Send crash reports',
+      trailing: GlassSwitch(value: true, onChanged: null),
     );
   }
 }

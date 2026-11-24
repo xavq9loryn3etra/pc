@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Sentry crash reporter scratch files (a local Windows run)
+.sentry-native/

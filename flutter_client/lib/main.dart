@@ -29,6 +29,7 @@ import 'widgets/tv_screen_scale.dart';
 import 'services/app_mode_service.dart';
 import 'enums/app_mode.dart';
 import 'services/background_download_service.dart';
+import 'services/crash_reports.dart';
 import 'services/new_episode_watch.dart';
 import 'services/saved_movies_service.dart';
 import 'services/subtitle_timing_store.dart';
@@ -83,6 +84,12 @@ void main() async {
 
   // Smooth mouse-wheel scrolling on Windows; the stock binding elsewhere.
   SmoothWheelBinding.ensureInitialized();
+
+  // Crash reports (release builds): after the binding above, so Sentry
+  // doesn't make the stock one, and after the error handlers at the top,
+  // which it passes errors on to. Not awaited: it mustn't hold up the
+  // first frame.
+  unawaited(CrashReports.start());
 
   // Apache 2.0 attribution for the bundled Yellowtail font.
   LicenseRegistry.addLicense(() async* {
@@ -223,6 +230,7 @@ Future<void> _initStep(String name, Future<void> Function() step) async {
     await step();
   } catch (e, s) {
     debugPrint('init failed ($name): $e\n$s');
+    CrashReports.report(e, s, where: 'startup: $name');
   }
 }
 

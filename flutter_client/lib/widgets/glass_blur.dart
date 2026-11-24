@@ -383,7 +383,8 @@ class GlassActionButton extends StatelessWidget {
 /// across.
 class GlassSwitch extends StatelessWidget {
   final bool value;
-  final ValueChanged<bool> onChanged;
+  // Null: greyed out, and it can't be flipped.
+  final ValueChanged<bool>? onChanged;
   // The open mode's accent unless given (see AppTheme.accent).
   final Color? activeColor;
 
@@ -398,13 +399,19 @@ class GlassSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final onChanged = this.onChanged;
     return Semantics(
       toggled: value,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
+      enabled: onChanged != null,
+      child: Opacity(
+        opacity: onChanged == null ? 0.4 : 1,
+        child: MouseRegion(
+        cursor: onChanged == null
+            ? SystemMouseCursors.basic
+            : SystemMouseCursors.click,
         child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => onChanged(!value),
+        onTap: onChanged == null ? null : () => onChanged(!value),
         child: Padding(
           padding: const EdgeInsets.all(8),
           child: ClipRRect(
@@ -442,6 +449,7 @@ class GlassSwitch extends StatelessWidget {
             ),
           ),
         ),
+      ),
       ),
       ),
     );

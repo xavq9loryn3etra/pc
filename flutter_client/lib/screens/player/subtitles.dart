@@ -1,5 +1,12 @@
 part of '../player_screen.dart';
 
+/// Sinhala's size against English's: Noto Sans Sinhala's letters draw
+/// much bigger than the app's English font's at the same size (measured at
+/// 38: their body some 26 px tall against English's 19 px), so Sinhala
+/// subtitles looked bigger than English ones (owner, 24 Nov 2026). At 0.8
+/// they look the same size.
+const double _sinhalaTextScale = 0.8;
+
 /// The shown subtitles' timing: being checked (glowing blocks in their
 /// place), known to fit, or none of the language's copies fits so far.
 enum _SubtitleTiming { checking, ready, noFit }
@@ -28,13 +35,14 @@ extension _PlayerSubtitles on _PlayerScreenState {
 
   TextStyle _subtitleStyle() {
     final track = _selectedSubtitle;
+    final sinhala =
+        track != null && _getLanguageName(track.lang) == 'Sinhala';
     return TextStyle(
       // Keep Sinhala punctuation and spaces in the same font as the words.
-      fontFamily: track != null && _getLanguageName(track.lang) == 'Sinhala'
-          ? 'NotoSansSinhala'
-          : null,
+      fontFamily: sinhala ? 'NotoSansSinhala' : null,
       height: 1.4,
-      fontSize: 38,
+      // Sinhala a little smaller: see _sinhalaTextScale.
+      fontSize: sinhala ? 38 * _sinhalaTextScale : 38,
       letterSpacing: 0,
       wordSpacing: 0,
       // Shown while paused too (owner, 24 Nov 2026), as on Netflix.
@@ -311,6 +319,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
   void _forgetSubtitleTiming() {
     _discardRetimedFiles();
     _lineMatches.clear();
+    _lineTimed.clear();
     _lineRef = null;
     _lastRefLine = '';
     _subtitleTimings.clear();
@@ -833,7 +842,11 @@ extension _PlayerSubtitles on _PlayerScreenState {
       if (sinhala == null) {
         await player.setSubtitleTrack(SubtitleTrack.no());
       } else {
-        await _showSubtitleFile(sinhala.path, track.lang);
+        // Read afresh: lines made while another subtitle was shown aren't
+        // in the player's copy (only the one shown is reloaded as they
+        // come: _onSinhalaUpdate). Back to Sinhala, it showed nothing for
+        // minutes (The Mentalist S1E6, 24 Nov 2026).
+        await _showSubtitleFile(sinhala.path, track.lang, reload: true);
       }
     } else {
       // Its retimed copy, when there is one (see _retimeFromReferences).
@@ -843,8 +856,11 @@ extension _PlayerSubtitles on _PlayerScreenState {
     }
   }
 
-  /// Shows the subtitle file at [url] (a download, or one written here).
-  Future<void> _showSubtitleFile(String url, String lang) async {
+  /// Shows the subtitle file at [url] (a download, or one written here) —
+  /// read afresh ([reload]) if the player has it already and it may have
+  /// changed since.
+  Future<void> _showSubtitleFile(String url, String lang,
+      {bool reload = false}) async {
     // Given to the player before (this video): pick that track again,
     // rather than adding the file another time.
     final added = await _addedSubtitleTracks();
@@ -856,6 +872,13 @@ extension _PlayerSubtitles on _PlayerScreenState {
       await player.setSubtitleTrack(
         SubtitleTrack(id, _getLanguageName(lang), lang),
       );
+      if (reload) {
+        try {
+          await (player.platform as NativePlayer).command(['sub-reload', id]);
+        } catch (e) {
+          print('[sinhala] reload: $e');
+        }
+      }
     } else {
       await player.setSubtitleTrack(
         SubtitleTrack.uri(url, title: _getLanguageName(lang), language: lang),
@@ -1126,7 +1149,12 @@ extension _PlayerSubtitles on _PlayerScreenState {
       _testedOn.clear();
       _noFitLanguage = null;
       _nextListenAt = Duration.zero;
+      // Checked against the video's own subtitles again too, if it has
+      // them in this language (see _followBuiltInLines): surest of all.
+      _lineTimed.remove(source.id);
+      _lineMatches.remove(source.id);
     });
+    unawaited(_followBuiltInLines());
     await _testCopies();
   }
 
@@ -1888,6 +1916,11 @@ extension _PlayerSubtitles on _PlayerScreenState {
         (track.matchesFile && !_subtitleSourceConflicts(track))) {
       return;
     }
+    // The video has its own subtitles in its language: timed by their
+    // lines instead (_followBuiltInLines), in seconds and exactly. Other
+    // languages' subtitles shifted The Mentalist S1E6's 1.2 s out
+    // (24 Nov 2026).
+    if (_builtInRefFor(track) != null) return;
     final stream = _currentStream;
     final video = '${stream.title}\n${stream.name}';
     bool usable(SubtitleTrackData s) =>
@@ -2223,20 +2256,22 @@ extension _PlayerSubtitles on _PlayerScreenState {
   /// takes minutes, with nothing more to download. (The Mentalist S1E5, 24
   /// Nov 2026: its English was built in; the Sinhala made from a downloaded
   /// English copy waited on "Syncing subtitles…", and listening couldn't
-  /// get the sound over a stalled download.) Stops once they're in time.
+  /// get the sound over a stalled download.) Stops once they're timed by
+  /// it — not before, even if listening or other languages' subtitles
+  /// timed them first: this is surer than both (The Mentalist S1E6, 24 Nov
+  /// 2026: Sinhala shifted 1.2 s by Portuguese and Bosnian subtitles, then
+  /// 0.2 s more by listening, "not sure", came out of time over the video's
+  /// own English, which was never asked).
   Future<void> _followBuiltInLines() async {
     if (!mounted) return;
     final shown = _selectedSubtitle;
-    SubtitleTrackData? ref;
-    if (shown != null && !shown.isEmbedded && !_isTimed(shown)) {
-      final language = _getLanguageName((shown.translatedFrom ?? shown).lang);
-      ref = _embeddedSubtitles.where((e) {
-        final label = (e.label ?? '').toLowerCase();
-        return _getLanguageName(e.lang) == language &&
-            !label.contains('forced') &&
-            !label.contains('sign');
-      }).firstOrNull;
-    }
+    final source = shown?.translatedFrom ?? shown;
+    final ref = shown == null ||
+            shown.isEmbedded ||
+            source == null ||
+            _lineTimed.contains(source.id)
+        ? null
+        : _builtInRefFor(source);
     if (ref?.id == _lineRef?.id) return;
     _lineRef = ref;
     _lastRefLine = '';
@@ -2248,6 +2283,20 @@ extension _PlayerSubtitles on _PlayerScreenState {
     print("[sync] following the video's own ${ref.lang} subtitles "
         '(${ref.url}) to time ${shown.id}');
     _refLines ??= player.stream.subtitle.listen(_onBuiltInLine);
+  }
+
+  /// The video's own subtitles in [source]'s language (not forced or signs
+  /// only), which are in time with it: the reference that times downloaded
+  /// copies in that language by their lines. Null when it has none.
+  SubtitleTrackData? _builtInRefFor(SubtitleTrackData source) {
+    if (source.isEmbedded) return null;
+    final language = _getLanguageName(source.lang);
+    return _embeddedSubtitles.where((e) {
+      final label = (e.label ?? '').toLowerCase();
+      return _getLanguageName(e.lang) == language &&
+          !label.contains('forced') &&
+          !label.contains('sign');
+    }).firstOrNull;
   }
 
   /// A line of the video's own subtitles followed (see _followBuiltInLines)
@@ -2284,8 +2333,11 @@ extension _PlayerSubtitles on _PlayerScreenState {
           _getLanguageName(s.lang) == language),
     ].take(6);
     for (final copy in copies) {
-      // (One shown retimed: its file's times aren't the download's.)
-      if (_retimedPaths.containsKey(copy.id) || _isTimed(copy)) continue;
+      // (One shown retimed: its file's times aren't the download's. One
+      // timed some other way is checked all the same: this is surer.)
+      if (_retimedPaths.containsKey(copy.id) || _lineTimed.contains(copy.id)) {
+        continue;
+      }
       if (!_lineMatches.containsKey(copy.id)) {
         _lineMatches[copy.id] = null; // Being read.
         try {
@@ -2297,10 +2349,26 @@ extension _PlayerSubtitles on _PlayerScreenState {
         }
       }
       final timing = _lineMatches[copy.id]?.add(text, start);
-      if (timing == null || _isTimed(copy)) continue;
+      if (timing == null || _lineTimed.contains(copy.id)) continue;
       print("[sync] ${copy.id}: in time by the video's own subtitles "
           '(${timing.delay.toStringAsFixed(2)} s, '
           'speed ${timing.speed.toStringAsFixed(4)})');
+      _lineTimed.add(copy.id);
+      // The Sinhala shown made from it takes this timing, even over one
+      // it had (see _takeSourceTiming); and the viewer's doubt is settled.
+      _distrusted.remove(copy.id);
+      if (_selectedSubtitle case final s? when s.translatedFrom?.id == copy.id) {
+        _autoSynced.remove(s.id);
+        _distrusted.remove(s.id);
+      }
+      // A sync the viewer asked for: done, by this.
+      if (_selectedSubtitle case final s?
+          when s.id == _resyncing && (s.translatedFrom ?? s).id == copy.id) {
+        _updateState(() {
+          _resyncing = null;
+          _resyncKept = null;
+        });
+      }
       await _applyConfirmedTiming(copy, timing, at: start);
       if (!mounted) return;
     }

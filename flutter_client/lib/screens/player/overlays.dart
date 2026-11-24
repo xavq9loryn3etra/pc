@@ -495,7 +495,10 @@ class _SubtitleActivityBarState extends State<_SubtitleActivityBar>
   Widget build(BuildContext context) {
     final sinhala = RegExp(r'[\u0D80-\u0DFF]').hasMatch(widget.label);
     final style = TextStyle(
-      fontSize: widget.fontSize,
+      // In Sinhala, as Sinhala subtitles are (see _sinhalaTextScale).
+      fontSize: sinhala
+          ? widget.fontSize * _sinhalaTextScale
+          : widget.fontSize,
       height: 1.3,
       fontWeight: FontWeight.w500,
       color: Colors.white,

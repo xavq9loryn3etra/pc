@@ -333,6 +333,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   // (null while it's read); the last line it showed; its lines' stream.
   SubtitleTrackData? _lineRef;
   final Map<String, SubtitleLineMatch?> _lineMatches = {};
+  // Downloaded copies timed by the video's own subtitles in their language
+  // (see _onBuiltInLine): the surest timing there is, which no other way
+  // (other languages' subtitles, listening) overrides.
+  final Set<String> _lineTimed = {};
   String _lastRefLine = '';
   StreamSubscription<List<String>>? _refLines;
   // What listening found for each subtitle (two separate stretches

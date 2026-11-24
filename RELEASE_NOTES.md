@@ -17,6 +17,8 @@ will notice. Keep each line short and free of technical words.
 - On TVs with little memory, Popcorn now uses much less of it while you browse, so it runs more steadily there.
 - On the Home screen, the Popcorn logo now scrolls away smoothly instead of being cut off at the top.
 - Subtitles stay above the progress bar when you open a menu while watching.
+- Sinhala subtitles stay in time with the video, and show straight away when you switch back to them.
+- Sinhala subtitles are now the same size as English ones.
 - On Windows, Popcorn always opens when you click it, even right after closing it.
 
 ## 4.6.0

@@ -64,20 +64,33 @@ class WindowFullScreen {
     if (_hwnd == 0) return;
 
     state.value = on;
-    // Defer the Win32 SetWindowPos / MoveWindow calls by a microtask so the
-    // synchronous WM_SIZE message they dispatch never triggers a re-entrant
-    // Flutter frame build in the middle of a Navigator pop or widget callback.
-    await Future<void>.value();
+    // The Win32 SetWindowPos / MoveWindow calls in a task of their own, so
+    // the WM_SIZE they send at once never draws a frame inside another.
+    // A microtask (as before) can run between a frame's two halves when
+    // it's queued from an animation: the frame inside then cleared the
+    // outer one's time — "Null check operator used on a null value" in
+    // SchedulerBinding.handleDrawFrame (Sentry, Windows 4.6.0, 24 Nov 2026).
+    await Future<void>.delayed(Duration.zero);
+    // Switched back meanwhile (or twice): only what's wanted now, once —
+    // going full screen twice would save the full-screen style as the one
+    // to go back to.
+    final want = state.value;
+    if (want == _applied) return;
     try {
-      if (state.value) {
+      if (want) {
         _enterWin32(_hwnd);
       } else {
         _exitWin32(_hwnd);
       }
+      _applied = want;
     } catch (_) {
-      state.value = !on;
+      state.value = _applied;
     }
   }
+
+  /// Whether the window is full screen as Windows has it (state.value is
+  /// what's asked for, a moment ahead).
+  static bool _applied = false;
 
   static Future<void> enter() => set(true);
   static Future<void> exit() => set(false);

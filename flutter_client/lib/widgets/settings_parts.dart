@@ -287,7 +287,7 @@ class SettingsPage extends StatelessWidget {
       ),
       leadingWidth: 64,
       bottomNavTab: BottomNavTab.settings,
-      glow: TabGlow.settings,
+      glow: TabGlow.forMode,
       // Settings' glow is already showing: it doesn't bloom again here.
       glowBlooms: false,
       body: (context, isDesktop, padding) {
@@ -297,7 +297,9 @@ class SettingsPage extends StatelessWidget {
             top: SideColumnScope.inColumn(context) ? 76 : 100,
             left: side,
             right: side,
-            bottom: padding.bottom + 24,
+            // 16 at the side column's foot, as at its sides.
+            bottom: padding.bottom +
+                (SideColumnScope.inColumn(context) ? 16 : 24),
           ),
           children: children,
         );

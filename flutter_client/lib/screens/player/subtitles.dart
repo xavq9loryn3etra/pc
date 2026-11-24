@@ -35,11 +35,10 @@ extension _PlayerSubtitles on _PlayerScreenState {
       fontSize: 38,
       letterSpacing: 0,
       wordSpacing: 0,
-      color: _isPlaying ? Colors.white : Colors.transparent,
+      // Shown while paused too (owner, 24 Nov 2026), as on Netflix.
+      color: Colors.white,
       fontWeight: TvDevice.isTv ? FontWeight.w500 : FontWeight.normal,
-      backgroundColor: _isPlaying
-          ? const Color(0xaa000000)
-          : Colors.transparent,
+      backgroundColor: const Color(0xaa000000),
       fontFamilyFallback: ['NotoSansSinhala'],
     );
   }
@@ -309,6 +308,9 @@ extension _PlayerSubtitles on _PlayerScreenState {
   /// copy, or episode, is timed afresh). Called inside setState.
   void _forgetSubtitleTiming() {
     _discardRetimedFiles();
+    _lineMatches.clear();
+    _lineRef = null;
+    _lastRefLine = '';
     _subtitleTimings.clear();
     _autoSynced.clear();
     _autoSyncTries.clear();
@@ -434,7 +436,8 @@ extension _PlayerSubtitles on _PlayerScreenState {
     embedded.sort((a, b) => trackRank(a).compareTo(trackRank(b)));
     _embeddedSubtitles = embedded;
     BuiltInSubtitles.noteTracks(_currentStream.infoHash, embedded);
-    _rebuildAvailableSubtitles();
+    await _rebuildAvailableSubtitles();
+    unawaited(_followBuiltInLines());
   }
 
   Future<void> _loadSubtitles() async {
@@ -608,6 +611,7 @@ extension _PlayerSubtitles on _PlayerScreenState {
     await _loadSavedTimings();
     await _loadSeriesTimings();
     if (!mounted) return;
+    unawaited(_followSourceTiming());
     final sinhala = _sinhalaTrack();
     // Each language's best first (the panel shows one per language).
     final ordered = [..._embeddedSubtitles, ..._externalSubtitles];
@@ -812,6 +816,9 @@ extension _PlayerSubtitles on _PlayerScreenState {
       await (player.platform as NativePlayer)
           .setProperty('secondary-sid', 'no');
     } catch (_) {}
+    // (Followed again after, if it's still wanted: _followBuiltInLines.)
+    _lineRef = null;
+    _lastRefLine = '';
     if (track == null || track.url.isEmpty) {
       await player.setSubtitleTrack(SubtitleTrack.no());
     } else if (track.isEmbedded) {
@@ -863,8 +870,12 @@ extension _PlayerSubtitles on _PlayerScreenState {
   /// to make it from and none in Sinhala by people: from English ones
   /// first (the most common, and the most carefully made), else ones in
   /// the title's own language (a Japanese film's Japanese), else another
-  /// widely used language, else whatever there is. From the track it's
-  /// being made from already, if there's one.
+  /// widely used language, else whatever there is. In that language, the
+  /// copy already in time with the video first (see _copyRank): its
+  /// timing is the Sinhala's at once, where another copy had to be
+  /// listened for, for minutes, over English already in time (owner,
+  /// 24 Nov 2026). From the track it's being made from already, unless
+  /// that isn't in time and another one is.
   SubtitleTrackData? _sinhalaTrack() {
     bool inSinhala(SubtitleTrackData s) =>
         _getLanguageName(s.lang) == 'Sinhala';
@@ -886,12 +897,24 @@ extension _PlayerSubtitles on _PlayerScreenState {
       return i < 0 ? 100 : 2 + i;
     }
 
-    // The best ranked, the list's own order (best match first) among equals.
+    // The best ranked language, then the copy in it most likely in time
+    // (_copyRank); the list's own order (best match first) among equals.
     var best = usable.first;
     for (final s in usable) {
-      if (rank(s) < rank(best)) best = s;
+      final byLanguage = rank(s).compareTo(rank(best));
+      if (byLanguage < 0 ||
+          (byLanguage == 0 && _copyRank(s) < _copyRank(best))) {
+        best = s;
+      }
     }
-    final from = usable.where((s) => s.id == _sinhalaFrom).firstOrNull ?? best;
+    final current = usable.where((s) => s.id == _sinhalaFrom).firstOrNull;
+    final from = current != null &&
+            (_isTimed(current) || !_isTimed(best) || rank(best) > rank(current))
+        ? current
+        : best;
+    if (current != null && from != current) {
+      print('[sync] Sinhala now made from ${from.id}, which is in time');
+    }
     return SubtitleTrackData(
       id: 'sinhala:${from.id}',
       url: 'sinhala:${from.id}',
@@ -1661,6 +1684,14 @@ extension _PlayerSubtitles on _PlayerScreenState {
       });
       await _applySubtitleTimingToMpv();
       if (drifted != null) await _applySubtitleTrackToPlayer(track);
+    } else if (_selectedSubtitle?.translatedFrom?.id == track.id) {
+      // The Sinhala shown is made from it: in time too.
+      await _followSourceTiming();
+    } else if (_selectedSubtitle case final shown?
+        when shown.translatedFrom != null && !_isTimed(shown)) {
+      // The Sinhala shown is made from a copy not yet in time, and this
+      // one is: made from this one instead (see _sinhalaTrack).
+      unawaited(_rebuildAvailableSubtitles());
     }
   }
 
@@ -2081,6 +2112,43 @@ extension _PlayerSubtitles on _PlayerScreenState {
       Isolate.run(() =>
           SubtitleSync.findAll(pcm, windowStart: start, cueSets: cueSets));
 
+  /// Sinhala made from English: the English's lines at the very same
+  /// times, so the English's timing, once known (by listening, or kept from
+  /// an earlier visit or another device), is the Sinhala's too. Returns it
+  /// if [track] has just taken it; null otherwise.
+  ({double delay, double speed})? _takeSourceTiming(SubtitleTrackData track) {
+    final source = track.translatedFrom;
+    if (source == null ||
+        _autoSynced.contains(track.id) ||
+        !_autoSynced.contains(source.id)) {
+      return null;
+    }
+    final known =
+        _subtitleTimings['drift:${source.id}'] ?? _subtitleTimings[source.id];
+    if (known == null) return null;
+    _autoSynced.add(track.id);
+    _subtitleTimings[track.id] = known;
+    print('[sync] Sinhala takes the English timing '
+        '(${known.delay} s, speed ${known.speed})');
+    return known;
+  }
+
+  /// The Sinhala shown takes its English's timing if that's become known
+  /// since it was picked (confirmed by listening meanwhile, or read from
+  /// an earlier visit afterwards). Before, it waited on "Syncing
+  /// subtitles…" over English already in time (The Mentalist, 24 Nov 2026).
+  Future<void> _followSourceTiming() async {
+    final shown = _selectedSubtitle;
+    if (shown == null || !mounted) return;
+    final known = _takeSourceTiming(shown);
+    if (known == null) return;
+    _updateState(() {
+      _subtitleDelaySeconds = known.delay;
+      _subtitleSpeed = known.speed;
+    });
+    await _applySubtitleTimingToMpv();
+  }
+
   /// Shows [track] (null = subtitles off). A choice the viewer made
   /// ([remember]) becomes their preference for every video after this
   /// one — see _loadSubtitles.
@@ -2113,19 +2181,9 @@ extension _PlayerSubtitles on _PlayerScreenState {
     // kept from an earlier visit), is the Sinhala's too, at once. It was
     // listened for afresh: "Syncing subtitles…" for minutes over English
     // already in time.
-    final source = track?.translatedFrom;
-    if (track != null &&
-        source != null &&
-        !_autoSynced.contains(track.id) &&
-        _autoSynced.contains(source.id)) {
-      final known =
-          _subtitleTimings['drift:${source.id}'] ?? _subtitleTimings[source.id];
-      if (known != null) {
-        timing = known;
-        _autoSynced.add(track.id);
-        print('[sync] Sinhala takes the English timing '
-            '(${known.delay} s, speed ${known.speed})');
-      }
+    if (track != null) {
+      final known = _takeSourceTiming(track);
+      if (known != null) timing = known;
     }
     final retime = (timing?.delay ?? 0.0) != _subtitleDelaySeconds ||
         (timing?.speed ?? 1.0) != _subtitleSpeed;
@@ -2152,5 +2210,99 @@ extension _PlayerSubtitles on _PlayerScreenState {
     }
     await _applySubtitleTrackToPlayer(track);
     if (track != null) _retimeFromReferences(track);
+    unawaited(_followBuiltInLines());
+  }
+
+  /// While the subtitles shown aren't in time yet and the video has its own
+  /// in their language (built in, so in time with it): follows those quietly
+  /// as mpv's secondary subtitles — never drawn (the player draws only the
+  /// main ones: _OwnSubtitleView) — and times the downloaded copies in that
+  /// language by their lines (SubtitleLineMatch): seconds where listening
+  /// takes minutes, with nothing more to download. (The Mentalist S1E5, 24
+  /// Nov 2026: its English was built in; the Sinhala made from a downloaded
+  /// English copy waited on "Syncing subtitles…", and listening couldn't
+  /// get the sound over a stalled download.) Stops once they're in time.
+  Future<void> _followBuiltInLines() async {
+    if (!mounted) return;
+    final shown = _selectedSubtitle;
+    SubtitleTrackData? ref;
+    if (shown != null && !shown.isEmbedded && !_isTimed(shown)) {
+      final language = _getLanguageName((shown.translatedFrom ?? shown).lang);
+      ref = _embeddedSubtitles.where((e) {
+        final label = (e.label ?? '').toLowerCase();
+        return _getLanguageName(e.lang) == language &&
+            !label.contains('forced') &&
+            !label.contains('sign');
+      }).firstOrNull;
+    }
+    if (ref?.id == _lineRef?.id) return;
+    _lineRef = ref;
+    _lastRefLine = '';
+    try {
+      await (player.platform as NativePlayer)
+          .setProperty('secondary-sid', ref?.url ?? 'no');
+    } catch (_) {}
+    if (ref == null || shown == null) return;
+    print("[sync] following the video's own ${ref.lang} subtitles "
+        '(${ref.url}) to time ${shown.id}');
+    _refLines ??= player.stream.subtitle.listen(_onBuiltInLine);
+  }
+
+  /// A line of the video's own subtitles followed (see _followBuiltInLines)
+  /// came on: matched against the downloaded copies in its language — the
+  /// one the shown subtitles are made from first — and a copy whose timing
+  /// two lines agree on is in time (_applyConfirmedTiming: kept, shared with
+  /// the other devices, and the Sinhala made from it takes it too).
+  Future<void> _onBuiltInLine(List<String> lines) async {
+    final ref = _lineRef;
+    if (ref == null || lines.length < 2) return;
+    final text = lines[1].trim();
+    if (text.isEmpty || text == _lastRefLine) return;
+    _lastRefLine = text;
+    final url = _streamUrl;
+    // When the line starts in the video: mpv's, exactly; failing that,
+    // now (it has only just come on).
+    double? start;
+    try {
+      start = double.tryParse(await (player.platform as NativePlayer)
+          .getProperty('secondary-sub-start'));
+    } catch (_) {}
+    start ??= _currentPosition.inMilliseconds / 1000;
+    if (!mounted || _streamUrl != url || _lineRef?.id != ref.id) return;
+    final shown = _selectedSubtitle;
+    if (shown == null) return;
+    final language = _getLanguageName(ref.lang);
+    final source = shown.translatedFrom ?? shown;
+    final copies = [
+      if (!source.isEmbedded) source,
+      ..._externalSubtitles.where((s) =>
+          s.id != source.id &&
+          s.url.isNotEmpty &&
+          !_rejectedSubtitles.contains(s.id) &&
+          _getLanguageName(s.lang) == language),
+    ].take(6);
+    for (final copy in copies) {
+      // (One shown retimed: its file's times aren't the download's.)
+      if (_retimedPaths.containsKey(copy.id) || _isTimed(copy)) continue;
+      if (!_lineMatches.containsKey(copy.id)) {
+        _lineMatches[copy.id] = null; // Being read.
+        try {
+          final cues = await _parseCuesInBackground(await _subtitleText(copy));
+          if (!mounted || _streamUrl != url) return;
+          _lineMatches[copy.id] = SubtitleLineMatch(cues);
+        } catch (_) {
+          continue;
+        }
+      }
+      final timing = _lineMatches[copy.id]?.add(text, start);
+      if (timing == null || _isTimed(copy)) continue;
+      print("[sync] ${copy.id}: in time by the video's own subtitles "
+          '(${timing.delay.toStringAsFixed(2)} s, '
+          'speed ${timing.speed.toStringAsFixed(4)})');
+      await _applyConfirmedTiming(copy, timing, at: start);
+      if (!mounted) return;
+    }
+    // In time now: no need to follow any longer.
+    unawaited(_followBuiltInLines());
   }
 }

@@ -142,11 +142,61 @@ class SubtitleTranslator {
       out
         ..writeln(++n)
         ..writeln('${_stamp(cues[i].start)} --> ${_stamp(cues[i].end)}')
-        ..writeln(text.trim())
+        ..writeln(restoreBreaks(text.trim(), cues[i].text))
         ..writeln();
     }
     return out.toString();
   }
+
+  /// [sinhala] with the line break the English ([english]) has, where the
+  /// model joined its lines into one (it's asked not to, and now and then
+  /// does: owner, 24 Nov 2026). Two speakers ("- Where were you?" over
+  /// "- At home.") split at the second one's dash; one long sentence at the
+  /// space nearest its middle, as the English is; a short line left whole.
+  @visibleForTesting
+  static String restoreBreaks(String sinhala, String english) {
+    if (sinhala.contains('\n')) return sinhala;
+    final parts = english
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+    if (parts.length < 2) return sinhala;
+    // Two speakers: at the second one's dash (after the start).
+    final speakers = parts.where(_speakerDash.hasMatch).length;
+    if (speakers >= 2 ||
+        (speakers == 1 && !_speakerDash.hasMatch(parts.first))) {
+      final dash = _innerDash.firstMatch(sinhala.substring(1));
+      if (dash != null) {
+        final at = dash.start + 1;
+        return '${sinhala.substring(0, at).trimRight()}\n'
+            '${sinhala.substring(at).trimLeft()}';
+      }
+    }
+    // One sentence over two lines: only one long enough to need it.
+    if (sinhala.runes.length < _breakAt) return sinhala;
+    final middle = sinhala.length ~/ 2;
+    int? best;
+    for (var i = 0; i < sinhala.length; i++) {
+      if (sinhala[i] != ' ') continue;
+      if (best == null || (i - middle).abs() < (best - middle).abs()) {
+        best = i;
+      }
+    }
+    if (best == null) return sinhala;
+    return '${sinhala.substring(0, best).trimRight()}\n'
+        '${sinhala.substring(best + 1).trimLeft()}';
+  }
+
+  /// A speaker's dash at a line's start: "-", "–" or "—".
+  static final _speakerDash = RegExp('^[-\u2013\u2014]');
+
+  /// A speaker's dash partway through a line, after a space.
+  static final _innerDash = RegExp('\\s+[-\u2013\u2014]');
+
+  /// Shorter than this (in characters, Sinhala's vowel signs counted), a
+  /// line stays whole even where the English is on two.
+  static const _breakAt = 36;
 
   /// A stable name for [text] (FNV-1a), for the files kept for it.
   static String nameFor(String text) {

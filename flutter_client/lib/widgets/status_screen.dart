@@ -42,6 +42,11 @@ class StatusScreen extends StatefulWidget {
   /// ("Waiting for connection…"), fading gently in and out.
   final String? waitingFor;
 
+  /// Under the message: what's new in the update (ReleaseNotesBox). It
+  /// gets the room left between the logo and the rest, and scrolls inside
+  /// that if it's longer; the screen itself never scrolls.
+  final Widget? notes;
+
   const StatusScreen({
     super.key,
     required this.title,
@@ -51,6 +56,7 @@ class StatusScreen extends StatefulWidget {
     this.roomFor = const [],
     this.footer,
     this.waitingFor,
+    this.notes,
   });
 
   @override
@@ -74,8 +80,12 @@ class _StatusScreenState extends State<StatusScreen>
 
   @override
   Widget build(BuildContext context) {
+    // With notes, the gaps are tighter, so the notes get the room (owner,
+    // 24 Nov 2026: the gaps were too big, the notes too short).
+    final withNotes = widget.notes != null;
     return FrostedLogoLayout(
       opacity: _fade,
+      fitWords: widget.notes != null,
       details: (context, sideBySide, large) => Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment:
@@ -97,10 +107,11 @@ class _StatusScreenState extends State<StatusScreen>
             offset: Offset(sideBySide ? -16 : 0, 0),
             child: IridescentScriptText(
               widget.highlight,
-              fontSize: large ? 64 : 44,
+              fontSize: withNotes ? (large ? 56 : 40) : (large ? 64 : 44),
+              tight: withNotes,
             ),
           ),
-          SizedBox(height: large ? 20 : 12),
+          SizedBox(height: withNotes ? (large ? 4 : 2) : (large ? 20 : 12)),
           Builder(builder: (context) {
             final style = TextStyle(
               fontSize: large ? 18 : 14,
@@ -110,7 +121,9 @@ class _StatusScreenState extends State<StatusScreen>
             final align = sideBySide ? TextAlign.start : TextAlign.center;
             final message = widget.messageBuilder?.call(style, align) ??
                 Text(widget.message, textAlign: align, style: style);
-            if (widget.roomFor.isEmpty) return message;
+            // With notes, no room is kept: the notes give way to a longer
+            // message instead (the room kept left a big gap above them).
+            if (widget.roomFor.isEmpty || withNotes) return message;
             // The longest of them sets the height, unseen; the message is
             // drawn over it, from the top.
             return Stack(
@@ -133,9 +146,13 @@ class _StatusScreenState extends State<StatusScreen>
               ],
             );
           }),
+          if (withNotes) ...[
+            SizedBox(height: large ? 16 : 12),
+            Flexible(child: widget.notes!),
+          ],
           // As the welcome screen: the button's gap and place, kept even
           // without one.
-          SizedBox(height: large ? 40 : 32),
+          SizedBox(height: withNotes ? (large ? 20 : 16) : (large ? 40 : 32)),
           if (widget.waitingFor != null)
             SizedBox(
               height: StatusPrimaryButton.height,
@@ -169,7 +186,12 @@ class IridescentScriptText extends StatelessWidget {
   final String text;
   final double fontSize;
 
-  const IridescentScriptText(this.text, {super.key, this.fontSize = 44});
+  /// Less room above and below (just enough for the swashes): where the
+  /// screen's room is wanted for something else (the update's notes).
+  final bool tight;
+
+  const IridescentScriptText(this.text,
+      {super.key, this.fontSize = 44, this.tight = false});
 
   @override
   Widget build(BuildContext context) {
@@ -177,14 +199,14 @@ class IridescentScriptText extends StatelessWidget {
       // Script glyphs' swashes overhang their text box; the padding keeps
       // them inside the mask so no tips render un-tinted.
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        padding: EdgeInsets.symmetric(horizontal: 16, vertical: tight ? 2 : 10),
         child: Text(
           text,
           textAlign: TextAlign.center,
           style: TextStyle(
             fontFamily: StatusScreen.scriptFont,
             fontSize: fontSize,
-            height: 1.25,
+            height: tight ? 1.15 : 1.25,
             color: Colors.white,
           ),
         ),

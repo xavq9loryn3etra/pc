@@ -16,7 +16,7 @@ import '../services/tv_device.dart';
 import '../widgets/artwork_glow.dart';
 import '../widgets/hero_carousel.dart';
 import '../widgets/smooth_scroll_controller.dart';
-import '../widgets/custom_app_bar.dart' show LogoIsland;
+import '../widgets/custom_app_bar.dart' show ScrollsAway;
 
 class DesktopHomeScreen extends StatefulWidget {
   /// The hero slideshow's titles (see HeroCarousel), in order; the first's
@@ -34,9 +34,9 @@ class DesktopHomeScreen extends StatefulWidget {
   final void Function(Movie movie, Rect posterRect, VoidCallback onInfo)?
       onHistoryMenu;
 
-  /// What a hero title's place in [trendingMovies] is of, for its "#3
-  /// Trending This Week" line ("Trending This Week", Ramen's "Popular
-  /// Right Now").
+  /// The trending row's name ("Trending This Week", Ramen's "Popular
+  /// Right Now"). (The hero has no "#3 Trending This Week" line: the
+  /// owner took it out, 24 Nov 2026, so the logo sits lower.)
   final String rankLabel;
 
   /// Ramen's: its rows between the trending and top rated ones (this
@@ -410,17 +410,16 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
     );
   }
 
-  // Just the logo over the page, no bar or fade behind it: once scrolled,
-  // on a frosted island of its own, as the phone's home (LogoIsland).
+  // Just the logo over the page, no bar or fade behind it, scrolling away
+  // with the page (as the phone's home's, ScrollsAway).
   Widget _buildTopBar(BuildContext context) {
     return Container(
-      // The island (TitleIsland: 44 tall, as the tab buttons, 14 in) puts
-      // the logo 60 in and 24 down, level with the tab buttons.
-      padding: const EdgeInsets.symmetric(horizontal: 46, vertical: 18),
+      // 60 in and 24 down: level with the tab buttons.
+      padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 24),
       child: Row(
         children: [
           // Ramen's in its own colours, Popcorn's in cream.
-          LogoIsland(
+          ScrollsAway(
             scroll: _scrollController,
             child: SvgPicture.asset(
               widget.ramen ? 'assets/ramen-app-logo.svg' : 'assets/logo.svg',
@@ -460,8 +459,6 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
   /// entrance; the rest arrive with their slide.
   Widget _buildHeroContent(BuildContext context, Movie movie, HeroSlide slide) {
     final from = slide.entrance ? 0.0 : 1.0;
-    // Where it stands in the trending list (1 = top).
-    final rank = widget.trendingMovies.indexWhere((m) => m.id == movie.id) + 1;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -493,24 +490,6 @@ class _DesktopHomeScreenState extends State<DesktopHomeScreen> {
             ],
           ),
         ).animate(value: from).fadeIn(delay: 200.ms),
-        if (rank > 0) ...[
-          const SizedBox(height: 6),
-          Text(
-            '#$rank ${widget.rankLabel}',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              shadows: [
-                Shadow(
-                  color: Colors.black45,
-                  offset: Offset(0, 2),
-                  blurRadius: 4,
-                ),
-              ],
-            ),
-          ).animate(value: from).fadeIn(delay: 250.ms),
-        ],
         const SizedBox(height: 16),
         SizedBox(
           width: 600,

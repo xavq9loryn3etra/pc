@@ -10,7 +10,11 @@ class SubtitleCue {
   final double start;
   final double end;
 
-  const SubtitleCue(this.start, this.end);
+  /// Its words, as written (tags and all): for matching it against the
+  /// video's own subtitles (SubtitleLineMatch). Empty where not kept.
+  final String text;
+
+  const SubtitleCue(this.start, this.end, [this.text = '']);
 
   @override
   String toString() => 'SubtitleCue($start–$end)';
@@ -254,7 +258,7 @@ abstract final class SubtitleSync {
         final end = _seconds(fields[2].trim());
         final words = fields.sublist(9).join(',');
         if (start != null && end != null && end > start && _isTalk(words)) {
-          cues.add(SubtitleCue(start, end));
+          cues.add(SubtitleCue(start, end, words));
         }
         continue;
       }
@@ -269,7 +273,7 @@ abstract final class SubtitleSync {
       }
       if (start != null && end != null && end > start &&
           _isTalk(words.toString())) {
-        cues.add(SubtitleCue(start, end));
+        cues.add(SubtitleCue(start, end, words.toString()));
       }
     }
     cues.sort((a, b) => a.start.compareTo(b.start));

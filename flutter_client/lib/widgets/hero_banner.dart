@@ -11,8 +11,9 @@ import '../theme/app_theme.dart';
 import 'image_precache.dart';
 
 /// The phone home's hero: a slideshow of [movies] (see HeroCarousel), each
-/// slide its picture with its logo, a line of what it is, its trending
-/// rank and its buttons low on it, Apple TV style, and the dots under them.
+/// slide its picture with its logo, a line of what it is and its buttons
+/// low on it, Apple TV style, and the dots under them. (No "#3 Trending
+/// This Week" line: the owner took it out on every device, 24 Nov 2026.)
 class MovieHeroBanner extends StatelessWidget {
   /// The slideshow's titles, in order; the first's details already loaded.
   final List<Movie> movies;
@@ -22,20 +23,12 @@ class MovieHeroBanner extends StatelessWidget {
   final void Function(Movie movie) onTrailer;
   final ScrollController? scrollController;
 
-  /// Where a title stands in TMDB's weekly trending list (1 = top), for the
-  /// "#3 Trending This Week" line; 0 or less hides it.
-  final int Function(Movie movie) rankOf;
-  /// What the rank's of ("Trending This Week", Ramen's "Popular Right Now").
-  final String rankLabel;
-
   const MovieHeroBanner({
     super.key,
     required this.movies,
     required this.onInfo,
     required this.onTrailer,
-    required this.rankOf,
     this.scrollController,
-    this.rankLabel = 'Trending This Week',
   });
 
   // The banner's images and decode sizes, shared by build() and
@@ -156,7 +149,7 @@ class MovieHeroBanner extends StatelessWidget {
   }
 
   /// A slide's content, Apple TV style: low on the picture, close together
-  /// — logo, a line of what it is, its trending rank, then the buttons.
+  /// — logo, a line of what it is, then the buttons.
   /// The first slide's make an entrance; the rest arrive with their slide.
   Widget _buildContent(
     BuildContext context,
@@ -165,7 +158,6 @@ class MovieHeroBanner extends StatelessWidget {
     required double bottom,
   }) {
     final from = slide.entrance ? 0.0 : 1.0;
-    final rank = rankOf(movie);
     return Align(
       alignment: Alignment.bottomCenter,
       child: Padding(
@@ -184,17 +176,6 @@ class MovieHeroBanner extends StatelessWidget {
 
             const SizedBox(height: 12),
             _buildMetaLine(movie).animate(value: from).fadeIn(delay: 200.ms),
-            if (rank > 0) ...[
-              const SizedBox(height: 4),
-              Text(
-                '#$rank $rankLabel',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ).animate(value: from).fadeIn(delay: 250.ms),
-            ],
             const SizedBox(height: 16),
 
             // Buttons: More Info, then round Trailer and Like.

@@ -19,10 +19,12 @@ extension _PlayerOverlays on _PlayerScreenState {
           ),
           child: _SubtitleActivityBar(
             label: label,
-            // A third smaller than a subtitle line: a note, not dialogue.
-            fontSize: textScaler.scale(38) * 0.62,
-            // Out of sight while paused, as the subtitles are.
-            visible: _isPlaying,
+            // As big as a subtitle line, on every device (owner, 24 Nov
+            // 2026): the subtitles' own size and scaling (see _subtitleStyle,
+            // _subtitleScaler).
+            fontSize: textScaler.scale(38),
+            // Kept while paused, as the subtitles are (owner, 24 Nov 2026).
+            visible: true,
           ),
         ),
       ),
@@ -541,6 +543,82 @@ class _SubtitleActivityBarState extends State<_SubtitleActivityBar>
                   child: child,
                 );
               },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The subtitles on the video, as media_kit's own view draws them (its
+/// SubtitleView: the same look, place and padding), but only the main
+/// subtitles — never mpv's secondary ones, which the player follows quietly
+/// from the video's own track to time downloaded copies by
+/// (_followBuiltInLines). media_kit's view drew both, one under the other.
+class _OwnSubtitleView extends StatefulWidget {
+  final Player player;
+  final bool visible;
+
+  /// The room under them: above the controls when those show (see
+  /// _placeSubtitles), at the foot otherwise.
+  final ValueNotifier<double> bottom;
+  final TextScaler textScaler;
+  final TextStyle style;
+
+  const _OwnSubtitleView({
+    required this.player,
+    required this.visible,
+    required this.bottom,
+    required this.textScaler,
+    required this.style,
+  });
+
+  @override
+  State<_OwnSubtitleView> createState() => _OwnSubtitleViewState();
+}
+
+class _OwnSubtitleViewState extends State<_OwnSubtitleView> {
+  late String _text = _main(widget.player.state.subtitle);
+  StreamSubscription<List<String>>? _lines;
+
+  static String _main(List<String> lines) =>
+      lines.isEmpty ? '' : lines.first.trim();
+
+  @override
+  void initState() {
+    super.initState();
+    _lines = widget.player.stream.subtitle.listen((lines) {
+      final text = _main(lines);
+      if (text != _text && mounted) setState(() => _text = text);
+    });
+  }
+
+  @override
+  void dispose() {
+    _lines?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.visible) return const SizedBox.shrink();
+    return IgnorePointer(
+      child: ValueListenableBuilder<double>(
+        valueListenable: widget.bottom,
+        builder: (context, bottom, _) => AnimatedContainer(
+          padding: EdgeInsets.fromLTRB(16, 0, 16, bottom),
+          duration: MediaQuery.disableAnimationsOf(context)
+              ? Duration.zero
+              : const Duration(milliseconds: 250),
+          alignment: Alignment.bottomCenter,
+          child: Material(
+            color: Colors.transparent,
+            child: Text(
+              _text,
+              style: widget.style,
+              textAlign: TextAlign.center,
+              textScaler: widget.textScaler,
             ),
           ),
         ),

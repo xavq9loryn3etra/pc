@@ -3,8 +3,13 @@ import 'dart:io' show File, Platform;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart' show launchUrl;
 
+import '../services/app_update_service.dart';
+import '../services/feature_flags_service.dart';
 import '../services/update_installer.dart';
+import '../widgets/glass_blur.dart' show GlassCircleButton;
+import '../widgets/release_notes_box.dart';
 import '../widgets/status_screen.dart';
+import '../widgets/tv_focus.dart' show TvAutoSelect;
 
 /// Where the update is up to (see [UpdateOverlay]).
 enum _Step {
@@ -23,11 +28,43 @@ enum _Step {
   failed,
 }
 
+/// The update screen. Required ([UpdateOverlay.new]): it covers the app
+/// as it starts, until the update is installed. A small update
+/// ([UpdateOverlay.small], opened from Settings): the same look, with a way
+/// back. Both show what's new (the notes of every release newer than this
+/// one), scrolling inside their own panel if they're long.
 class UpdateOverlay extends StatefulWidget {
   final String message;
   final String url;
 
-  const UpdateOverlay({super.key, required this.message, required this.url});
+  /// The version a small update brings; null for the required update.
+  final String? smallVersion;
+
+  const UpdateOverlay({super.key, required this.message, required this.url})
+      : smallVersion = null;
+
+  const UpdateOverlay.small({
+    super.key,
+    required String version,
+    required this.url,
+  })  : smallVersion = version,
+        message = _smallMessage;
+
+  static const _smallMessage =
+      'A small update with fixes. Your lists and history stay.';
+
+  /// Opens the small update's page over the whole app (not inside a wide
+  /// window's side column).
+  static Future<void> openSmall(BuildContext context, AppUpdate update) {
+    return Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute<void>(
+        builder: (_) => UpdateOverlay.small(
+          version: update.version,
+          url: FeatureFlagsService().updateUrl,
+        ),
+      ),
+    );
+  }
 
   @override
   State<UpdateOverlay> createState() => _UpdateOverlayState();
@@ -118,9 +155,16 @@ class _UpdateOverlayState extends State<UpdateOverlay>
   @override
   Widget build(BuildContext context) {
     final step = _stepParts();
-    return StatusScreen(
-      title: 'A New Version',
+    final small = widget.smallVersion;
+    final releases = AppUpdateService.notesSinceThisVersion();
+    final size = MediaQuery.sizeOf(context);
+    final large = size.width >= 700;
+    final screen = StatusScreen(
+      title: small == null ? 'A New Version' : 'Popcorn $small',
       highlight: 'Is Ready.',
+      notes: releases.isEmpty
+          ? null
+          : ReleaseNotesBox(releases: releases, large: large),
       // The remote message is Android's and Windows' (flags.json); iPhones
       // update through TestFlight. While updating, what to do next (or what
       // went wrong) takes the message's place, so the screen keeps the
@@ -166,12 +210,32 @@ class _UpdateOverlayState extends State<UpdateOverlay>
               ),
       footer: step == null
           ? null
-          : StatusPrimaryButton(
-              label: step.label,
-              onPressed: step.onPressed,
-              // Downloading: the button fills as it goes.
-              progress: _step == _Step.downloading ? _progress : null,
+          // A TV remote starts on it (not on the way back, or the notes).
+          : TvAutoSelect(
+              child: StatusPrimaryButton(
+                label: step.label,
+                onPressed: step.onPressed,
+                // Downloading: the button fills as it goes.
+                progress: _step == _Step.downloading ? _progress : null,
+              ),
             ),
+    );
+    if (small == null) return screen;
+    // A small update can wait: a way back, at the top left.
+    final inset = MediaQuery.paddingOf(context);
+    return Stack(
+      children: [
+        Positioned.fill(child: screen),
+        Positioned(
+          left: inset.left + 12,
+          top: inset.top + 12,
+          child: GlassCircleButton(
+            icon: GlassCircleButton.backIcon,
+            iconSize: GlassCircleButton.backIconSize,
+            onPressed: () => Navigator.of(context).maybePop(),
+          ),
+        ),
+      ],
     );
   }
 

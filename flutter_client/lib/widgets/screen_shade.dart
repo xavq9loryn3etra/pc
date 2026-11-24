@@ -3,12 +3,16 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 
+import '../services/app_mode_service.dart';
 import 'ask_orb.dart' show AskClock, AskClockSubscription;
 
 /// A tab's soft glow across the top, as Ask's: three colours fading down
 /// into black, drifting slowly about (on AskClock), and blooming down from
-/// the top each time the tab's opened. Each tab its own colours (see
-/// ScreenScaffold.glow). Plain gradients, drawn straight — no layers.
+/// the top as it comes on screen. One glow for every tab but Ask's, in the
+/// open mode's colour ([forMode]; owner, 24 Nov 2026) — so going from one
+/// of those tabs to another (or back from Settings' own pages) it stays
+/// as it is rather than blooming again. Plain gradients, drawn straight —
+/// no layers.
 class TabGlow extends StatefulWidget {
   final List<Color> colors;
 
@@ -18,26 +22,30 @@ class TabGlow extends StatefulWidget {
 
   const TabGlow({super.key, required this.colors, this.blooms = true});
 
-  /// Settings' blues.
-  static const settings = [
-    Color(0xFF3B82C4),
-    Color(0xFF2E6C8E),
-    Color(0xFF8CC4EE),
-  ];
+  /// The glow of the open mode's tabs (all but Ask): its colour (Popcorn's
+  /// cream, Ramen's orange), a deeper shade of it and a lighter one.
+  static List<Color> get forMode {
+    final base = AppModeService().currentMode.value.accentColor;
+    final hsl = HSLColor.fromColor(base);
+    return [
+      base,
+      hsl
+          .withLightness((hsl.lightness - 0.22).clamp(0.0, 1.0))
+          .toColor(),
+      hsl
+          .withLightness((hsl.lightness + 0.12).clamp(0.0, 0.92))
+          .toColor(),
+    ];
+  }
 
-  /// My List's roses.
-  static const myList = [
-    Color(0xFFE0457B),
-    Color(0xFFB03A5B),
-    Color(0xFFF4A3B8),
-  ];
-
-  /// Search's purples.
-  static const search = [
-    Color(0xFF8B5CF6),
-    Color(0xFF6D4AB0),
-    Color(0xFFC4B5FD),
-  ];
+  // How many glows are on screen, and when the last one went: one coming
+  // on while another is, or just was (a tab switch, a page closing), is
+  // the same glow carrying on — it doesn't bloom again.
+  static int _onScreen = 0;
+  static DateTime _lastLeft = DateTime.fromMillisecondsSinceEpoch(0);
+  static bool get _glowShowing =>
+      _onScreen > 0 ||
+      DateTime.now().difference(_lastLeft) < const Duration(milliseconds: 600);
 
   @override
   State<TabGlow> createState() => _TabGlowState();
@@ -70,21 +78,30 @@ class _TabGlowState extends State<TabGlow> with SingleTickerProviderStateMixin {
   void _onTickerMode() {
     final active = _tickerMode?.value.enabled ?? true;
     if (active && !_active) {
-      // Coming back from a page that was over this one (Sync, Gemini key):
-      // the glow's been here all along, so it isn't played again — it
-      // bloomed a second time under the page sliding away.
+      // Coming back from a page that was over this one (Sync, Gemini key),
+      // or from another tab with the same glow: it's been on screen all
+      // along, so it isn't played again.
       final uncovered = (_route?.secondaryAnimation?.value ?? 0) > 0;
-      if (widget.blooms && !uncovered) {
+      if (widget.blooms && !uncovered && !TabGlow._glowShowing) {
         _bloom.forward(from: 0);
       } else {
         _bloom.value = 1;
       }
+      TabGlow._onScreen++;
+    } else if (!active && _active) {
+      _leave();
     }
     _active = active;
   }
 
+  void _leave() {
+    TabGlow._onScreen--;
+    TabGlow._lastLeft = DateTime.now();
+  }
+
   @override
   void dispose() {
+    if (_active) _leave();
     _tickerMode?.removeListener(_onTickerMode);
     _clock.dispose();
     _bloom.dispose();

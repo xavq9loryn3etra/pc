@@ -181,7 +181,7 @@ class _SearchScreenState extends State<SearchScreen> {
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
     return ScreenScaffold(
       bottomNavTab: BottomNavTab.search,
-      glow: TabGlow.search,
+      glow: TabGlow.forMode,
       title: const Text('Search'),
       body: (context, isDesktop, padding) {
         // A phone's margin in a wide window's side column too, as Ask's
@@ -312,12 +312,12 @@ class _SearchScreenState extends State<SearchScreen> {
                     ? _barFocus.requestFocus()
                     : _searchFocusNode.requestFocus();
               },
-        // The line round it on Search's first opening: Search's purples
-        // (its glow's, TabGlow.search), the lightest at the head.
+        // The line round it on Search's first opening: its glow's colours
+        // (the mode's, TabGlow.forMode), the lightest at the head.
         traceColors: [
-          TabGlow.search[2],
-          TabGlow.search[0],
-          TabGlow.search[1],
+          TabGlow.forMode[2],
+          TabGlow.forMode[0],
+          TabGlow.forMode[1],
         ],
         tab: BottomNavTab.search,
         mode: widget.mode,
@@ -354,7 +354,7 @@ class _SearchScreenState extends State<SearchScreen> {
   // foot now). In a wide window's side column, just clear of its rounded
   // top corners, which clipped what was right against them.
   double _topPadding(BuildContext context) => SideColumnScope.inColumn(context)
-      ? (TvDevice.isTv ? _tvContentTop : 12)
+      ? (TvDevice.isTv ? _tvContentTop : 16)
       : ScreenScaffold.contentTop(context);
 
   // On a TV, below the field and pills at the top (see build).

@@ -5,9 +5,16 @@ name: Publish release
 # app's version in pubspec.yaml changes on main (e.g. 3.0.0 -> 3.0.1). A
 # version already published is skipped. The new release is marked Latest;
 # earlier ones stay listed below it as the archive. Once it's out, the app
-# requires that version (docs/flags.json, here and on the public website),
-# so older copies ask to update, and this repo is tagged "v<version>",
-# which starts the iPhone build on Codemagic (codemagic.yaml).
+# hears of it (docs/flags.json, here and on the public website), and this
+# repo is tagged "v<version>", which starts the iPhone build on Codemagic
+# (codemagic.yaml).
+#
+# Small or big, by the version number: a new last number (4.5.3 -> 4.5.4)
+# is a small update, offered in the app's Settings (flags.json
+# latest_version); a new middle or first number (-> 4.6.0) is also
+# required (min_required_version), so older copies show the full-screen
+# update. Each version's notes come from RELEASE_NOTES.md: the newest five
+# go into flags.json (release_notes), and its own onto its release page.
 #
 # Secrets (on this repo):
 #   RELEASES_TOKEN   fine-grained token with Contents: read and write on
@@ -194,6 +201,10 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          path: pc
       - name: Create the release
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
@@ -203,8 +214,15 @@ jobs:
           # When it was released, in the users' time (Sri Lanka).
           released_day="$(TZ=Asia/Colombo date '+%-d %B %Y')"
           released_at="$(TZ=Asia/Colombo date '+%-d %B %Y at %-I:%M %p')"
+          # What's new in it, from RELEASE_NOTES.md (if it has any).
+          whats_new="$(python3 pc/.github/scripts/release_notes.py markdown pc/RELEASE_NOTES.md "$VERSION")"
+          if [ -n "$whats_new" ]; then
+            whats_new="$(printf '**What'"'"'s new**\n\n%s' "$whats_new")"$'\n\n'
+          fi
           cat > notes.md <<EOF
           **Popcorn $VERSION**, released on $released_at (Sri Lanka time).
+
+          ${whats_new}**How to install**
 
           - **Android:** download **Popcorn-Android.apk** below and open it on your phone.
           - **Android TV, Google TV and Fire TV:** use **Popcorn-Android-TV.apk** instead.
@@ -237,15 +255,13 @@ jobs:
               -f sha="$sha" > /dev/null
           fi
 
-      # Only now that the files are out: the app requires this version, so
-      # anyone older is asked to update (docs/flags.json, read by the app
-      # from GitHub Pages). Android and Windows share the top-level values;
-      # iPhone has its own entry there, as there's no iPhone release.
-      - uses: actions/checkout@v5
-        with:
-          ref: main
-          path: pc
-      - name: Require this version in the app
+      # Only now that the files are out: the app hears of this version
+      # (docs/flags.json, read by the app from GitHub Pages): offered in
+      # Settings if it's a small update, required if it's a big one (see the
+      # top of this file). Android and Windows share the top-level values;
+      # iPhone has its own min_required_version there, raised by hand once
+      # TestFlight has the build.
+      - name: Tell the app about this version
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.check.outputs.version }}
@@ -256,12 +272,22 @@ jobs:
           site="https://popcorn-organization.github.io/popcorn/"
           for attempt in 1 2 3; do
             git pull -q --rebase origin main
-            jq --arg v "$VERSION" --arg u "$site" \
-              '.min_required_version = $v | .update_url = $u' \
+            # The version before this one: the newest the flags know of.
+            # Same first and middle numbers: a small update.
+            previous="$(jq -r '.latest_version // .min_required_version' docs/flags.json)"
+            if [ "${previous%.*}" = "${VERSION%.*}" ]; then
+              big=false; kind="small update"
+            else
+              big=true; kind="required"
+            fi
+            notes="$(python3 .github/scripts/release_notes.py json RELEASE_NOTES.md 5)"
+            jq --arg v "$VERSION" --arg u "$site" --argjson big "$big" --argjson notes "$notes" \
+              '.latest_version = $v | .release_notes = $notes | .update_url = $u
+               | if $big then .min_required_version = $v else . end' \
               docs/flags.json > flags.tmp && mv flags.tmp docs/flags.json
-            if git diff --quiet; then echo "The app already requires $VERSION."; break; fi
-            git commit -qam "flags: require Popcorn $VERSION (published)"
-            if git push -q origin HEAD:main; then echo "The app now requires $VERSION."; break; fi
+            if git diff --quiet; then echo "The flags already have $VERSION."; break; fi
+            git commit -qam "flags: Popcorn $VERSION is out ($kind)"
+            if git push -q origin HEAD:main; then echo "Popcorn $VERSION is out ($kind)."; break; fi
             git reset -q --hard origin/main
           done
           # Publish the changed flags on GitHub Pages straight away.
@@ -285,7 +311,7 @@ jobs:
               exit 0
             fi
           fi
-          args=(-f message="flags: require Popcorn $VERSION (published)"
+          args=(-f message="flags: Popcorn $VERSION is out"
                 -f content="$(base64 -w0 docs/flags.json)")
           if [ -n "$sha" ]; then args+=(-f sha="$sha"); fi
           gh api -X PUT "repos/$RELEASE_REPO/contents/docs/flags.json" "${args[@]}" > /dev/null

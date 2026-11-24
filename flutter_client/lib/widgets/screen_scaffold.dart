@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'screen_shade.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -71,7 +72,46 @@ class ScreenScaffold extends StatefulWidget {
   State<ScreenScaffold> createState() => _ScreenScaffoldState();
 }
 
-class _ScreenScaffoldState extends State<ScreenScaffold> {
+class _ScreenScaffoldState extends State<ScreenScaffold>
+    with SingleTickerProviderStateMixin {
+  // A tab's content (its title and body, not its glow) fading in as the
+  // tab's opened: the tab left fades out over it (MovieTabShell), and the
+  // glow, the same on every tab, stays as it is.
+  late final AnimationController _contentIn = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+    value: 1,
+  );
+  late final Animation<double> _contentOpacity =
+      CurvedAnimation(parent: _contentIn, curve: Curves.easeOut);
+  ValueListenable<TickerModeData>? _tickerMode;
+  bool _shown = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _tickerMode?.removeListener(_onTickerMode);
+    _tickerMode = TickerMode.getValuesNotifier(context)
+      ..addListener(_onTickerMode);
+    _onTickerMode();
+  }
+
+  void _onTickerMode() {
+    final shown = _tickerMode?.value.enabled ?? true;
+    // A tab (not Settings' own pages, which slide in) coming on screen —
+    // not uncovered by a page closing over it, where it's been all along.
+    final uncovered =
+        (ModalRoute.of(context)?.secondaryAnimation?.value ?? 0) > 0;
+    if (shown &&
+        !_shown &&
+        widget.bottomNavTab != null &&
+        widget.glowBlooms &&
+        !uncovered) {
+      _contentIn.forward(from: 0);
+    }
+    _shown = shown;
+  }
+
   // Whether the body's scrolled from the top, which brings in the
   // title's island (see TitleIsland). A notifier so only the title
   // rebuilds as it changes, not the body.
@@ -91,14 +131,23 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
 
   @override
   void dispose() {
+    _tickerMode?.removeListener(_onTickerMode);
+    _contentIn.dispose();
     _countPanel(false);
     _scrolled.dispose();
     super.dispose();
   }
 
+  /// [bar], fading in with the tab's content (see [_contentIn]).
+  PreferredSizeWidget _fading(PreferredSizeWidget bar) => PreferredSize(
+        preferredSize: bar.preferredSize,
+        child: FadeTransition(opacity: _contentOpacity, child: bar),
+      );
+
   /// [body] over the tab's glow (see [ScreenScaffold.glow]).
   Widget _withGlow(Widget body) {
     final glow = widget.glow;
+    body = FadeTransition(opacity: _contentOpacity, child: body);
     if (glow == null) return body;
     return Stack(
       children: [
@@ -140,7 +189,7 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
               extendBodyBehindAppBar: widget.extendBodyBehindAppBar,
               appBar: widget.titleIsLabel && ScreenScaffold.hidesTitle(context)
                   ? null
-                  : CustomAppBar(
+                  : _fading(CustomAppBar(
                       // On its island once the page is scrolled, as the details
                       // page's title is (see GlassBubbleBar) — instead of a black
                       // fade over the content behind it. Not a title that isn't
@@ -169,7 +218,7 @@ class _ScreenScaffoldState extends State<ScreenScaffold> {
                       // floating bottom nav bar now — mode-switching lives in
                       // Settings instead of a header icon.
                       showModeSwitch: false,
-                    ),
+                    )),
               body: NotificationListener<ScrollNotification>(
                 onNotification: _onScroll,
                 child: _withGlow(widget.body(

@@ -290,16 +290,15 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
 
     final scaffold = Scaffold(
       extendBodyBehindAppBar: true,
-      // No glass bar or top fade: once scrolled, the logo sits on a
-      // frosted island of its own (see CustomAppBar.logoIslandScroll).
+      // No glass bar or top fade: the logo scrolls away with the page
+      // (see CustomAppBar.logoScroll).
       appBar: CustomAppBar(
         forceOpacity: 0,
         showActions: false,
         showModeSwitch: false,
-        logoIslandScroll: _scrollController,
-        // The island's padding (14) then puts the logo in line with the
-        // rows' titles (24 in).
-        titleSpacing: 10,
+        logoScroll: _scrollController,
+        // In line with the rows' titles (24 in).
+        titleSpacing: 24,
       ),
       body: SingleChildScrollView(
         controller: _scrollController,
@@ -310,10 +309,6 @@ class _MovieHomeScreenState extends State<MovieHomeScreen> {
               MovieHeroBanner(
                 scrollController: _scrollController,
                 movies: _heroMovies,
-                // Where each stands in TMDB's weekly trending list.
-                rankOf: (movie) =>
-                    _trendingMovies.indexWhere((m) => m.id == movie.id) + 1,
-                rankLabel: _rankLabel,
                 onTrailer: onTrailer,
                 onInfo: (movie) =>
                     _navigateToDetails(movie, heroTag: 'hero_${movie.id}'),

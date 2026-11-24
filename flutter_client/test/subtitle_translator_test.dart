@@ -93,4 +93,44 @@ void main() {
       {'i': 1, 't': 'හරි'}
     ]);
   });
+
+  group('restoreBreaks', () {
+    test('two speakers joined: split at the second dash', () {
+      expect(
+        SubtitleTranslator.restoreBreaks(
+            '- ඔයා කොහෙද හිටියේ? - ගෙදර.', '- Where were you?\n- At home.'),
+        '- ඔයා කොහෙද හිටියේ?\n- ගෙදර.',
+      );
+    });
+
+    test('second speaker only marked: split at its dash', () {
+      expect(
+        SubtitleTranslator.restoreBreaks(
+            'ඔයා කොහෙද හිටියේ? - ගෙදර.', 'Where were you?\n- At home.'),
+        'ඔයා කොහෙද හිටියේ?\n- ගෙදර.',
+      );
+    });
+
+    test('a long sentence: broken near its middle', () {
+      const sinhala = 'මම හිතුවේ එයා අවුරුදු ගාණකට කලින් මැරුණා කියලා ඔයා දන්නවද';
+      final out = SubtitleTranslator.restoreBreaks(
+          sinhala, 'I thought she died\nyears ago, you know.');
+      expect(out.split('\n'), hasLength(2));
+      expect(out.replaceAll('\n', ' '), sinhala);
+    });
+
+    test('a short line stays whole', () {
+      expect(SubtitleTranslator.restoreBreaks('යමු.', "Let's\ngo."), 'යමු.');
+    });
+
+    test('kept as it is when it has its break, or the English has none', () {
+      expect(SubtitleTranslator.restoreBreaks('එක\nදෙක', 'One\ntwo'),
+          'එක\nදෙක');
+      expect(
+          SubtitleTranslator.restoreBreaks(
+              'මම හිතුවේ එයා අවුරුදු ගාණකට කලින් මැරුණා කියලා ඔයා දන්නවද',
+              'One long English line'),
+          'මම හිතුවේ එයා අවුරුදු ගාණකට කලින් මැරුණා කියලා ඔයා දන්නවද');
+    });
+  });
 }

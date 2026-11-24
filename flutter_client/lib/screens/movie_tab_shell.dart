@@ -18,6 +18,14 @@ import 'ask_screen.dart';
 
 const _kTabFadeDuration = Duration(milliseconds: 200);
 
+/// The tabs' indexes from [from], bottom to top: the open one first,
+/// under the rest — whichever was open before fades out over it.
+List<int> _tabOrder(int count, BottomNavTab open, {int from = 0}) => [
+      if (open.index >= from && open.index < count) open.index,
+      for (var i = from; i < count; i++)
+        if (i != open.index) i,
+    ];
+
 /// Hosts the four mode tabs (Home, Search, Favorites, Settings), keeping
 /// every tab's widget alive per mode so switching preserves scroll position,
 /// search text, etc. and never refetches data. Uses a Stack of per-tab
@@ -61,8 +69,13 @@ class MovieTabShell extends StatelessWidget {
             }
             return Stack(
               children: [
-                for (var i = 0; i < screens.length; i++)
+                // The open tab underneath, there at once, and the one left
+                // fading out over it (see _tabOrder): the tabs' shared glow
+                // (TabGlow) stays as it is through a switch, instead of
+                // dipping as two half-faded copies of it.
+                for (final i in _tabOrder(screens.length, activeTab))
                   IgnorePointer(
+                    key: ValueKey(i),
                     ignoring: BottomNavTab.values[i] != activeTab,
                     // Out of reach of a TV remote or keyboard too, not just
                     // of taps, while hidden.
@@ -71,7 +84,9 @@ class MovieTabShell extends StatelessWidget {
                       child: AnimatedOpacity(
                         opacity:
                             BottomNavTab.values[i] == activeTab ? 1.0 : 0.0,
-                        duration: _kTabFadeDuration,
+                        duration: BottomNavTab.values[i] == activeTab
+                            ? Duration.zero
+                            : _kTabFadeDuration,
                         curve: Curves.easeOut,
                         // The hidden tabs' animations paused — Ask's glow,
                         // a loading shimmer — rather than running unseen.
@@ -603,8 +618,10 @@ class _ColumnTabs extends StatelessWidget {
             final tab = MovieTabService().currentTab.value;
             return Stack(
             children: [
-              for (var i = 1; i < screens.length; i++)
+              // The open tab under the rest, there at once (see _tabOrder).
+              for (final i in _tabOrder(screens.length, tab, from: 1))
                 IgnorePointer(
+                  key: ValueKey(i),
                   ignoring: BottomNavTab.values[i] != tab,
                   child: ExcludeFocus(
                     excluding: BottomNavTab.values[i] != tab,
@@ -618,7 +635,8 @@ class _ColumnTabs extends StatelessWidget {
                           ? 1.0
                           : 0.0,
                       duration: _WideTabs._warming.value ||
-                              _WideTabs._warmJustEnded
+                              _WideTabs._warmJustEnded ||
+                              BottomNavTab.values[i] == tab
                           ? Duration.zero
                           : _kTabFadeDuration,
                       curve: Curves.easeOut,

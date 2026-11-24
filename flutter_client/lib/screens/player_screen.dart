@@ -57,6 +57,7 @@ import '../services/gemini_key_service.dart';
 import '../widgets/gemini_key_form.dart';
 import '../services/subtitle_retime.dart';
 import '../services/subtitle_sync.dart';
+import '../services/subtitle_line_match.dart';
 import '../services/window_full_screen.dart';
 import '../services/sync/sync_ledger.dart';
 
@@ -327,6 +328,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   // Subtitles whose timing listening confirmed (or kept from an earlier
   // visit): shown, and checked again now and then (see _autoSyncRecheck).
   final Set<String> _autoSynced = {};
+  // The video's own subtitle track followed quietly to time the downloaded
+  // copies by their lines (see _followBuiltInLines); each copy's matcher
+  // (null while it's read); the last line it showed; its lines' stream.
+  SubtitleTrackData? _lineRef;
+  final Map<String, SubtitleLineMatch?> _lineMatches = {};
+  String _lastRefLine = '';
+  StreamSubscription<List<String>>? _refLines;
   // What listening found for each subtitle (two separate stretches
   // agreeing confirms its timing).
   final _autoSyncSeen = <String, SubtitleTimingEvidence>{};
@@ -1151,6 +1159,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     // 5. Dispose seek bar / stats notifiers
     _subtitleBottom.dispose();
+    _refLines?.cancel();
     _positionNotifier.dispose();
     _durationNotifier.dispose();
     _bufferNotifier.dispose();
@@ -1327,27 +1336,40 @@ class _PlayerScreenState extends State<PlayerScreen>
                                   scale: _isPlaying ? 1.0 : 1.04,
                                   duration: const Duration(milliseconds: 350),
                                   curve: Curves.easeInOutCubic,
-                                  child: Video(
-                                    key: _videoKey,
-                                    controller: controller,
-                                    // media_kit's own look, with a font for Sinhala
-                                    // (subtitles made from English: SubtitleTranslator),
-                                    // bigger: see _subtitleScaler.
-                                    subtitleViewConfiguration:
-                                        SubtitleViewConfiguration(
-                                      visible: subtitleActivity == null &&
-                                          subtitleTiming == _SubtitleTiming.ready &&
-                                          translationLoaded,
-                                      padding: EdgeInsets.fromLTRB(
-                                          16, 0, 16, _subtitleBottom.value),
-                                      textScaler: subtitleTextScaler,
-                                      style: subtitleStyle,
-                                    ),
-                                    controls:
-                                        NoVideoControls, // Pure custom controls overlay
-                                    fit: _videoFit.boxFit,
-                                    width: double.infinity,
-                                    height: double.infinity,
+                                  child: Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      Video(
+                                        key: _videoKey,
+                                        controller: controller,
+                                        // Drawn by _OwnSubtitleView instead: the
+                                        // main subtitles only, never the video's
+                                        // own ones followed quietly as the
+                                        // secondary (_followBuiltInLines).
+                                        subtitleViewConfiguration:
+                                            const SubtitleViewConfiguration(
+                                                visible: false),
+                                        controls:
+                                            NoVideoControls, // Pure custom controls overlay
+                                        fit: _videoFit.boxFit,
+                                        width: double.infinity,
+                                        height: double.infinity,
+                                      ),
+                                      // media_kit's own look, with a font for
+                                      // Sinhala (subtitles made from English:
+                                      // SubtitleTranslator), bigger: see
+                                      // _subtitleScaler.
+                                      _OwnSubtitleView(
+                                        player: player,
+                                        visible: subtitleActivity == null &&
+                                            subtitleTiming ==
+                                                _SubtitleTiming.ready &&
+                                            translationLoaded,
+                                        bottom: _subtitleBottom,
+                                        textScaler: subtitleTextScaler,
+                                        style: subtitleStyle,
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ),

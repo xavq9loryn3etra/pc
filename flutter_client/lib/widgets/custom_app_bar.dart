@@ -10,7 +10,6 @@ import '../screens/search_screen.dart';
 import '../screens/favorites_screen.dart';
 import 'mode_switcher_dialog.dart';
 import 'floating_bottom_nav_bar.dart';
-import 'screen_scaffold.dart' show TitleIsland;
 
 class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   final Widget? title;
@@ -29,10 +28,8 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   final double? titleSpacing;
   final double? leadingWidth;
 
-  /// The home's scroll: once it's scrolled, the logo sits on a frosted
-  /// island, fading in over the first 200px (as the glass bar used to),
-  /// instead of a glass bar or a dark fade across the top.
-  final ScrollController? logoIslandScroll;
+  /// The home's scroll: the logo scrolls away with the page (ScrollsAway).
+  final ScrollController? logoScroll;
 
   const CustomAppBar({
     super.key,
@@ -51,7 +48,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.centerTitle = false,
     this.titleSpacing,
     this.leadingWidth,
-    this.logoIslandScroll,
+    this.logoScroll,
   });
 
   @override
@@ -124,7 +121,12 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
     final inColumn = SideColumnScope.inColumn(context);
 
     return AppBar(
-      toolbarHeight: (inColumn || wide) ? wideToolbarHeight : null,
+      // In the side column, 76: its 44 back button 16 from the top, as
+      // from the side (80 lines a wide window's bar up with the tab
+      // buttons, which the column sits below).
+      toolbarHeight: inColumn
+          ? wideToolbarHeight - 4
+          : (wide ? wideToolbarHeight : null),
       elevation: 0,
       scrolledUnderElevation: 0,
       automaticallyImplyLeading: automaticallyImplyLeading,
@@ -135,10 +137,10 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
       title: GestureDetector(
         onLongPress: onLogoLongPress,
         child: title ??
-            (logoIslandScroll == null
+            (logoScroll == null
                 ? _buildDefaultLogo()
-                : LogoIsland(
-                    scroll: logoIslandScroll!, child: _buildDefaultLogo())),
+                : ScrollsAway(
+                    scroll: logoScroll!, child: _buildDefaultLogo())),
       ),
       backgroundColor: Colors.transparent,
       flexibleSpace: opacity > 0.01
@@ -209,52 +211,26 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
-/// The home's logo on a frosted island once the page is scrolled: the
-/// very island a page's header gets (TitleIsland), coming in the same way
-/// — on a phone and on a wide window alike. It faded in with the scroll
-/// position before, which looked sudden beside the headers'.
-class LogoIsland extends StatefulWidget {
+/// The home's logo, scrolling up and away with the page under it, as part
+/// of it rather than staying at the top (owner, 24 Nov 2026; it sat on a
+/// frosted island once scrolled before). Moved as it's drawn: only the
+/// logo repaints as the page scrolls.
+class ScrollsAway extends StatelessWidget {
   final ScrollController scroll;
   final Widget child;
 
-  const LogoIsland({super.key, required this.scroll, required this.child});
+  const ScrollsAway({super.key, required this.scroll, required this.child});
 
   @override
-  State<LogoIsland> createState() => _LogoIslandState();
-}
-
-class _LogoIslandState extends State<LogoIsland> {
-  bool _shown = false;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.scroll.addListener(_onScroll);
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: scroll,
+      child: child,
+      builder: (context, child) => Transform.translate(
+        offset: Offset(
+            0, scroll.hasClients && scroll.position.hasPixels ? -scroll.offset : 0),
+        child: child,
+      ),
+    );
   }
-
-  @override
-  void didUpdateWidget(LogoIsland old) {
-    super.didUpdateWidget(old);
-    if (old.scroll != widget.scroll) {
-      old.scroll.removeListener(_onScroll);
-      widget.scroll.addListener(_onScroll);
-    }
-  }
-
-  @override
-  void dispose() {
-    widget.scroll.removeListener(_onScroll);
-    super.dispose();
-  }
-
-  // Scrolled from the top, as a page's header (ScreenScaffold): only the
-  // change rebuilds, not every pixel of the scroll.
-  void _onScroll() {
-    final shown = widget.scroll.hasClients && widget.scroll.offset > 4;
-    if (shown != _shown) setState(() => _shown = shown);
-  }
-
-  @override
-  Widget build(BuildContext context) =>
-      TitleIsland(shown: _shown, child: widget.child);
 }

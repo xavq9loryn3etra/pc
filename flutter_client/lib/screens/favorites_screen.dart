@@ -91,7 +91,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   Widget build(BuildContext context) {
     return ScreenScaffold(
       bottomNavTab: BottomNavTab.favorites,
-      glow: TabGlow.myList,
+      glow: TabGlow.forMode,
       title: const Text('My List'),
       body: (context, isDesktop, padding) {
         if (_favorites.isEmpty) {
@@ -99,7 +99,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
             padding: EdgeInsets.fromLTRB(
               24,
               SideColumnScope.inColumn(context)
-                  ? 12
+                  ? 16
                   : ScreenScaffold.contentTop(context),
               24,
               padding.bottom,
@@ -119,11 +119,13 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
           padding: padding.copyWith(
             left: horizontalPadding,
             right: horizontalPadding,
-            // In a wide window's side column, just clear of its rounded
-            // top corners, which clipped the first posters.
+            // In a wide window's side column, 16 all round, as its other
+            // tabs: clear of its rounded corners, which clipped the posters.
             top: SideColumnScope.inColumn(context)
-                ? 12
+                ? 16
                 : ScreenScaffold.contentTop(context),
+            bottom: padding.bottom +
+                (SideColumnScope.inColumn(context) ? 16 : 0),
           ),
           gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
             maxCrossAxisExtent: isDesktop ? 200 : 150,

@@ -1,22 +1,27 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../services/app_mode_service.dart';
+import '../services/app_update_service.dart';
 import '../services/feature_flags_service.dart';
 import '../services/gemini_key_service.dart';
 import '../services/sync/sync_service.dart';
 import '../services/torrent/download_ahead_settings.dart';
 import '../services/tv_device.dart';
+import '../services/visual_effects_service.dart';
 import '../widgets/floating_bottom_nav_bar.dart';
-import '../widgets/glass_blur.dart' show GlassSwitch;
+import '../widgets/glass_blur.dart' show GlassSwitch, kGlassEdge;
 import '../widgets/mode_switch_row.dart';
+import '../widgets/poster_wall.dart';
 import '../widgets/screen_scaffold.dart';
 import '../widgets/screen_shade.dart';
 import '../widgets/settings_parts.dart';
 import 'gemini_key_screen.dart';
 import 'sync_settings_screen.dart';
+import 'update_overlay.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -26,13 +31,14 @@ class SettingsScreen extends StatelessWidget {
     return ScreenScaffold(
       title: const Text('Settings'),
       bottomNavTab: BottomNavTab.settings,
-      glow: TabGlow.settings,
+      glow: TabGlow.forMode,
       actions: const [_AppVersionLabel()],
       body: (context, isDesktop, padding) {
         return ListenableBuilder(
           listenable: Listenable.merge([
             AppModeService().currentMode,
             FeatureFlagsService().hidePlayback,
+            AppUpdateService().waiting,
           ]),
           builder: (context, _) {
             // Playback's one setting is about mobile data: phones and
@@ -44,6 +50,7 @@ class SettingsScreen extends StatelessWidget {
                     !isComputer &&
                     !TvDevice.isTv;
             final showSync = SyncService().available;
+            final update = AppUpdateService().waiting.value;
 
             // Grouped like Apple's settings: each section's rows on one
             // card, a short note under it, ordered by how often they're
@@ -55,8 +62,10 @@ class SettingsScreen extends StatelessWidget {
                 math.max(0.0, (MediaQuery.sizeOf(context).width - 720) / 2);
             final listPadding = padding.copyWith(
                 // None in a wide window's side column.
+                // In the side column: 16 above the first heading (8 here,
+                // and its own 8), as at the sides and the foot.
                 top: SideColumnScope.inColumn(context)
-                    ? 0
+                    ? 8
                     : ScreenScaffold.contentTop(context),
                 left: side,
                 right: side);
@@ -67,9 +76,13 @@ class SettingsScreen extends StatelessWidget {
                 SliverPadding(
                   padding: listPadding.copyWith(bottom: 0),
                   sliver: SliverList.list(children: [
+                    // A small update waiting: first, in the update
+                    // screen's look.
+                    if (update != null) _UpdateCard(update),
                     // No modes in the desktop app (see AppModeService).
                     if (AppModeService.canSwitchMode) ...[
-                      const SettingsSectionLabel('SWITCH MODE', topPadding: 8),
+                      SettingsSectionLabel('SWITCH MODE',
+                          topPadding: update == null ? 8 : 24),
                       // On a frosted panel, as on the start screen.
                       const SettingsCard(
                         radius: 24,
@@ -80,7 +93,10 @@ class SettingsScreen extends StatelessWidget {
                     if (showStorage) ...[
                       SettingsSectionLabel(
                         'PLAYBACK',
-                        topPadding: AppModeService.canSwitchMode ? 24 : 8,
+                        topPadding: AppModeService.canSwitchMode ||
+                                update != null
+                            ? 24
+                            : 8,
                       ),
                       const SettingsGroup(
                         footnote: 'Gets a head start of about 6 MB on what '
@@ -91,8 +107,11 @@ class SettingsScreen extends StatelessWidget {
                     ],
                     SettingsSectionLabel(
                       'GOOGLE',
-                      topPadding:
-                          AppModeService.canSwitchMode || showStorage ? 24 : 8,
+                      topPadding: AppModeService.canSwitchMode ||
+                              showStorage ||
+                              update != null
+                          ? 24
+                          : 8,
                     ),
                     SettingsGroup(
                       children: [
@@ -138,7 +157,7 @@ class SettingsScreen extends StatelessWidget {
                         // title (and so the app bar) is left out: the side column.
                         if (ScreenScaffold.hidesTitle(context))
                           const Padding(
-                            padding: EdgeInsets.only(top: 24, bottom: 8),
+                            padding: EdgeInsets.only(top: 24, bottom: 16),
                             child: _AppVersionLabel(),
                           )
                         else
@@ -152,6 +171,143 @@ class SettingsScreen extends StatelessWidget {
           },
         );
       },
+    );
+  }
+}
+
+/// A small update waiting (AppUpdateService): a compact card at the top of
+/// Settings in the update screen's look — the poster wall moving behind it
+/// under frost (as on the update and welcome screens), "A New Version Is
+/// Ready." on one line, and a white button that opens the update's page, with what's new and "Update
+/// Now". (A taller card with everything centred was too big: owner, 24 Nov
+/// 2026.)
+class _UpdateCard extends StatelessWidget {
+  final AppUpdate update;
+
+  const _UpdateCard(this.update);
+
+  static const _radius = 20.0;
+
+  @override
+  Widget build(BuildContext context) {
+    void open() => UpdateOverlay.openSmall(context, update);
+    return Padding(
+      // A phone's margins, as the other cards (SettingsCard).
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Material(
+        color: Colors.black,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(_radius),
+          side: BorderSide(color: kGlassEdge),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
+          children: [
+            // The artwork scrolling by under frost, as the update screen's
+            // (owner, 24 Nov 2026). Where the app's glass is turned down
+            // (slow, saving power, a TV): no blur, just darker.
+            Positioned.fill(
+              child: IgnorePointer(
+                child: ValueListenableBuilder<bool>(
+                  valueListenable: VisualEffectsService().reduceGlass,
+                  builder: (context, reduced, wall) => reduced
+                      ? wall!
+                      : ImageFiltered(
+                          imageFilter:
+                              ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                          child: wall,
+                        ),
+                  child: const PosterWall(scale: 0.42),
+                ),
+              ),
+            ),
+            // Darker behind the words, lighter towards the button.
+            Positioned.fill(
+              child: IgnorePointer(
+                child: ValueListenableBuilder<bool>(
+                  valueListenable: VisualEffectsService().reduceGlass,
+                  builder: (context, reduced, _) => DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          Colors.black.withValues(alpha: reduced ? 0.9 : 0.6),
+                          Colors.black.withValues(alpha: reduced ? 0.7 : 0.35),
+                          Colors.black.withValues(alpha: reduced ? 0.55 : 0.2),
+                        ],
+                        stops: const [0, 0.55, 1],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            InkWell(
+              mouseCursor: WidgetStateMouseCursor.clickable,
+              onTap: open,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 14, 14, 14),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // One line, in the app's usual font (owner, 24
+                          // Nov 2026).
+                          const Text(
+                            'A New Version Is Ready.',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white,
+                              letterSpacing: -0.3,
+                              height: 1.2,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Popcorn ${update.version}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: Colors.white.withValues(alpha: 0.65),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    ElevatedButton(
+                      onPressed: open,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.black,
+                        elevation: 0,
+                        minimumSize: const Size(0, 44),
+                        padding: const EdgeInsets.symmetric(horizontal: 18),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      child: const Text(
+                        "What's New",
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

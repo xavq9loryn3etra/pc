@@ -2,7 +2,32 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+/// One release's notes (see FeatureFlagsService.releaseNotes).
+class ReleaseNotes {
+  final String version;
+  final List<String> notes;
+
+  const ReleaseNotes(this.version, this.notes);
+}
+
+/// Compares two versions like "4.5.3" (a "+build" part is ignored):
+/// negative if [a] is older than [b], 0 if the same, positive if newer.
+int compareVersions(String a, String b) {
+  List<int> parts(String v) => [
+        for (final p in v.split('+').first.trim().split('.'))
+          int.tryParse(p) ?? 0,
+      ];
+  final x = parts(a), y = parts(b);
+  for (var i = 0; i < 3; i++) {
+    final p = i < x.length ? x[i] : 0;
+    final q = i < y.length ? y[i] : 0;
+    if (p != q) return p.compareTo(q);
+  }
+  return 0;
+}
 
 /// Remote flags, read from a static JSON file on the public website
 /// (`docs/flags.json` in popcorn-organization/popcorn, on GitHub Pages).
@@ -25,6 +50,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// (Settings says it's paused for now); nothing is lost, it carries on when
 /// set back to true. `sync_blocked_versions` — a list of app versions
 /// (e.g. `["4.2.0"]`) that mustn't sync, for a release with a sync bug.
+///
+/// `latest_version` — the newest release. Older than it but not older than
+/// `min_required_version`: a small update is waiting, offered in Settings
+/// (AppUpdateService). `release_notes` — the last few releases' notes,
+/// newest first: `[{"version": "4.5.4", "notes": ["…", "…"]}]`, written in
+/// RELEASE_NOTES.md and copied here by the release workflow.
 class FeatureFlagsService {
   static final FeatureFlagsService _instance = FeatureFlagsService._internal();
   factory FeatureFlagsService() => _instance;
@@ -50,6 +81,20 @@ class FeatureFlagsService {
 
   final ValueNotifier<bool> hidePlayback = ValueNotifier(false);
 
+  /// Bumped each time flags are applied (cached or fetched), for what reads
+  /// the update fields (AppUpdateService).
+  final ValueNotifier<int> changes = ValueNotifier(0);
+
+  /// This app's version (pubspec's, without the build number), once
+  /// [init] has run.
+  String appVersion = '0.0.0';
+
+  /// A test build's pretend update (`--dart-define=UPDATE_TEST=small` or
+  /// `big`): the flags say a newer version is out, with long notes, so the
+  /// Settings button, the dot and the update pages can be tried. Empty
+  /// (off) in every real build.
+  static const String _updateTest = String.fromEnvironment('UPDATE_TEST');
+
   final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 5),
     receiveTimeout: const Duration(seconds: 5),
@@ -62,6 +107,31 @@ class FeatureFlagsService {
   String get minRequiredVersion => _string('min_required_version');
   String get updateRequiredMessage => _string('update_required_message');
   String get updateUrl => _string('update_url');
+
+  /// The newest release ('' if the flags don't say).
+  String get latestVersion {
+    final value = _values['latest_version'];
+    return value is String ? value : '';
+  }
+
+  /// The last few releases' notes, newest first (see the class notes).
+  List<ReleaseNotes> get releaseNotes {
+    final value = _values['release_notes'];
+    if (value is! List) return const [];
+    return [
+      for (final entry in value)
+        if (entry is Map &&
+            entry['version'] is String &&
+            entry['notes'] is List)
+          ReleaseNotes(
+            entry['version'] as String,
+            [
+              for (final note in entry['notes'] as List)
+                if (note is String && note.trim().isNotEmpty) note.trim(),
+            ],
+          ),
+    ];
+  }
 
   /// Whether syncing with Google Drive may run (see the class notes).
   bool get syncEnabled {
@@ -78,6 +148,9 @@ class FeatureFlagsService {
   /// Restores the last fetched flags so the UI is right from the very
   /// first frame (including offline launches, where the fetch fails).
   Future<void> init() async {
+    try {
+      appVersion = (await PackageInfo.fromPlatform()).version.split('+').first;
+    } catch (_) {}
     try {
       final prefs = await SharedPreferences.getInstance();
       final cached = prefs.getString(_cacheKey);
@@ -123,8 +196,53 @@ class FeatureFlagsService {
     final values = Map<String, dynamic>.of(_defaults)..addAll(json);
     final overrides = json[_platformKey];
     if (overrides is Map<String, dynamic>) values.addAll(overrides);
+    if (_updateTest.isNotEmpty) _pretendUpdate(values);
     _values = values;
     hidePlayback.value = _bool('hide_playback');
+    changes.value++;
+  }
+
+  /// See [_updateTest]. "small": the next last number is out; "big": the
+  /// next middle number is, and required.
+  void _pretendUpdate(Map<String, dynamic> values) {
+    final parts = [
+      for (final p in appVersion.split('.')) int.tryParse(p) ?? 0,
+      0, 0, 0,
+    ];
+    final small = '${parts[0]}.${parts[1]}.${parts[2] + 1}';
+    final big = '${parts[0]}.${parts[1] + 1}.0';
+    final latest = _updateTest == 'big' ? big : small;
+    values['latest_version'] = latest;
+    if (_updateTest == 'big') values['min_required_version'] = big;
+    values['release_notes'] = [
+      {
+        'version': latest,
+        'notes': [
+          'Subtitles stay in time when you skip ahead or go back.',
+          'Continue Watching moves on to the next episode as soon as one '
+              'finishes, and a series you finished comes back when a new '
+              'episode is out.',
+          'Long-press a Continue Watching card for More Info, or to remove '
+              'it. Undo puts it back.',
+          'Sinhala subtitles are in time at once when the English ones '
+              'already are.',
+          'Smoother edges on the tab buttons and page titles.',
+          'The Home slideshow no longer jumps to a far slide when a tab '
+              'opens mid-slide.',
+          'Crash reports help fix problems sooner. They never include your '
+              'Google account or keys.',
+          'Search and Ask open with the keyboard ready.',
+        ],
+      },
+      if (_updateTest == 'big')
+        {
+          'version': small,
+          'notes': [
+            'Faster start on slow connections.',
+            'Fixed the play button sometimes needing a second press.',
+          ],
+        },
+    ];
   }
 
   static String get _platformKey {

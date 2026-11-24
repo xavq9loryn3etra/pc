@@ -1,10 +1,15 @@
+import 'dart:math' as math;
+import 'dart:ui' show lerpDouble;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'ask_orb.dart';
 import 'glass_blur.dart';
 import 'tv_focus.dart';
 import '../enums/app_mode.dart';
 import '../services/app_mode_service.dart';
+import '../services/app_update_service.dart';
 import '../services/movie_tab_service.dart';
 import '../services/tv_device.dart';
 import 'app_icon.dart';
@@ -50,6 +55,12 @@ const kTopNavTop = (80 - _kPillHeight) / 2;
 const kTopNavRight = kSideColumnGap;
 const _kPillText = TextStyle(fontSize: 15, fontWeight: FontWeight.w600);
 
+/// Ask's pill shows its logo (the icon and "ask", as on the Ask page and
+/// the website) instead of an icon and a label: its icon as tall as the
+/// other pills' (20), its "ask" level with their names.
+const _kAskLogoHeight = 20.0;
+const _kAskLogoWidth = _kAskLogoHeight * 439 / 169; // the SVG's proportions
+
 String _pillLabel(BottomNavTab tab) => switch (tab) {
       BottomNavTab.home => 'Home',
       BottomNavTab.search => 'Search',
@@ -73,6 +84,7 @@ List<Rect> _pillSlots(BuildContext context, List<BottomNavTab> tabs) {
   final widths = [
     for (final tab in tabs)
       () {
+        if (tab == BottomNavTab.ai) return 15 + _kAskLogoWidth.ceilToDouble() + 18;
         final text = TextPainter(
           text: TextSpan(text: _pillLabel(tab), style: style),
           textDirection: TextDirection.ltr,
@@ -292,42 +304,35 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
             onTap: () => _navigate(context, tab),
             customBorder: const StadiumBorder(),
             child: Padding(
-              padding: const EdgeInsets.only(left: 14, right: 18),
-              child: Row(
-                children: [
-                  const SizedBox.square(
-                    dimension: 22,
-                    child: Center(
-                      child:
-                          AppIcon(size: 17, color: Colors.white, filled: true),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    label,
-                    maxLines: 1,
-                    softWrap: false,
-                    style:
-                        _pillTextStyle(context).copyWith(color: Colors.white),
-                  ),
-                ],
+              padding: const EdgeInsets.only(left: 15, right: 18),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SvgPicture.asset(
+                  'assets/ask-logo.svg',
+                  height: _kAskLogoHeight,
+                  width: _kAskLogoWidth,
+                  semanticsLabel: label,
+                ),
               ),
             ),
           ),
         ),
       );
     }
-    return _NavPill(
-      icon: Icon(
-        data,
-        color: isActive ? activeColor : Colors.white,
-        size: 20,
-      ),
-      label: label,
-      isActive: isActive,
-      activeColor: activeColor,
-      onTap: () => _navigate(context, tab),
-    );
+    Widget pill(double bump) => _NavPill(
+          icon: Icon(
+            data,
+            color: isActive ? activeColor : Colors.white,
+            size: 20,
+          ),
+          label: label,
+          isActive: isActive,
+          activeColor: activeColor,
+          bump: bump,
+          onTap: () => _navigate(context, tab),
+        );
+    if (tab != BottomNavTab.settings) return pill(0);
+    return _WithUpdateBump(circle: false, builder: pill);
   }
 
   Widget _circleFor(
@@ -361,12 +366,16 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
           onTap: () => _navigate(context, BottomNavTab.favorites),
         );
       case BottomNavTab.settings:
-        return _NavCircle(
-          icon: Icons.settings_rounded,
-          activeIcon: Icons.settings_rounded,
-          isActive: widget.activeTab == BottomNavTab.settings,
-          activeColor: activeColor,
-          onTap: () => _navigate(context, BottomNavTab.settings),
+        return _WithUpdateBump(
+          circle: true,
+          builder: (bump) => _NavCircle(
+            icon: Icons.settings_rounded,
+            activeIcon: Icons.settings_rounded,
+            isActive: widget.activeTab == BottomNavTab.settings,
+            activeColor: activeColor,
+            bump: bump,
+            onTap: () => _navigate(context, BottomNavTab.settings),
+          ),
         );
       case BottomNavTab.ai:
         return _AiCircle(
@@ -472,13 +481,31 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
               // their own tint and border on top of it.
               Positioned.fill(
                 child: IgnorePointer(
-                  child: ClipPath(
-                    clipper: _GlassShapesClipper([
-                      for (var i = 0; i < itemCount; i++)
-                        plain && entrance[i] >= 1
-                            ? Rect.zero
-                            : _entranceGlassRect(rects[i], entrance[i], travel),
-                    ]),
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: AppUpdateService().showDot,
+                    builder: (context, bumped, glass) {
+                      final settings = tabs.indexOf(BottomNavTab.settings);
+                      // Settings' update bump, once it's in: frosted too.
+                      Path? bump;
+                      if (bumped &&
+                          !plain &&
+                          settings >= 0 &&
+                          entrance[settings] >= 1) {
+                        final (centre, r) = _cornerOf(rects[settings],
+                            circle: pills == null);
+                        bump = _swellAt(centre, r, 1);
+                      }
+                      return ClipPath(
+                        clipper: _GlassShapesClipper([
+                          for (var i = 0; i < itemCount; i++)
+                            plain && entrance[i] >= 1
+                                ? Rect.zero
+                                : _entranceGlassRect(
+                                    rects[i], entrance[i], travel),
+                        ], extra: bump),
+                        child: glass,
+                      );
+                    },
                     // Grouped with the app bar's glass (they never overlap).
                     // Frosted all the time: going flat as pages opened and
                     // closed, and frosting back over, was seen.
@@ -516,6 +543,253 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
   }
 }
 
+/// The Settings button with its update bump: while a small update is
+/// waiting that hasn't been installed (AppUpdateService.showDot), the
+/// button's own outline swells out a little at its top right — one shape,
+/// one edge, the button's glass — with a dot in the mode's colour in the
+/// swell. It grows out when an update comes and back in once it's
+/// installed. (A dot stuck on, and then a bump laid over the button, left
+/// two edges crossing: owner, 24 Nov 2026.)
+class _WithUpdateBump extends StatelessWidget {
+  /// The button, given how far its bump is out (0 none, 1 all).
+  final Widget Function(double bump) builder;
+
+  /// A round button (else a pill).
+  final bool circle;
+
+  const _WithUpdateBump({required this.builder, required this.circle});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: AppUpdateService().showDot,
+      builder: (context, show, _) => Stack(
+        clipBehavior: Clip.none,
+        fit: StackFit.expand,
+        children: [
+          // Its Material grows the shape (see _BumpedBorder's lerp).
+          builder(show ? 1 : 0),
+          IgnorePointer(
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(end: show ? 1 : 0),
+              // As the Material's own shape change.
+              duration: kThemeChangeDuration,
+              curve: Curves.fastOutSlowIn,
+              builder: (context, grow, _) => grow <= 0.02
+                  ? const SizedBox.shrink()
+                  : ValueListenableBuilder<AppMode>(
+                      valueListenable: AppModeService().currentMode,
+                      builder: (context, mode, _) => CustomPaint(
+                        painter: _UpdateDotPainter(
+                          circle: circle,
+                          grow: grow,
+                          colour: mode.accentColor,
+                        ),
+                      ),
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The update bump's bead: its radius, grown (_swellAt).
+const double _kBeadRadius = 6.5;
+
+/// How far the bead's centre sits past the button's edge, grown.
+const double _kBeadOut = 1.5;
+
+/// How soft the join between the bead and the button is (the smooth
+/// union's reach, in pixels).
+const double _kBeadMelt = 10;
+
+/// The bead's centre, from the button's top-right rounding's centre.
+double _beadDistance(double r, double grow) =>
+    r + _kBeadOut * grow - _kBeadRadius * (1 - grow);
+
+/// Where the bump goes: the centre of a button's top-right rounding in
+/// [rect] (the circle's centre, or the pill's right end's), and its radius.
+(Offset, double) _cornerOf(Rect rect, {required bool circle}) {
+  final r = rect.shortestSide / 2;
+  return (
+    circle ? rect.center : Offset(rect.right - r, rect.top + r),
+    r,
+  );
+}
+
+/// The diagonal to the top right, the bump's direction.
+const double _kSwellAngle = -math.pi / 4;
+
+/// The update bump round [centre] (a button's top-right rounding, of
+/// radius [r]), [grow] (0–1) of the way out: a small round bead melted
+/// into the button, as two drops of water joining — round over its top,
+/// the join curving softly into the button's edge. (A bell-shaped swell
+/// came to a point, the dot on its tip: owner, 24 Nov 2026.) Closed
+/// through [centre], so in union with the button it's just the bump.
+///
+/// The outline is where a smooth union of the two circles' distances is
+/// zero, found along rays from [centre].
+Path _swellAt(Offset centre, double r, double grow) {
+  final rb = _kBeadRadius * grow;
+  final bd = _beadDistance(r, grow);
+  const k = _kBeadMelt;
+  // The smooth union's distance at polar (rho, a) round the centre, with
+  // the bead along a = 0.
+  double field(double rho, double a) {
+    final d1 = rho - r;
+    final dx = rho * math.cos(a) - bd, dy = rho * math.sin(a);
+    final d2 = math.sqrt(dx * dx + dy * dy) - rb;
+    final h = math.max(k - (d1 - d2).abs(), 0.0) / k;
+    return math.min(d1, d2) - h * h * k / 4;
+  }
+
+  final path = Path()..moveTo(centre.dx, centre.dy);
+  const steps = 72;
+  // Wide enough that its ends are back on the button's edge.
+  final halfAngle = math.min(1.2, (rb + k + 4) / r * 1.6);
+  for (var i = 0; i <= steps; i++) {
+    final a = -halfAngle + 2 * halfAngle * i / steps;
+    // The edge along this ray: inside at the button's radius less a bit,
+    // outside well past the bead.
+    var lo = r - 2, hi = r + rb * 2 + k + 4;
+    if (field(r, a) >= 0) {
+      lo = hi = r;
+    } else {
+      for (var j = 0; j < 30; j++) {
+        final mid = (lo + hi) / 2;
+        if (field(mid, a) < 0) {
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+    }
+    final rho = math.max(r, (lo + hi) / 2);
+    final angle = _kSwellAngle + a;
+    path.lineTo(
+        centre.dx + rho * math.cos(angle), centre.dy + rho * math.sin(angle));
+  }
+  return path..close();
+}
+
+/// A nav button's shape (a circle or a pill) with the update bump swelling
+/// out of its top right, [bump] (0–1) of the way. One outline, so the edge
+/// runs round the bump too. Lerps, so the Material grows the bump in and
+/// out as it changes.
+class _BumpedBorder extends OutlinedBorder {
+  final bool circle;
+  final double bump;
+
+  const _BumpedBorder({super.side, required this.circle, this.bump = 0});
+
+  Path _shape(Rect rect) {
+    final base = Path();
+    if (circle) {
+      base.addOval(rect);
+    } else {
+      base.addRRect(
+          RRect.fromRectAndRadius(rect, Radius.circular(rect.shortestSide / 2)));
+    }
+    if (bump <= 0.01) return base;
+    final (centre, r) = _cornerOf(rect, circle: circle);
+    return Path.combine(PathOperation.union, base, _swellAt(centre, r, bump));
+  }
+
+  @override
+  EdgeInsetsGeometry get dimensions => EdgeInsets.all(side.strokeInset);
+
+  @override
+  Path getInnerPath(Rect rect, {TextDirection? textDirection}) =>
+      _shape(rect.deflate(side.strokeInset));
+
+  @override
+  Path getOuterPath(Rect rect, {TextDirection? textDirection}) =>
+      _shape(rect);
+
+  @override
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {
+    if (side.style == BorderStyle.none || side.width == 0) return;
+    // Inside the shape, as CircleBorder and StadiumBorder draw theirs.
+    canvas.drawPath(_shape(rect.deflate(side.width / 2)), side.toPaint());
+  }
+
+  @override
+  _BumpedBorder copyWith({BorderSide? side}) =>
+      _BumpedBorder(side: side ?? this.side, circle: circle, bump: bump);
+
+  @override
+  ShapeBorder scale(double t) =>
+      _BumpedBorder(side: side.scale(t), circle: circle, bump: bump);
+
+  @override
+  ShapeBorder? lerpFrom(ShapeBorder? a, double t) {
+    if (a is _BumpedBorder && a.circle == circle) {
+      return _BumpedBorder(
+        side: BorderSide.lerp(a.side, side, t),
+        circle: circle,
+        bump: lerpDouble(a.bump, bump, t)!,
+      );
+    }
+    return super.lerpFrom(a, t);
+  }
+
+  @override
+  ShapeBorder? lerpTo(ShapeBorder? b, double t) {
+    if (b is _BumpedBorder && b.circle == circle) {
+      return _BumpedBorder(
+        side: BorderSide.lerp(side, b.side, t),
+        circle: circle,
+        bump: lerpDouble(bump, b.bump, t)!,
+      );
+    }
+    return super.lerpTo(b, t);
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is _BumpedBorder &&
+      other.side == side &&
+      other.circle == circle &&
+      other.bump == bump;
+
+  @override
+  int get hashCode => Object.hash(side, circle, bump);
+}
+
+/// The dot in the update bump, in the mode's colour, in the bead's middle.
+class _UpdateDotPainter extends CustomPainter {
+  final bool circle;
+  final double grow;
+  final Color colour;
+
+  const _UpdateDotPainter({
+    required this.circle,
+    required this.grow,
+    required this.colour,
+  });
+
+  /// Crisp, with no glow, and well inside the bead: a glow round it
+  /// spread over the bead's edge and smudged its curve at real size
+  /// (owner, 24 Nov 2026).
+  static const double _radius = 2.2;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final (centre, r) = _cornerOf(Offset.zero & size, circle: circle);
+    // In the bead's middle.
+    final d = _beadDistance(r, grow);
+    final dot = centre +
+        Offset(math.cos(_kSwellAngle), math.sin(_kSwellAngle)) * d;
+    canvas.drawCircle(dot, _radius * grow, Paint()..color = colour);
+  }
+
+  @override
+  bool shouldRepaint(_UpdateDotPainter old) =>
+      old.grow != grow || old.colour != colour || old.circle != circle;
+}
+
 class _NavPill extends StatelessWidget {
   final Widget icon;
   final String label;
@@ -523,12 +797,16 @@ class _NavPill extends StatelessWidget {
   final Color activeColor;
   final VoidCallback onTap;
 
+  /// Settings' update bump, 0–1 (_WithUpdateBump).
+  final double bump;
+
   const _NavPill({
     required this.icon,
     required this.label,
     required this.isActive,
     required this.activeColor,
     required this.onTap,
+    this.bump = 0,
   });
 
   @override
@@ -537,7 +815,9 @@ class _NavPill extends StatelessWidget {
     return Material(
       color: glassTint(context),
       clipBehavior: Clip.antiAlias,
-      shape: StadiumBorder(
+      shape: _BumpedBorder(
+        circle: false,
+        bump: bump,
         side: BorderSide(
           color: isActive ? activeColor.withValues(alpha: 0.45) : kGlassEdge,
           width: isActive ? 1.5 : 1,
@@ -546,7 +826,7 @@ class _NavPill extends StatelessWidget {
       child: InkWell(
         mouseCursor: WidgetStateMouseCursor.clickable,
         onTap: onTap,
-        customBorder: const StadiumBorder(),
+        customBorder: _BumpedBorder(circle: false, bump: bump),
         child: Padding(
           padding: const EdgeInsets.only(left: 14, right: 18),
           child: Row(
@@ -581,12 +861,16 @@ class _NavCircle extends StatelessWidget {
   final Color activeColor;
   final VoidCallback onTap;
 
+  /// Settings' update bump, 0–1 (_WithUpdateBump).
+  final double bump;
+
   const _NavCircle({
     required this.icon,
     required this.activeIcon,
     required this.isActive,
     required this.activeColor,
     required this.onTap,
+    this.bump = 0,
   });
 
   @override
@@ -596,7 +880,9 @@ class _NavCircle extends StatelessWidget {
     return Material(
       color: glassTint(context),
       clipBehavior: Clip.antiAlias,
-      shape: CircleBorder(
+      shape: _BumpedBorder(
+        circle: true,
+        bump: bump,
         side: BorderSide(
           color: isActive ? activeColor.withValues(alpha: 0.45) : kGlassEdge,
           width: isActive ? 1.5 : 1,
@@ -605,7 +891,7 @@ class _NavCircle extends StatelessWidget {
       child: InkWell(
         mouseCursor: WidgetStateMouseCursor.clickable,
         onTap: onTap,
-        customBorder: const CircleBorder(),
+        customBorder: _BumpedBorder(circle: true, bump: bump),
         child: Center(
           child: AnimatedSwitcher(
             duration: _kTransitionDuration,
@@ -668,21 +954,27 @@ class _AiCircle extends StatelessWidget {
 class _GlassShapesClipper extends CustomClipper<Path> {
   final List<Rect> shapes;
 
-  const _GlassShapesClipper(this.shapes);
+  /// Settings' update bump, added on (_swellAt).
+  final Path? extra;
+
+  const _GlassShapesClipper(this.shapes, {this.extra});
 
   @override
   Path getClip(Size size) {
-    final path = Path();
+    var path = Path();
     for (final r in shapes) {
       if (r.isEmpty) continue;
       path.addRRect(
           RRect.fromRectAndRadius(r, Radius.circular(r.shortestSide / 2)));
     }
+    final extra = this.extra;
+    if (extra != null) path = Path.combine(PathOperation.union, path, extra);
     return path;
   }
 
   @override
   bool shouldReclip(_GlassShapesClipper old) {
+    if ((old.extra == null) != (extra == null)) return true;
     if (old.shapes.length != shapes.length) return true;
     for (var i = 0; i < shapes.length; i++) {
       if (old.shapes[i] != shapes[i]) return true;

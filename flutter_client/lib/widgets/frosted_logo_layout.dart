@@ -20,10 +20,17 @@ class FrostedLogoLayout extends StatelessWidget {
   /// Fades the words in.
   final Animation<double> opacity;
 
+  /// Keeps the words clear of the logo (below it on a phone, inside the
+  /// window's height beside it): a part of them that can shrink (a
+  /// Flexible, like the release notes, which scroll) gets only the room
+  /// left. Otherwise the words are as tall as they need.
+  final bool fitWords;
+
   const FrostedLogoLayout({
     super.key,
     required this.details,
     required this.opacity,
+    this.fitWords = false,
   });
 
   @override
@@ -135,7 +142,8 @@ class FrostedLogoLayout extends StatelessWidget {
               child: FadeTransition(
                 opacity: opacity,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 64),
+                  padding: EdgeInsets.symmetric(
+                      horizontal: 64, vertical: fitWords ? 32 : 0),
                   child: Center(
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 560),
@@ -149,14 +157,19 @@ class FrostedLogoLayout extends StatelessWidget {
             Positioned(
               left: 0,
               right: 0,
+              // Kept below the logo: the words' room ends there.
+              top: fitWords ? logoRect.bottom + 8 : null,
               bottom: 0,
               child: FadeTransition(
                 opacity: opacity,
-                child: Padding(
-                  // Low on the screen, away from the logo.
-                  padding: EdgeInsets.fromLTRB(
-                      32, 0, 32, (large ? 40 : 20) + padding.bottom),
-                  child: words,
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Padding(
+                    // Low on the screen, away from the logo.
+                    padding: EdgeInsets.fromLTRB(
+                        32, 0, 32, (large ? 40 : 20) + padding.bottom),
+                    child: words,
+                  ),
                 ),
               ),
             ),

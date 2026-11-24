@@ -13,6 +13,11 @@ Popcorn is a Flutter movie and series streaming app (phones, iPad, Windows, Andr
 - Never commit secrets (`secrets.json`, `flutter_client/.env`, `android/key.properties`).
 - **Keep this file up to date.** When the owner makes a new decision, gives a correction or says "always"/"never", add it to the right section of this file in plain words (with the date), commit and push it with the work. Change or remove rules here that turn out to be wrong. Don't add one-off details that only matter to the current task.
 
+## Daily Sentry check (owner, 24 Nov 2026)
+
+- **First thing each day, before the owner's request:** if `.git/sentry-last-check` (a local note, never committed) doesn't hold today's date, check Sentry first: `sentry issue list popcorn-02/popcorn --period 24h`, plus anything new or reopened since the last check, and how many devices opened the app (`sentry api "organizations/popcorn-02/sessions/?field=sum(session)&field=count_unique(user)&groupBy=release&statsPeriod=24h"`). Tell the owner in a few plain lines (new problems, how often, which platform and version, what you think the cause is), then write today's date (YYYY-MM-DD) into that file and carry on with their request. Don't fix anything found without the owner's go-ahead, unless it's part of what they asked for.
+- **Fixed issues:** once a fix is in a release, resolve the issue in that release (`sentry issue resolve <ID> --in 'Popcorn@x.y.z+n'`; register the release first with `sentry api organizations/popcorn-02/releases/ --method POST` if Sentry hasn't seen it, and unresolve first if it was resolved in another release). Then Sentry reopens it if it happens again in that version or later. Never resolve or archive an issue that isn't fixed: ask the owner before ignoring one.
+
 ## Releases
 
 - The public app and website live at **popcorn-organization/popcorn** (website: GitHub Pages from `docs/` on main, https://popcorn-organization.github.io/popcorn/).

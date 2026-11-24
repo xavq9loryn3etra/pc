@@ -270,7 +270,12 @@ class TitleIsland extends StatelessWidget {
                   child: FractionallySizedBox(
                     widthFactor: 0.7 + 0.3 * t,
                     heightFactor: t,
-                    child: ClipRRect(
+                    // Plain glass: the black drawn round, not cut to shape
+                    // over a black fill of the same outline — that doubled
+                    // edge looked stepped (seen on Windows at 125%).
+                    child: PlainGlassScope.of(context)
+                        ? _plainIsland(height, t)
+                        : ClipRRect(
                       borderRadius: BorderRadius.all(
                         Radius.circular(height / 2),
                       ),
@@ -303,6 +308,29 @@ class TitleIsland extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+
+  /// The island where the glass is plain, as it looked before: solid black
+  /// from the start, its edge fading in with [t].
+  static Widget _plainIsland(double height, double t) {
+    final radius = BorderRadius.all(Radius.circular(height / 2));
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(color: Colors.black, borderRadius: radius),
+        ),
+        Opacity(
+          opacity: t,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: radius,
+              border: Border.all(color: kGlassEdge),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

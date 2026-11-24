@@ -17,10 +17,12 @@ Movie _movie(String id) => Movie(
 void main() {
   final movies = [for (final id in ['a', 'b', 'c']) _movie(id)];
 
-  Widget carousel({bool paused = false, List<Movie>? list}) => MaterialApp(
+  Widget carousel({bool paused = false, List<Movie>? list, double? width}) =>
+      MaterialApp(
         home: Scaffold(
           body: SizedBox(
             height: 400,
+            width: width,
             child: HeroCarousel(
               movies: list ?? movies,
               paused: paused,
@@ -74,6 +76,28 @@ void main() {
     // Only the picture in view is built once a slide's landed.
     expect(find.text('bg a'), findsOneWidget);
     expect(find.text('bg c'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 10));
+  });
+
+  testWidgets('a width change mid-slide still lands on the next slide',
+      (tester) async {
+    // The side column opening narrows the home as a slide moves: aimed at
+    // the old width's pixels, it raced off to a far slide.
+    await tester.pumpWidget(Align(
+        alignment: Alignment.topLeft, child: carousel(width: 800)));
+    var elapsed = Duration.zero;
+    while (find.textContaining('Title').evaluate().length < 2) {
+      await tester.pump(const Duration(milliseconds: 100));
+      elapsed += const Duration(milliseconds: 100);
+      expect(elapsed, lessThan(const Duration(seconds: 12)));
+    }
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpWidget(Align(
+        alignment: Alignment.topLeft, child: carousel(width: 500)));
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.textContaining('Title').evaluate().length, 1);
+    expect(find.text('Title b'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 10));
   });

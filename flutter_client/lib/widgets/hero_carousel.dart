@@ -315,11 +315,30 @@ class _HeroCarouselState extends State<HeroCarousel>
     if (!_pages.hasClients) return;
     _sliding = true;
     _progress.stop();
-    final moving = _pages.animateToPage(
-      page,
-      duration: _slideDuration,
-      curve: _slideCurve,
-    );
+    // By slide, not by pixels (as animateToPage does): opening a tab in
+    // the wide window's side column narrows the home mid-slide, and a
+    // slide aimed at the old width's pixels landed thousands of slides
+    // away — it raced off to a far one.
+    final position = _pages.position;
+    final Future<void> moving;
+    if (position is ScrollPositionWithSingleContext) {
+      final slide = _SlideActivity(
+        position,
+        from: _pages.page ?? page.toDouble(),
+        to: page.toDouble(),
+        duration: _slideDuration,
+        curve: _slideCurve,
+        vsync: position.context.vsync,
+      );
+      position.beginActivity(slide);
+      moving = slide.done;
+    } else {
+      moving = _pages.animateToPage(
+        page,
+        duration: _slideDuration,
+        curve: _slideCurve,
+      );
+    }
     // A TV remote's selection was on this slide's buttons: onto the next's
     // (it's focused once it's built, a frame on).
     if (_focusInside) _focusFor(page % _count).requestFocus();
@@ -670,5 +689,62 @@ class _HeroDotsState extends State<HeroDots> {
         ),
       ),
     );
+  }
+}
+
+/// A slide from one page to another, as PageController.animateToPage's,
+/// but steered by page rather than by pixels: each frame puts the slides
+/// where they belong at the page view's width then, so a width change
+/// mid-slide (the side column opening) can't send it somewhere else.
+class _SlideActivity extends ScrollActivity {
+  _SlideActivity(
+    ScrollPositionWithSingleContext position, {
+    required double from,
+    required double to,
+    required Duration duration,
+    required Curve curve,
+    required TickerProvider vsync,
+  })  : _position = position,
+        _from = from,
+        _to = to,
+        super(position) {
+    _controller = AnimationController(duration: duration, vsync: vsync)
+      ..addListener(_tick);
+    _controller
+        .animateTo(1, curve: curve)
+        .whenComplete(() => delegate.goBallistic(0));
+  }
+
+  final ScrollPositionWithSingleContext _position;
+  final double _from;
+  final double _to;
+  late final AnimationController _controller;
+  final Completer<void> _done = Completer<void>();
+
+  /// Completes when the slide ends, or something else (a swipe) takes over.
+  Future<void> get done => _done.future;
+
+  void _tick() {
+    final page = _from + (_to - _from) * _controller.value;
+    if (delegate.setPixels(page * _position.viewportDimension) != 0) {
+      delegate.goIdle();
+    }
+  }
+
+  @override
+  bool get shouldIgnorePointer => true;
+
+  @override
+  bool get isScrolling => true;
+
+  @override
+  double get velocity =>
+      (_to - _from) * _position.viewportDimension * _controller.velocity;
+
+  @override
+  void dispose() {
+    if (!_done.isCompleted) _done.complete();
+    _controller.dispose();
+    super.dispose();
   }
 }

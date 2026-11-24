@@ -1401,10 +1401,21 @@ class TMDBService {
         images['logos'] != null &&
         (images['logos'] as List).isNotEmpty) {
       final logos = images['logos'] as List;
-      final enLogo = logos.firstWhere(
-        (l) => l['iso_639_1'] == 'en',
-        orElse: () => logos.first,
-      );
+      // Its full size is what's shown large (Movie.logoHighRes): one a few
+      // thousand pixels wide is plenty. A giant one (Spider-Man: Brand New
+      // Day's top logo is 14,481 wide, 12.6 MB) took so long to download
+      // and decode that the slideshow showed a gap where the logo goes —
+      // and decoding it takes some 200 MB, enough to end the app on a
+      // phone. The next best English one instead; a giant one only if
+      // there's nothing else.
+      bool fits(dynamic l) {
+        final w = l['width'];
+        return w is! num || w <= 4000;
+      }
+
+      final english = [for (final l in logos) if (l['iso_639_1'] == 'en') l];
+      final candidates = english.isNotEmpty ? english : logos;
+      final enLogo = candidates.firstWhere(fits, orElse: () => candidates.first);
       if (enLogo != null) {
         // TMDB also serves every SVG logo as a rasterized PNG (same path,
         // .png extension) — use that. flutter_svg ignores <style> CSS, which

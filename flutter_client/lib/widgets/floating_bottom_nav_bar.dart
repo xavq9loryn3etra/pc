@@ -445,6 +445,11 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
       Color activeColor, double totalWidth,
       {required double travel, List<Rect>? pills}) {
     final itemCount = tabs.length;
+    // Plain glass: each button paints its own black, so once it's in, the
+    // shared layer below only doubled its edge — a second black cut to
+    // the same outline, which left the round ends stepped (seen on
+    // Windows at 125%). It still grows in under each button's entrance.
+    final plain = PlainGlassScope.of(context);
 
     return SizedBox(
       width: totalWidth,
@@ -470,7 +475,9 @@ class _FloatingBottomNavBarState extends State<FloatingBottomNavBar>
                   child: ClipPath(
                     clipper: _GlassShapesClipper([
                       for (var i = 0; i < itemCount; i++)
-                        _entranceGlassRect(rects[i], entrance[i], travel),
+                        plain && entrance[i] >= 1
+                            ? Rect.zero
+                            : _entranceGlassRect(rects[i], entrance[i], travel),
                     ]),
                     // Grouped with the app bar's glass (they never overlap).
                     // Frosted all the time: going flat as pages opened and

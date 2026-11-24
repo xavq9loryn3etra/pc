@@ -7,9 +7,11 @@ enum _SubtitleTiming { checking, ready, noFit }
 extension _PlayerSubtitles on _PlayerScreenState {
   /// Subtitles just above the seek bar while the controls are up (they
   /// were under it), at the foot again once they're gone — moved smoothly.
+  /// A menu open keeps the seek bar up, and them above it: they dropped
+  /// under it there (owner, 24 Nov 2026).
   void _placeSubtitles() {
     var bottom = 24.0;
-    if (_controlsVisible && !_showSettingsPanel) {
+    if (_controlsVisible) {
       final box = _bottomBarKey.currentContext?.findRenderObject();
       if (box is RenderBox && box.hasSize && box.attached) {
         final barTop = _topLeftInPlayer(box).dy;

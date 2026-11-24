@@ -1,3 +1,5 @@
+import '../services/tv_device.dart';
+
 class Movie {
   final String id;
   final String title;
@@ -75,18 +77,29 @@ class Movie {
   // hero banner on desktop (see TMDBService._backdropBase). This swaps in
   // TMDB's actual source resolution for the few places that render a
   // backdrop that large: the home hero banners and the details-page hero.
-  String? get backdropHighRes => backdrop?.replaceFirst('/w1280/', '/original/');
+  // On a TV with little memory (TvDevice.isLowMemory), or an HD one whose
+  // screen w1280 already fills, the w1280 one stays: a 4K original there
+  // only cost memory (a Panasonic with 1.5 GB switched itself off).
+  String? get backdropHighRes =>
+      TvDevice.isLowMemory || TvDevice.hdScreen
+          ? backdrop
+          : backdrop?.replaceFirst('/w1280/', '/original/');
   // Same for the textless poster (w500), for the details page's header on
-  // phones, where it fills the screen's width.
-  String? get textlessPosterHighRes =>
-      textlessPoster?.replaceFirst('/w500/', '/original/');
+  // phones, where it fills the screen's width. A weak TV: w780 instead of
+  // the original (some 2000×3000).
+  String? get textlessPosterHighRes => textlessPoster?.replaceFirst(
+      '/w500/', TvDevice.isLowMemory ? '/w780/' : '/original/');
   // `logoUrl` is also built from TMDB's w500 tier. Logos are usually wide,
   // short wordmarks, so a 500px-wide source can have well under 200px of
   // real height — same shortfall as backdrop for the couple of places a
   // logo renders large (the hero banners' ~100-150px logo, the details
   // page's 200px-wide hero header logo). No-op for the rare SVG logo path,
   // since TMDB serves those unscaled regardless of the size segment.
-  String? get logoHighRes => logoUrl?.replaceFirst('/w500/', '/original/');
+  // A weak TV or an HD one: w780 (some 240 KB, still sharp at the hero's
+  // logo size there) instead of an original of several MB.
+  String? get logoHighRes => logoUrl?.replaceFirst(
+      '/w500/',
+      TvDevice.isLowMemory || TvDevice.hdScreen ? '/w780/' : '/original/');
   // Mappings for UI compatibility
   DateTime? get releaseDate => DateTime(year);
   double get voteAverage => double.tryParse(rating) ?? 0.0;

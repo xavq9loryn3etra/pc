@@ -11,6 +11,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/movie.dart';
 import 'saved_movies_service.dart';
 import 'streaming_link_service.dart';
+import 'tv_device.dart';
 
 // ... imports
 
@@ -868,8 +869,11 @@ class TMDBService {
         id: id,
         name: p['name']?.toString() ?? '',
         profileUrl: _profileUrl(path),
-        photoUrl:
-            path is String ? 'https://image.tmdb.org/t/p/original$path' : null,
+        // A weak TV: TMDB's 632-tall one rather than the original.
+        photoUrl: path is String
+            ? 'https://image.tmdb.org/t/p/'
+                '${TvDevice.isLowMemory ? 'h632' : 'original'}$path'
+            : null,
         movieCount: entries.where((c) => c['media_type'] == 'movie').length,
         showCount: entries.where((c) => c['media_type'] == 'tv').length,
         roles: {

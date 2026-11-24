@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import '../models/movie.dart';
 import '../services/movie_tab_service.dart';
 import '../services/tmdb_service.dart';
+import '../services/tv_device.dart';
+import 'floating_bottom_nav_bar.dart' show BottomNavTab;
 
 /// What a hero slide's builder knows about the slide it's building.
 class HeroSlide {
@@ -147,7 +149,12 @@ class _HeroCarouselState extends State<HeroCarousel>
       !_foreground ||
       !_tickerOn ||
       _scrolledAway ||
-      MovieTabService().columnPages.value > 0;
+      MovieTabService().columnPages.value > 0 ||
+      // A weak TV: held while another tab's open in the column beside it
+      // too (Search, My List…), so it isn't loading the next slide's big
+      // pictures while that tab's are scrolled (see TvDevice.isLowMemory).
+      (TvDevice.isLowMemory &&
+          MovieTabService().currentTab.value != BottomNavTab.home);
 
   @override
   void initState() {
@@ -157,6 +164,7 @@ class _HeroCarouselState extends State<HeroCarousel>
     WidgetsBinding.instance.addObserver(this);
     widget.scrollController?.addListener(_onScroll);
     MovieTabService().columnPages.addListener(_sync);
+    MovieTabService().currentTab.addListener(_sync);
     // After the page's first busy moments: the rest of the slides'
     // details, one at a time, and the next slide's pictures.
     Future.delayed(const Duration(seconds: 1), _loadAll);
@@ -204,6 +212,7 @@ class _HeroCarouselState extends State<HeroCarousel>
     WidgetsBinding.instance.removeObserver(this);
     widget.scrollController?.removeListener(_onScroll);
     MovieTabService().columnPages.removeListener(_sync);
+    MovieTabService().currentTab.removeListener(_sync);
     _tickerMode?.removeListener(_onTickerMode);
     _progress.dispose();
     _pages.dispose();

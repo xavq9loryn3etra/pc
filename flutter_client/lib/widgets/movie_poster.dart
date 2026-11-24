@@ -214,11 +214,18 @@ class _MoviePosterState extends State<MoviePoster> {
             final posterUrl = widget.movie.posterUrl;
             final hasPoster = posterUrl != null && posterUrl.isNotEmpty;
             final isSvg = hasPoster && posterUrl.toLowerCase().endsWith('.svg');
-            // Multiply by 1.5 to ensure sharpness (supersample slightly)
+            // Multiply by 1.5 to ensure sharpness (supersample slightly).
+            // A weak TV (TvDevice.isLowMemory): at the size it's drawn
+            // (a grid's posters are at most ~300 tall there), with a
+            // little to spare for growing when selected — about half the
+            // memory of each poster.
+            final weakTv = TvDevice.isLowMemory;
             final decodeHeight =
-                ((widget.height == double.infinity ? 400 : widget.height) *
+                ((widget.height == double.infinity
+                            ? (weakTv ? 300 : 400)
+                            : widget.height) *
                         MediaQuery.of(context).devicePixelRatio *
-                        1.5)
+                        (weakTv ? 1.15 : 1.5))
                     .toInt();
             final Widget image = !hasPoster
                 ? Container(

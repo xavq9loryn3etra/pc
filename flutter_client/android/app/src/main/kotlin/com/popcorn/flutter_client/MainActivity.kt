@@ -1,5 +1,6 @@
 package com.popcorn.flutter_client
 
+import android.app.ActivityManager
 import android.app.UiModeManager
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -57,6 +58,20 @@ class MainActivity : FlutterActivity() {
                     result.success(
                         ui.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION ||
                             packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                    )
+                } else if (call.method == "memory") {
+                    // How much memory the device has, and whether Android
+                    // counts it as a low-memory one (see TvDevice): a weak
+                    // TV gets lighter pictures.
+                    val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                    val info = ActivityManager.MemoryInfo()
+                    am.getMemoryInfo(info)
+                    result.success(
+                        mapOf(
+                            "totalBytes" to info.totalMem,
+                            "lowRam" to am.isLowRamDevice,
+                            "memoryClassMb" to am.memoryClass
+                        )
                     )
                 } else if (call.method == "freeBytes") {
                     // Space left on the disk holding a path: the torrents

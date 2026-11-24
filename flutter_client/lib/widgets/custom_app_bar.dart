@@ -129,6 +129,10 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
           : (wide ? wideToolbarHeight : null),
       elevation: 0,
       scrolledUnderElevation: 0,
+      // The home's logo scrolling away: whole under the phone's status bar
+      // as it goes, as the page under it is. The bar's own clip cut it
+      // off at the status bar's edge (owner's S25, 24 Nov 2026).
+      clipBehavior: logoScroll != null ? Clip.none : null,
       automaticallyImplyLeading: automaticallyImplyLeading,
       leading: leading,
       centerTitle: centerTitle,

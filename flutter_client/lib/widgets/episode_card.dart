@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:shimmer/shimmer.dart';
 
 import '../models/movie.dart';
+import '../services/tv_device.dart';
 import '../theme/app_theme.dart';
 import 'floating_bottom_nav_bar.dart' show SideColumnScope;
 import 'glass_blur.dart';
@@ -570,8 +571,10 @@ class DetailHeader extends StatelessWidget {
               height: imageHeight,
               // Full-width, so TMDB's full-size still rather than the
               // cards' w500 one, which looks soft stretched this wide.
+              // A weak TV (TvDevice.isLowMemory): w780, not the original.
               child: EpisodeStill(
-                image: image!.replaceFirst('/w500/', '/original/'),
+                image: image!.replaceFirst('/w500/',
+                    TvDevice.isLowMemory ? '/w780/' : '/original/'),
                 preview: image,
                 decodeWidth: (width * dpr).toInt(),
                 dimmed: dimmed,

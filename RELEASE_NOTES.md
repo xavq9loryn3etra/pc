@@ -13,6 +13,12 @@ will notice. Keep each line short and free of technical words.
 - A new **middle or first** number (4.5.x → 4.6.0) is a big update: everyone
   older sees the full-screen update when they open the app.
 
+## 4.7.0
+- On TVs with little memory, Popcorn now uses much less of it while you browse, so it runs more steadily there.
+- On the Home screen, the Popcorn logo now scrolls away smoothly instead of being cut off at the top.
+- Subtitles stay above the progress bar when you open a menu while watching.
+- On Windows, Popcorn always opens when you click it, even right after closing it.
+
 ## 4.6.0
 - Small updates no longer interrupt you: Settings shows when one is ready, with what's new, and you update when you like.
 - The update screen now shows what's new.

@@ -130,6 +130,14 @@ void main() async {
   // Not on a TV: its screen never turns, and an app that asks for portrait
   // there is shown as a phone-shaped strip with black bars either side.
   await TvDevice.init();
+  // A weak TV: a smaller store of decoded pictures than Flutter's 100 MB
+  // (those scrolled out of view go first, and come back quickly from the
+  // disk) — with 1.5 GB in all, a full one helped switch a TV off.
+  if (TvDevice.isLowMemory) {
+    PaintingBinding.instance.imageCache
+      ..maximumSizeBytes = 40 << 20
+      ..maximumSize = 300;
+  }
   if (!TvDevice.isTv) {
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   }
@@ -224,15 +232,29 @@ void main() async {
   runApp(const MyApp());
 }
 
-/// Runs one startup step, logging (not throwing) if it fails.
+/// Runs one startup step, logging (not throwing) if it fails — or if it
+/// hasn't finished in [_stepTimeLimit]: the app starts without waiting
+/// any longer (the step carries on behind). Each is local and quick; one
+/// that hung kept a Windows copy from ever showing its window (owner's
+/// PC, 4.6.0, 24 Nov 2026), and the report says which.
 Future<void> _initStep(String name, Future<void> Function() step) async {
   try {
-    await step();
+    await step().timeout(_stepTimeLimit);
+  } on TimeoutException catch (_, s) {
+    debugPrint('init slow ($name): not done after $_stepTimeLimit');
+    CrashReports.report(
+      StateError('Startup step "$name" not done after '
+          '${_stepTimeLimit.inSeconds} s'),
+      s,
+      where: 'startup: $name',
+    );
   } catch (e, s) {
     debugPrint('init failed ($name): $e\n$s');
     CrashReports.report(e, s, where: 'startup: $name');
   }
 }
+
+const _stepTimeLimit = Duration(seconds: 15);
 
 /// On Windows the settings live in one JSON file, rewritten as they change.
 /// One cut short (a crash or power cut mid-write) made reading the settings

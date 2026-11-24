@@ -1,5 +1,5 @@
 {
-  "min_required_version": "4.6.0",
+  "min_required_version": "4.7.0",
   "update_url": "https://popcorn-organization.github.io/popcorn/",
   "update_required_message": "A new version of Popcorn is available. Update now to keep watching.",
   "maintenance_mode_enabled": false,
@@ -8,8 +8,19 @@
   "ios": {
     "min_required_version": "4.3.7"
   },
-  "latest_version": "4.6.0",
+  "latest_version": "4.7.0",
   "release_notes": [
+    {
+      "version": "4.7.0",
+      "notes": [
+        "On TVs with little memory, Popcorn now uses much less of it while you browse, so it runs more steadily there.",
+        "On the Home screen, the Popcorn logo now scrolls away smoothly instead of being cut off at the top.",
+        "Subtitles stay above the progress bar when you open a menu while watching.",
+        "Sinhala subtitles stay in time with the video, and show straight away when you switch back to them.",
+        "Sinhala subtitles are now the same size as English ones.",
+        "On Windows, Popcorn always opens when you click it, even right after closing it."
+      ]
+    },
     {
       "version": "4.6.0",
       "notes": [
@@ -41,15 +52,6 @@
       "notes": [
         "Page titles get their frosted backing back as you scroll.",
         "Logos in the Home slideshow no longer appear late."
-      ]
-    },
-    {
-      "version": "4.5.0",
-      "notes": [
-        "Subtitles get in time with the film by themselves, and Popcorn picks the copy that fits.",
-        "Finished films leave Continue Watching. A finished series comes back when a new episode is out.",
-        "Press and hold a Continue Watching card for More Info, or to remove it, with Undo.",
-        "Smoother playback on TVs while subtitles sync."
       ]
     }
   ]
